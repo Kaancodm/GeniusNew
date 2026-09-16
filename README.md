@@ -18,6 +18,7 @@ Jede Übernahme aus dem Altprojekt muss zuerst im Import-Manifest klassifiziert 
 
 - `ACCEPT` — geprüft und für den öffentlichen Import freigegeben
 - `REBUILD` — fachlich relevant, aber neu und sauber implementieren
+- `REBUILT_NATIVE` — als GeniusNew-eigener Code neu gebaut; kein Altcode importiert
 - `REJECT` — nicht übernehmen
 - `PENDING_REVIEW` — noch nicht entschieden
 
@@ -27,12 +28,27 @@ GeniusNew wird Zero-Trust aufgebaut. Sicherheitsrelevante Identität, Rechte, Po
 
 ## Aktueller Stand
 
-Phase 0: Projektisolierung und Governance.
+Phase 1: deterministischer Zero-Trust-Contract-Kern.
 
-Noch kein Runtime-Code aus `Kaancodm/Agent-Genius` wurde übernommen.
+Der erste Runtime-Code ist GeniusNew-nativ neu implementiert. Er enthält ein
+striktes Handoff-Modell, kanonische JSON-Serialisierung, SHA-256-Payload-Bindung,
+HMAC-Signaturen über den gesamten Handoff, Policy-Allow-Lists und einen
+Fail-Closed-Validator. Der HMAC-Schlüssel ist eine serverseitige Laufzeitkonfiguration
+und gehört niemals in dieses Repository.
 
 Siehe:
 
 - `docs/ADR-001-restart-and-isolation.md`
 - `docs/IMPORT-MANIFEST.md`
 - `SECURITY.md`
+- `docs/HANDOFF-V1.md`
+- `schemas/handoff-v1.schema.json`
+- `geniusnew/contracts.py`
+
+## Lokale Prüfung
+
+Der Phase-1-Kern benötigt nur Python 3. Für die vollständige Contract-Prüfung:
+
+```sh
+python3 -m unittest discover -s tests -v
+```

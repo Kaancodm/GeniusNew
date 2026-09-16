@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://geniusnew.dev/schemas/handoff-v1.schema.json",
+  "title": "GeniusNew Handoff v1",
+  "$comment": "Wire format, HMAC-SHA-256 signature, key boundary and validation rules: docs/HANDOFF-V1.md",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "job_id", "user_id", "orchestrator_id", "worker_agent_id", "tier", "tools", "sandbox_profile", "approval_state", "policy_version", "issued_at", "expires_at", "payload", "payload_sha256", "signature"],
+  "properties": {
+    "version": {"const": "geniusnew-handoff-v1"},
+    "job_id": {"type": "string", "minLength": 1},
+    "user_id": {"type": "string", "minLength": 1},
+    "orchestrator_id": {"type": "string", "minLength": 1},
+    "worker_agent_id": {"type": "string", "minLength": 1},
+    "tier": {"type": "string", "minLength": 1},
+    "tools": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "sandbox_profile": {"type": "string", "minLength": 1},
+    "approval_state": {"enum": ["NOT_REQUIRED", "PENDING_APPROVAL"]},
+    "policy_version": {"type": "string", "minLength": 1},
+    "issued_at": {"type": "integer"},
+    "expires_at": {"type": "integer"},
+    "payload": {"type": "object", "additionalProperties": false, "required": ["text"], "properties": {"text": {"type": "string", "minLength": 1}}},
+    "payload_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "signature": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}
