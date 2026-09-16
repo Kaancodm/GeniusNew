@@ -1,6 +1,6 @@
 # GeniusNew Migration Matrix — Phase 0
 
-Status: evidence inventory only. No source runtime code, secrets, credentials, data, workflow, database change, deployment change, or production change is migrated by this document.
+Status: CORRECTION REQUIRED. Phase 0 gate is `FAIL`; the previously reported `PASS` is withdrawn. This remains an evidence inventory only. No source runtime code, secrets, credentials, data, workflow, database change, deployment change, or production change is migrated by this document.
 
 ## Evidence binding
 
@@ -66,6 +66,7 @@ The older `docs/IMPORT-MANIFEST.md` remains historical evidence. It is bound to 
 | Execution Resolution | `bürgerbüro/portal/execution_resolution.py`; `docs/execution/trusted-resolution-20260914.md` | `b0c7ce136160a4ba818eee028b7980c952848b5a` | NONE until Phase 6 | REBUILD | `tests/test_trusted_execution_resolution.py` | resolved worker/tool/sandbox choices must be server-owned | CLASSIFIED |
 | AuditChain | `polizei/forensik/audit_chain.py`; audit schema/model | `b0c7ce136160a4ba818eee028b7980c952848b5a` | NONE until Phase 5 | REBUILD | `tests/test_audit_chain.py`; `tests/test_audit_log.py` | append-only hash chain, actor/Principal binding, payload minimization | CLASSIFIED |
 | Forensik | `polizei/forensik/anchor.py`; `polizei/forensik/verify.py` | `b0c7ce136160a4ba818eee028b7980c952848b5a` | NONE until Phase 5 | REBUILD | `tests/test_forensik_anchor.py`; `tests/test_forensik_verify.py` | deterministic evidence, tamper detection, exact artifact binding | CLASSIFIED |
+| Deterministic forensic bundle | Source PR #1 `polizei/forensik/deterministic_bundle.py` | `c406080656eb9bec0cfafb2aa331733638b72457` | NONE until Phase 5; re-specify GeniusNew-native | REBUILD | Source PR #1 `tests/test_deterministic_bundle.py`; preserve deterministic archive/hash invariants as requirements evidence only | PR #1 has Agent-Common lineage and is rejected as a mergeable block; no direct copy authorization; deterministic metadata normalization, unsafe-path/symlink handling and exact artifact binding must be revalidated in GeniusNew | CLASSIFIED |
 | Registry | Source PR #1 `einwohnermeldeamt/database/registry.py` | `c406080656eb9bec0cfafb2aa331733638b72457` | NONE; re-specify if needed by identity/runtime | REBUILD | `tests/test_registry.py` on research branch | authoritative ownership/identity source; PR block itself is Agent-Common-lineage and rejected | CLASSIFIED |
 | Semantic Memory | Source PR #46 `nationalbibliothek/memory/{engine,models,promotion,scoring,store}.py` | `6e0c7ffada1d9e774717b4b9f21b1fc676dd7bc5` | NONE until Phase 9 | REBUILD | `tests/test_semantic_memory.py`; exact-head full repository CI is not established | Principal/tenant/user/team binding; M0 quarantine; trusted R4 promotion; reviewer != promoter | CLASSIFIED |
 | GitHub Adapter | `bürgerbüro/portal/github_adapter.py` | `b0c7ce136160a4ba818eee028b7980c952848b5a` | future generic ToolAdapter + GitHub implementation | REBUILD | `tests/test_github_adapter.py`; `tests/test_github_adapter_pr_modes.py` | read-before-write, expected HEAD, path/type validation, least privilege | CLASSIFIED |
@@ -118,10 +119,14 @@ The complete current Source `main` tree was inspected by recursive Git tree enum
 - scripts and all `tests/**`;
 - all observed open Source PRs listed above.
 
-No relevant component discovered in those source categories remains without one of `ACCEPT`, `REBUILD`, or `REJECT`. There are no `ACCEPT` decisions in Phase 0.
+All components identified by the complete Source `main` tree and the explicitly reviewed open-PR candidates are now assigned one of `ACCEPT`, `REBUILD`, or `REJECT`, including the previously omitted Source PR #1 deterministic forensic bundle. There are no `ACCEPT` decisions in Phase 0. Repository-wide `Agent-Common` content-string-search completeness remains security-relevant `UNKNOWN` and is not treated as success.
 
 ## Phase 0 boundary and gate basis
 
-This matrix is the only Phase 0 change. It deliberately performs no source-code transfer. The classification gate is therefore evaluated on inventory/classification completeness, not on later implementation readiness.
+This matrix is the only Phase 0 change. It deliberately performs no source-code transfer.
 
-Security-relevant unknowns that would block later acceptance remain explicit rather than being interpreted as success, including exact current-source test status for most main components, real-host sandbox evidence, external Vercel settings, formal Kaan release-approval channel, and complete content-string search coverage. Because no source implementation is accepted or migrated in Phase 0, these unknowns do not create an unclassified component; they become mandatory re-verification inputs for their later phases.
+`GATE: FAIL`
+
+`GATE_REASON`: the previous Phase 0 `PASS` is withdrawn because (1) Source PR #1 `polizei/forensik/deterministic_bundle.py` was not individually classified in the original matrix and (2) repository-wide `Agent-Common` content-search completeness remains `UNKNOWN`. The first defect is corrected in this revision; the second remains unresolved and cannot be silently weakened. No merge, Phase 1 execution, deployment, production mutation, or source-code transfer is authorized by this correction.
+
+`NEXT_SINGLE_STEP`: obtain an independent read-only completeness/security review of the corrected exact commit before any merge or Phase 1 execution.
