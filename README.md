@@ -28,7 +28,7 @@ GeniusNew wird Zero-Trust aufgebaut. Sicherheitsrelevante Identität, Rechte, Po
 
 ## Aktueller Stand
 
-Phase 1: deterministischer Zero-Trust-Contract-Kern.
+Phase 2: Contract-Kern und serverseitige Approval-Grenze.
 
 Der erste Runtime-Code ist GeniusNew-nativ neu implementiert. Er enthält ein
 striktes Handoff-Modell, kanonische JSON-Serialisierung, SHA-256-Payload-Bindung,
@@ -42,8 +42,10 @@ Siehe:
 - `docs/IMPORT-MANIFEST.md`
 - `SECURITY.md`
 - `docs/HANDOFF-V1.md`
+- `docs/APPROVAL-V1.md`
 - `schemas/handoff-v1.schema.json`
 - `geniusnew/contracts.py`
+- `geniusnew/approvals.py`
 
 ## Lokale Prüfung
 
