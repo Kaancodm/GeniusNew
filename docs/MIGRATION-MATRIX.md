@@ -185,6 +185,20 @@ Applied case-insensitively to the blob content of every one of the 129 files:
 
 No match occurred in a secret-bearing file. No secret value was read or reproduced. All 21 matches are classified; `UNCLASSIFIED_MATCHES: 0`.
 
+**Schema identifier decision (owner decision, 2026-09-16).** The four `REJECT` rows above require a GeniusNew-native `$id`. The chosen replacement namespace is a URN, not an HTTP URL:
+
+```
+urn:geniusnew:schema:<name>:v1
+```
+
+Rationale, and a second finding this surfaces: the source schemas are identifiers only — the local schema check does not resolve them over the network and the inspected schemas carry no external `$ref`. An HTTP `$id` therefore buys nothing here while requiring a domain that is registered, renewed and defended. The repository owner currently holds no domain for this project.
+
+This applies to the target as well, not only to the source. The existing target schema `schemas/handoff-v1.schema.json:3` on `main` `284f361ba6d0ac3ca2c838cfe556050f3b9a6db4` already declares `$id: https://geniusnew.dev/schemas/handoff-v1.schema.json`, a domain that is likewise not owned. That is the same class of latent trust assumption as the legacy `agent-common.dev` identifiers: an unowned namespace in an authoritative contract identifier is squattable, and becomes a supply-chain vector for any validator that does resolve `$id`. Nothing resolves it today, so this is a latent risk, not an active one.
+
+Rejected alternative, for the record: reusing the owner's existing `agentcommon.agency` domain. It would reintroduce Agent-Common identity at the most authoritative layer of the system, contradicting `SECURITY.md:23`, and `agentcommon` is one of this scan's own search patterns — currently `0` matches in the source tree.
+
+Changing the existing target schema is **not** part of Phase 0 and is not done here. It is recorded as the first concrete Phase 2 contract task, to be carried out as its own reviewed change.
+
 **Redaction note.** One legacy match is a private internal egress domain of the Agent-Common era. `SECURITY.md` forbids committing private endpoints to this public repository and permits only redacted examples, so the literal domain is deliberately not reproduced here. It is identifiable in the source repository at `docs/project-isolation-wp01.md:19` and is confirmed absent from the current source policy. The redaction removes no evidence: the security-relevant fact is that the target was removed and must never be reintroduced.
 
 ### WP01 evidence re-verified against the exact current Source HEAD
