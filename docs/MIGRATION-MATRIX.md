@@ -1,6 +1,6 @@
 # GeniusNew Migration Matrix — Phase 0
 
-Status: CORRECTION REQUIRED. Phase 0 gate is `FAIL`; the previously reported `PASS` is withdrawn. This remains an evidence inventory only. No source runtime code, secrets, credentials, data, workflow, database change, deployment change, or production change is migrated by this document.
+Status: Phase 0 inventory and classification are complete; the gate is `PASS` for that scope only. This remains an evidence inventory only. No source runtime code, secrets, credentials, data, workflow, database change, deployment change, or production change is migrated by this document.
 
 ## Evidence binding
 
@@ -29,7 +29,7 @@ The older `docs/IMPORT-MANIFEST.md` remains historical evidence. It is bound to 
 5. `REJECT` means the identified source artifact/candidate must not be migrated directly.
 6. No secret-bearing source content was copied into this matrix.
 7. Source-main tree inspection found no `.gitmodules`, no tree entry with mode `120000`, and no tree entry of type `commit`. Any later PR/branch extraction must re-check file modes independently before use.
-8. A repository-wide exact-string search for `Agent-Common` returned `incomplete_results=true`; completeness of that content search is therefore UNKNOWN. Known Agent-Common lineage is nevertheless directly observed in Source PR #1 and is rejected as a mergeable source block.
+8. Repository-wide Agent-Common content-search completeness on the current Source `main` tree is now proven by direct Git blob enumeration at the exact SHA; see "Agent-Common completeness verification". The earlier GitHub Code Search response with `incomplete_results=true` is superseded, not reinterpreted, and was not used as evidence. Known Agent-Common lineage is directly observed in Source PR #1 and is rejected as a mergeable source block.
 
 ## Current GeniusNew overlap
 
@@ -124,14 +124,117 @@ The complete current Source `main` tree was inspected by recursive Git tree enum
 - scripts and all `tests/**`;
 - all observed open Source PRs listed above.
 
-All components identified by the complete Source `main` tree and the explicitly reviewed open-PR candidates are now assigned one of `ACCEPT`, `REBUILD`, or `REJECT`, including the previously omitted Source PR #1 deterministic forensic bundle and the four artifacts found by the independent read-only review: `main.py`, `.env.example`, `docs/project-isolation-wp01.md`, and `docs/policy-decision-0001-unreachable-approval-rules.md`. There are no `ACCEPT` decisions in Phase 0. Repository-wide `Agent-Common` content-string-search completeness remains security-relevant `UNKNOWN` and is not treated as success.
+All components identified by the complete Source `main` tree and the explicitly reviewed open-PR candidates are now assigned one of `ACCEPT`, `REBUILD`, or `REJECT`, including the previously omitted Source PR #1 deterministic forensic bundle and the four artifacts found by the independent read-only review: `main.py`, `.env.example`, `docs/project-isolation-wp01.md`, and `docs/policy-decision-0001-unreachable-approval-rules.md`. There are no `ACCEPT` decisions in Phase 0. Repository-wide `Agent-Common` content-string-search completeness is no longer `UNKNOWN`: all 129 files of the exact Source `main` tree were scanned from Git blobs and all 21 matches are classified in "Agent-Common completeness verification".
+
+## Agent-Common completeness verification
+
+This section closes the single remaining Phase 0 blocker: repository-wide completeness of the Agent-Common reference search on the current Source `main` tree.
+
+### Evidence binding and method
+
+- Source exact SHA: `b0c7ce136160a4ba818eee028b7980c952848b5a`, verified as both `refs/heads/main` and the repository `HEAD` symref of `Kaancodm/Agent-Genius`.
+- Scan method: read-only clone; enumeration and content read directly from the Git objects of that exact commit (`git ls-tree -r <sha>`, `git grep -I -i -E <pattern> <sha>`). The working directory and `.git` internals were not searched.
+- GitHub Code Search was **not** used as evidence. Its earlier `incomplete_results=true` response is superseded by direct blob enumeration; it is not reinterpreted as "no matches".
+- Complete tree: **YES**. `git ls-tree -r` returned 129 entries in a single non-paginated, non-truncated listing, and every referenced blob object was verified present and readable (`git cat-file -e`: 0 missing objects).
+
+### Scan coverage
+
+| Measure | Value |
+|---|---|
+| Files total (tree entries) | 129 |
+| Files textually scannable | 129 |
+| Files binary / not scannable | 0 (no blob contains a NUL byte) |
+| Symlinks (mode `120000`) | 0 |
+| Submodules (type `commit` / mode `160000`) | 0 |
+| `.gitmodules` | absent |
+| `.gitattributes` | absent, therefore no clean/smudge filter could mask blob content |
+| Unusual git modes | none; all 129 entries are mode `100644`, no `100755` |
+
+### Search patterns
+
+Applied case-insensitively to the blob content of every one of the 129 files:
+`Agent-Common`, `agent-common`, `agent_common`, `agent common`, `agentcommon`, `common-phase`, `agent-common.dev`, plus the union regex `agent[-_. ]?common`.
+
+`agentcommon` returned zero matches. The union regex returned **21 matching lines in 10 files**; every other pattern's result set is a subset of it.
+
+### Match list and classification
+
+| Path | Line | Match | Classification | Security relevance | Action |
+|---|---|---|---|---|---|
+| `PROJECT_STATUS.md` | 73 | default-branch claim naming `claude/agent-common-phase-1-1gpnqj` | HISTORICAL_ONLY | Stale repository-metadata claim; the Source default branch is in fact `main` at this SHA, so the statement is outdated | Do not carry over; regenerate target status natively |
+| `PROJECT_STATUS.md` | 88 | heading `### claude/agent-common-phase-1-1gpnqj` | HISTORICAL_ONLY | Records legacy Phase-1 branch lineage only | Do not carry over |
+| `PROJECT_STATUS.md` | 113 | `agent_common.egg-info/` hygiene rule | HISTORICAL_ONLY | Cleanup rule for generated metadata; no active dependency | Do not carry over |
+| `README.md` | 32 | warning about the former distribution `agent-common` | HISTORICAL_ONLY | Environment-hygiene note; no runtime authority | Do not carry over |
+| `docs/execution/AG-TOOLCHAIN-P0-STAGING-progress.md` | 6 | branch `Kaancodm/agent-common/p0-scanner-candidate-20260905` | HISTORICAL_ONLY | Worktree/branch provenance only | Do not carry over |
+| `docs/execution/AG-TOOLCHAIN-P0-STAGING-progress.md` | 36 | claim that `pyproject.toml` still declares `agent-common` | HISTORICAL_ONLY | Factually outdated at this SHA: `pyproject.toml` declares `agent-genius`. Concrete proof that source documentation must not be read as current truth | Do not carry over; treat as historical claim only |
+| `docs/project-isolation-wp01.md` | 11 | former distribution name `agent-common` | REJECT | Part of the document already classified REJECT; legacy identity record | Do not migrate |
+| `docs/project-isolation-wp01.md` | 19 | legacy egress target `*.internal.agent-common.dev` | REJECT | Documents a removed legacy network target; restoring it would re-grant egress | Do not migrate; never reintroduce the domain |
+| `docs/project-isolation-wp01.md` | 36 | note on the four schema `$id` values | REJECT | Records deliberately retained legacy contract identifiers | Do not migrate as authority |
+| `docs/project-isolation-wp01.md` | 37 | note on the `agent-common/summarizer:1.0` fixture | REJECT | Records a retained test fixture | Do not migrate as authority |
+| `docs/project-isolation-wp01.md` | 38 | note on branch name and `agent_common.egg-info` | REJECT | Historical provenance record | Do not migrate as authority |
+| `docs/project-isolation-wp01.md` | 39 | note on `land/industriegebiet/` | REJECT | Records a compatibility bridge decision | Do not migrate as authority |
+| `docs/project-isolation-wp01.md` | 41 | statement that no `agent_common` package import exists | REJECT | Historical assertion; independently re-verified below rather than trusted | Do not migrate as authority |
+| `docs/project-isolation-wp01.md` | 43 | statement about an external Agent-Common checkout | REJECT | Historical assertion about runtime paths | Do not migrate as authority |
+| `docs/security-toolchain-v1.md` | 3 | scope line "Agent Common is not part of this work" | HISTORICAL_ONLY | Scope statement of a past work package; no authority | Do not carry over |
+| `staat/verfassung/audit_log.schema.json` | 3 | `"$id": "https://agent-common.dev/schemas/audit_log.schema.json"` | REJECT | Legacy identity namespace embedded in an active contract identifier | GeniusNew schemas must use a GeniusNew-native `$id`; never copy this value |
+| `staat/verfassung/bug_report.schema.json` | 3 | `"$id": "https://agent-common.dev/schemas/bug_report.schema.json"` | REJECT | Legacy identity namespace embedded in an active contract identifier | GeniusNew-native `$id` required |
+| `staat/verfassung/handoff.schema.json` | 3 | `"$id": "https://agent-common.dev/schemas/handoff.schema.json"` | REJECT | Legacy identity namespace embedded in an active contract identifier | GeniusNew-native `$id` required |
+| `staat/verfassung/job_result.schema.json` | 3 | `"$id": "https://agent-common.dev/schemas/job_result.schema.json"` | REJECT | Legacy identity namespace embedded in an active contract identifier | GeniusNew-native `$id` required |
+| `tests/test_sandbox_profiles.py` | 117 | `spec.docker_run_args("agent-common/summarizer:1.0", ...)` | TEST_FIXTURE_ONLY | Static image-name string used to assert Docker argument order; verified that the test neither pulls nor starts the image | Rebuild the test with a GeniusNew-native fixture name; do not copy the string |
+| `tests/test_sandbox_profiles.py` | 120 | `assert args[-1] == "agent-common/summarizer:1.0"` | TEST_FIXTURE_ONLY | Same static fixture assertion | Rebuild with a GeniusNew-native fixture name |
+
+No match occurred in a secret-bearing file. No secret value was read or reproduced. All 21 matches are classified; `UNCLASSIFIED_MATCHES: 0`.
+
+### WP01 evidence re-verified against the exact current Source HEAD
+
+`docs/project-isolation-wp01.md` is bound to the older base `6b8c9ee17e3c551e4541e6b7c86b48e087d39051`. Its claims were re-checked against `b0c7ce136160a4ba818eee028b7980c952848b5a` rather than accepted:
+
+| WP01 claim | Result at current Source HEAD | Evidence |
+|---|---|---|
+| Four schema `$id` values under `agent-common.dev` | STILL_PRESENT | `staat/verfassung/{audit_log,bug_report,handoff,job_result}.schema.json` line 3 |
+| Test fixture `agent-common/summarizer:1.0` | STILL_PRESENT | `tests/test_sandbox_profiles.py:117,120`; surrounding assertions only inspect the generated argument list |
+| Historical branch/package provenance in `PROJECT_STATUS.md` | STILL_PRESENT | `PROJECT_STATUS.md:73,88,113` |
+| `land/industriegebiet/` as a local compatibility bridge | STILL_PRESENT, claim CONFIRMED | `land/industriegebiet/{__init__.py,runtime.py}` import only the in-repository `industriegebiet` package; no external Agent-Common checkout is referenced |
+| Distribution renamed `agent-common` -> `agent-genius` | CHANGED, claim CONFIRMED | `pyproject.toml:6` is `name = "agent-genius"` at this SHA (`agent-common` at the old base) |
+| Legacy egress target `*.internal.agent-common.dev` removed from policy | REMOVED, claim CONFIRMED | `staat/gesetze/approval-policy.json` contains no `common` string; Team egress is `["api.anthropic.com"]`, Enterprise egress is `[]` |
+| No `agent_common` package import anywhere | CONFIRMED independently | The union-regex scan over all 129 files produced no import statement; the only `agent_common` occurrences are the three documentation lines listed above |
+
+This re-verification is independent evidence from the current tree. It does not grant `docs/project-isolation-wp01.md` any authority; that document remains classified REJECT.
+
+### Change control since the earlier baseline
+
+Base `6b8c9ee17e3c551e4541e6b7c86b48e087d39051` -> head `b0c7ce136160a4ba818eee028b7980c952848b5a`, 62 commits, 81 changed paths (54 added, 27 modified, 0 deleted).
+
+- Matching lines at base: 12 in 8 files. Matching lines at head: 21 in 10 files.
+- Files that gained matches since the baseline: `README.md`, `docs/project-isolation-wp01.md`, `docs/execution/AG-TOOLCHAIN-P0-STAGING-progress.md`, `docs/security-toolchain-v1.md`. All four are documentation. No added or modified executable, schema, workflow, container or configuration file introduced a new Agent-Common reference.
+- Files that lost their matches since the baseline are exactly the two carriers with active effect: `pyproject.toml` (distribution identity) and `staat/gesetze/approval-policy.json` (egress allowlist).
+- Consequence: the earlier WP01 isolation review may be used as supporting evidence, because every change made after its base has been checked for newly introduced Agent-Common references.
+
+### Open-PR separation
+
+The current Source `main` tree and the open Source PRs remain separate evidence spaces and are not merged into one judgement. The open-PR list was re-enumerated at this SHA and contains exactly the ten PRs already classified in "Open source PR reconciliation" (#46, #45, #44, #43, #32, #27, #26, #25, #10, #1), with unchanged head SHAs. Source PR #1 is confirmed to target base branch `claude/agent-common-phase-1-1gpnqj`; its `REJECT` classification as a directly mergeable block is unchanged. No open-PR tree was scanned as part of this section.
+
+### Remaining UNKNOWNs
+
+The completeness question of this section is resolved. The following remain `UNKNOWN` and are explicitly **not** converted into success by this section or by the gate below:
+
+- Formal `EXECUTION_ENVIRONMENT`, `ACCESS_LEVEL` and `KAAN_APPROVAL_CHANNEL`.
+- Current exact-source full test-suite and CI results; no source CI run is treated as green.
+- Real-host evidence for the gVisor and Firecracker/KVM sandbox providers.
+- Whether the retained legacy schema `$id` values are referenced by any consumer outside this repository.
+
+These are runtime, environment and approval facts. They are outside the inventory-and-classification scope of the Phase 0 gate and continue to block later phases on their own terms.
 
 ## Phase 0 boundary and gate basis
 
 This matrix is the only Phase 0 change. It deliberately performs no source-code transfer.
 
-`GATE: FAIL`
+`GATE: PASS`
 
-`GATE_REASON`: the previous Phase 0 `PASS` remains withdrawn. Source PR #1 `polizei/forensik/deterministic_bundle.py` and the four additional artifacts found by independent review (`main.py`, `.env.example`, `docs/project-isolation-wp01.md`, `docs/policy-decision-0001-unreachable-approval-rules.md`) are now individually classified, but repository-wide `Agent-Common` content-search completeness remains `UNKNOWN`. UNKNOWN is not success and cannot be silently weakened. No merge, Phase 1 execution, deployment, production mutation, or source-code transfer is authorized by this correction.
+`GATE_SCOPE`: Phase-0 inventory and classification completeness only.
 
-`NEXT_SINGLE_STEP`: obtain another independent read-only completeness/security review of this new exact commit before any merge or Phase 1 execution.
+`GATE_REASON`: every component of the exact Source `main` tree `b0c7ce136160a4ba818eee028b7980c952848b5a` and every open Source PR is classified as `REBUILD`, `REJECT`, `HISTORICAL_ONLY` or `TEST_FIXTURE_ONLY`; there are no `ACCEPT` decisions. The last remaining blocker, repository-wide Agent-Common content-search completeness, is resolved by direct Git blob enumeration of all 129 files at that SHA with 0 unscannable files, 0 symlinks, 0 submodules and 0 unclassified matches. No Agent-Common dependency remains unclassified.
+
+`PASS` means only that. It does **not** mean the source code is safe, that Phase 1 is released, that a merge is authorized, that a deployment is authorized, or that any production change is authorized. The `UNKNOWN` facts recorded above (`EXECUTION_ENVIRONMENT`, `ACCESS_LEVEL`, `KAAN_APPROVAL_CHANNEL`, current exact-source test/CI results, real-host sandbox evidence) are unchanged and are not converted into success by this gate.
+
+`NEXT_SINGLE_STEP`: independent read-only review of this exact commit before merge or Phase 1.
