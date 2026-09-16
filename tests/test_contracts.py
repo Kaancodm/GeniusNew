@@ -116,6 +116,37 @@ class ContractsTest(unittest.TestCase):
             issue(self.request, subject='unknown', job_id='job-demo', policy=self.policy,
                   integrity_key=self.key, now=100)
 
+    def test_unicode_subject_is_exactly_bound(self):
+        unicode_grant = Grant('subjekt-ü', 'user-ü', 'worker-ü', 'basic',
+                              ('summarize',), 'isolated', False)
+        policy = Policy('policy-v1', 'orchestrator-demo', 60,
+                        ('summarize',), ('isolated',), (unicode_grant,))
+        wire = issue(self.request, subject='subjekt-ü', job_id='job-demo',
+                     policy=policy, integrity_key=self.key, now=100)
+        result = validate(wire, subject='subjekt-ü', job_id='job-demo',
+                          policy=policy, integrity_key=self.key, now=101)
+        self.assertEqual(result.user_id, 'user-ü')
+        with self.assertRaises(ContractError):
+            issue(self.request, subject='subjekt-u\u0308', job_id='job-demo',
+                  policy=policy, integrity_key=self.key, now=100)
+
+    def test_unicode_grants_do_not_break_other_subjects(self):
+        unicode_grant = Grant('subjekt-ü', 'user-ü', 'worker-ü', 'basic',
+                              ('summarize',), 'isolated', False)
+        policy = Policy('policy-v1', 'orchestrator-demo', 60,
+                        ('summarize',), ('isolated',), (unicode_grant, self.grant))
+        self.assertEqual(
+            validate(self.issue(policy=policy), subject='subject-demo', job_id='job-demo',
+                     policy=policy, integrity_key=self.key, now=101).user_id,
+            'user-demo',
+        )
+
+    def test_invalid_unicode_subject_fails_closed(self):
+        with self.assertRaises(ContractError):
+            Grant('\ud800', 'user-demo', 'worker-demo', 'basic', ('summarize',), 'isolated', False)
+        with self.assertRaises(ContractError):
+            self.policy.grant_for('\ud800')
+
     def test_pending_cannot_cross_gateway(self):
         pending = Grant('subject-demo', 'user-demo', 'worker-demo', 'basic',
                         ('summarize',), 'isolated', True)

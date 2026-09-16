@@ -48,6 +48,15 @@ def _string(value: Any, field: str) -> str:
     return value
 
 
+def _subject_bytes(value: Any) -> bytes:
+    """Encode an exact server-side subject without Unicode normalization."""
+    subject = _string(value, "subject")
+    try:
+        return subject.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ContractError("subject must be valid UTF-8") from exc
+
+
 def _integer(value: Any, field: str) -> int:
     if type(value) is not int:
         _fail(f"{field} must be an integer")
@@ -109,7 +118,8 @@ class Grant:
     requires_approval: bool
 
     def __post_init__(self) -> None:
-        for field in ("subject", "user_id", "worker_agent_id", "tier", "sandbox_profile"):
+        _subject_bytes(self.subject)
+        for field in ("user_id", "worker_agent_id", "tier", "sandbox_profile"):
             _string(getattr(self, field), field)
         tools = _string_tuple(self.tools, "tools")
         if tools != self.tools:
@@ -153,9 +163,9 @@ class Policy:
         object.__setattr__(self, "grants", grants)
 
     def grant_for(self, subject: str) -> Grant:
-        _string(subject, "subject")
+        subject_bytes = _subject_bytes(subject)
         for grant in self.grants:
-            if hmac.compare_digest(grant.subject, subject):
+            if hmac.compare_digest(_subject_bytes(grant.subject), subject_bytes):
                 return grant
         _fail("subject is not authorized")
 

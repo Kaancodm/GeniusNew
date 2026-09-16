@@ -31,6 +31,11 @@ benötigen denselben aktiven Schlüssel. Bei einer Schlüsselrotation werden noc
 nicht abgelaufene Handoffs neu ausgestellt; Version 1 enthält absichtlich keine
 Key-ID und akzeptiert daher keinen Fallback auf alte Schlüssel.
 
+Serverseitige `subject`-Werte werden als exakte UTF-8-Bytefolge verglichen.
+Sie dürfen Unicode enthalten, werden aber nicht normalisiert: Visuell ähnliche,
+unterschiedlich kodierte Werte sind verschiedene Identitäten. Nicht als UTF-8
+kodierbare Python-Strings werden als ungültige Konfiguration abgelehnt.
+
 ## Prüfung am Gateway
 
 `validate()` akzeptiert nur Bytes, die exakt dem kanonischen Wire-Format
