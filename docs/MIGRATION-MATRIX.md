@@ -168,7 +168,7 @@ Applied case-insensitively to the blob content of every one of the 129 files:
 | `docs/execution/AG-TOOLCHAIN-P0-STAGING-progress.md` | 6 | branch `Kaancodm/agent-common/p0-scanner-candidate-20260905` | HISTORICAL_ONLY | Worktree/branch provenance only | Do not carry over |
 | `docs/execution/AG-TOOLCHAIN-P0-STAGING-progress.md` | 36 | claim that `pyproject.toml` still declares `agent-common` | HISTORICAL_ONLY | Factually outdated at this SHA: `pyproject.toml` declares `agent-genius`. Concrete proof that source documentation must not be read as current truth | Do not carry over; treat as historical claim only |
 | `docs/project-isolation-wp01.md` | 11 | former distribution name `agent-common` | REJECT | Part of the document already classified REJECT; legacy identity record | Do not migrate |
-| `docs/project-isolation-wp01.md` | 19 | legacy egress target `*.internal.agent-common.dev` | REJECT | Documents a removed legacy network target; restoring it would re-grant egress | Do not migrate; never reintroduce the domain |
+| `docs/project-isolation-wp01.md` | 19 | legacy internal egress target (domain redacted, see note below) | REJECT | Documents a removed legacy network target; restoring it would re-grant egress | Do not migrate; never reintroduce the domain |
 | `docs/project-isolation-wp01.md` | 36 | note on the four schema `$id` values | REJECT | Records deliberately retained legacy contract identifiers | Do not migrate as authority |
 | `docs/project-isolation-wp01.md` | 37 | note on the `agent-common/summarizer:1.0` fixture | REJECT | Records a retained test fixture | Do not migrate as authority |
 | `docs/project-isolation-wp01.md` | 38 | note on branch name and `agent_common.egg-info` | REJECT | Historical provenance record | Do not migrate as authority |
@@ -185,6 +185,8 @@ Applied case-insensitively to the blob content of every one of the 129 files:
 
 No match occurred in a secret-bearing file. No secret value was read or reproduced. All 21 matches are classified; `UNCLASSIFIED_MATCHES: 0`.
 
+**Redaction note.** One legacy match is a private internal egress domain of the Agent-Common era. `SECURITY.md` forbids committing private endpoints to this public repository and permits only redacted examples, so the literal domain is deliberately not reproduced here. It is identifiable in the source repository at `docs/project-isolation-wp01.md:19` and is confirmed absent from the current source policy. The redaction removes no evidence: the security-relevant fact is that the target was removed and must never be reintroduced.
+
 ### WP01 evidence re-verified against the exact current Source HEAD
 
 `docs/project-isolation-wp01.md` is bound to the older base `6b8c9ee17e3c551e4541e6b7c86b48e087d39051`. Its claims were re-checked against `b0c7ce136160a4ba818eee028b7980c952848b5a` rather than accepted:
@@ -196,7 +198,7 @@ No match occurred in a secret-bearing file. No secret value was read or reproduc
 | Historical branch/package provenance in `PROJECT_STATUS.md` | STILL_PRESENT | `PROJECT_STATUS.md:73,88,113` |
 | `land/industriegebiet/` as a local compatibility bridge | STILL_PRESENT, claim CONFIRMED | `land/industriegebiet/{__init__.py,runtime.py}` import only the in-repository `industriegebiet` package; no external Agent-Common checkout is referenced |
 | Distribution renamed `agent-common` -> `agent-genius` | CHANGED, claim CONFIRMED | `pyproject.toml:6` is `name = "agent-genius"` at this SHA (`agent-common` at the old base) |
-| Legacy egress target `*.internal.agent-common.dev` removed from policy | REMOVED, claim CONFIRMED | `staat/gesetze/approval-policy.json` contains no `common` string; Team egress is `["api.anthropic.com"]`, Enterprise egress is `[]` |
+| Legacy internal egress target removed from policy (domain redacted) | REMOVED, claim CONFIRMED | `staat/gesetze/approval-policy.json` contains no `common` string; Team egress is `["api.anthropic.com"]`, Enterprise egress is `[]` |
 | No `agent_common` package import anywhere | CONFIRMED independently | The union-regex scan over all 129 files produced no import statement; the only `agent_common` occurrences are the three documentation lines listed above |
 
 This re-verification is independent evidence from the current tree. It does not grant `docs/project-isolation-wp01.md` any authority; that document remains classified REJECT.
@@ -210,9 +212,39 @@ Base `6b8c9ee17e3c551e4541e6b7c86b48e087d39051` -> head `b0c7ce136160a4ba818eee0
 - Files that lost their matches since the baseline are exactly the two carriers with active effect: `pyproject.toml` (distribution identity) and `staat/gesetze/approval-policy.json` (egress allowlist).
 - Consequence: the earlier WP01 isolation review may be used as supporting evidence, because every change made after its base has been checked for newly introduced Agent-Common references.
 
-### Open-PR separation
+### Open-PR separation and open-PR tree scan
 
-The current Source `main` tree and the open Source PRs remain separate evidence spaces and are not merged into one judgement. The open-PR list was re-enumerated at this SHA and contains exactly the ten PRs already classified in "Open source PR reconciliation" (#46, #45, #44, #43, #32, #27, #26, #25, #10, #1), with unchanged head SHAs. Source PR #1 is confirmed to target base branch `claude/agent-common-phase-1-1gpnqj`; its `REJECT` classification as a directly mergeable block is unchanged. No open-PR tree was scanned as part of this section.
+The current Source `main` tree and the open Source PRs remain separate evidence spaces and are not merged into one judgement. The open-PR list was re-enumerated at this SHA and contains exactly the ten PRs already classified in "Open source PR reconciliation" (#46, #45, #44, #43, #32, #27, #26, #25, #10, #1), with unchanged head SHAs.
+
+Classifying a PR at block level does not by itself enumerate Agent-Common references embedded in its tree. Each of the ten open-PR heads was therefore scanned with the same blob-based method, reported here as a separate evidence space rather than merged into the main-tree result:
+
+| PR | Exact head | Files | Unscannable | Symlinks | Submodules | Matches | Matches absent from the main set |
+|---|---|---|---|---|---|---|---|
+| #46 | `6e0c7ffada1d9e774717b4b9f21b1fc676dd7bc5` | 136 | 0 | 0 | 0 | 21 | 0 |
+| #45 | `6ebd5fbdce782a43dc0c7f45daf3bbcdf6abf5c9` | 136 | 0 | 0 | 0 | 21 | 0 |
+| #44 | `892a317d2b4b5d5008a423f424cc01c76837fd5b` | 130 | 0 | 0 | 0 | 21 | 0 |
+| #43 | `d6d145d33bfcdac08dc6389ddcd1b2cf51a3b71b` | 130 | 0 | 0 | 0 | 21 | 0 |
+| #32 | `f37907dfcc43f5c697c30a001e5449077801b1e0` | 100 | 0 | 0 | 0 | 21 | 0 |
+| #27 | `58dad5d39cc749900977fac6671d42caea864b0f` | 92 | 0 | 0 | 0 | 21 | 0 |
+| #26 | `432df7ed62fe7da390bb4da364d1d4c33588101e` | 92 | 0 | 0 | 0 | 21 | 0 |
+| #25 | `051c7052c0dbce79cdc21ce25dfe6b85eca96f68` | 92 | 0 | 0 | 0 | 21 | 0 |
+| #10 | `38ef2fa10330b21d1c10927779fd71fcc285e3fb` | 83 | 0 | 0 | 0 | 12 | 3 |
+| #1 | `c406080656eb9bec0cfafb2aa331733638b72457` | 82 | 0 | 0 | 0 | 11 | 4 |
+
+Every tree is fully inspectable: all entries are mode `100644`, with no binary blob, no symlink and no submodule in any of the ten.
+
+The eight PRs based on recent `main` carry exactly the 21 already-classified main-tree matches and introduce none of their own. The two PRs on older bases carry additional matches that do **not** exist on current `main`, and those are the ones with active effect:
+
+| PR | Additional match | Classification | Security relevance |
+|---|---|---|---|
+| #1, #10 | `pyproject.toml:6` -> distribution name is the legacy `agent-common` | REJECT | Legacy distribution identity, reverting the rename that current `main` already carries |
+| #1, #10 | `staat/gesetze/approval-policy.json` -> the redacted legacy internal egress domain, in two tiers | REJECT | Active network authority: merging either block would re-grant a removed egress target |
+| #1 | `README.md:1` -> the project title is literally `# Agent Common` | REJECT | Full legacy project identity at the document root |
+| #1 | `README.md:151` -> `agent-common/summarizer:1.0` in a documentation example | TEST_FIXTURE_ONLY | Static example string, no runtime authority |
+
+This is new, concrete evidence that strengthens rather than changes the existing decisions: Source PR #1 is confirmed to target base branch `claude/agent-common-phase-1-1gpnqj` and both #1 and #10 keep their `REJECT` classification as directly mergeable blocks, now backed by the specific legacy identity and egress carriers they would reintroduce. The `REBUILD` candidates #43-#46 are unaffected: their trees contain no Agent-Common reference beyond the already-classified main set.
+
+Component-level extraction from `REJECT` PRs remains governed by the migration matrix above, which authorizes reconstruction only, never direct copying.
 
 ### Remaining UNKNOWNs
 
@@ -222,6 +254,8 @@ The completeness question of this section is resolved. The following remain `UNK
 - Current exact-source full test-suite and CI results; no source CI run is treated as green.
 - Real-host evidence for the gVisor and Firecracker/KVM sandbox providers.
 - Whether the retained legacy schema `$id` values are referenced by any consumer outside this repository.
+
+One target-repository inconsistency was observed and deliberately **not** changed here, because this phase is limited to `docs/MIGRATION-MATRIX.md`: `README.md` still points the documented import process at `docs/IMPORT-MANIFEST.md`, which is bound to the older source SHA `09496c94c064ae36ee98b1a21553c7b3b358e864`. Until the README designates this exact-SHA matrix as the canonical import gate, a contributor following the README could act on the stale inventory. This is recorded as a separate follow-up, not as part of this gate.
 
 These are runtime, environment and approval facts. They are outside the inventory-and-classification scope of the Phase 0 gate and continue to block later phases on their own terms.
 
@@ -233,7 +267,7 @@ This matrix is the only Phase 0 change. It deliberately performs no source-code 
 
 `GATE_SCOPE`: Phase-0 inventory and classification completeness only.
 
-`GATE_REASON`: every component of the exact Source `main` tree `b0c7ce136160a4ba818eee028b7980c952848b5a` and every open Source PR is classified as `REBUILD`, `REJECT`, `HISTORICAL_ONLY` or `TEST_FIXTURE_ONLY`; there are no `ACCEPT` decisions. The last remaining blocker, repository-wide Agent-Common content-search completeness, is resolved by direct Git blob enumeration of all 129 files at that SHA with 0 unscannable files, 0 symlinks, 0 submodules and 0 unclassified matches. No Agent-Common dependency remains unclassified.
+`GATE_REASON`: every component of the exact Source `main` tree `b0c7ce136160a4ba818eee028b7980c952848b5a` and every open Source PR is classified as `REBUILD`, `REJECT`, `HISTORICAL_ONLY` or `TEST_FIXTURE_ONLY`; there are no `ACCEPT` decisions. The last remaining blocker, repository-wide Agent-Common content-search completeness, is resolved by direct Git blob enumeration in both evidence spaces: all 129 files of the source `main` tree, and all ten open-PR heads, each with 0 unscannable files, 0 symlinks and 0 submodules. The 21 main-tree matches and the 7 additional matches found only in the older-base PRs #1 and #10 are all classified. No Agent-Common dependency remains unclassified.
 
 `PASS` means only that. It does **not** mean the source code is safe, that Phase 1 is released, that a merge is authorized, that a deployment is authorized, or that any production change is authorized. The `UNKNOWN` facts recorded above (`EXECUTION_ENVIRONMENT`, `ACCESS_LEVEL`, `KAAN_APPROVAL_CHANNEL`, current exact-source test/CI results, real-host sandbox evidence) are unchanged and are not converted into success by this gate.
 
