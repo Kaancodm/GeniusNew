@@ -6,14 +6,14 @@ Dieses Manifest ist ein Sicherheits- und Herkunfts-Gate. `PENDING_REVIEW` bedeut
 
 | Bereich / Altpfad | Status | Grund | Nächster Schritt |
 |---|---|---|---|
-| `staat/verfassung/handoff.schema.json` | REBUILD | Enthält noch Agent-Common-Schema-ID; Identitätsmodell der Baseline ist für GeniusNew nicht final | Neues GeniusNew-Handoff-Schema definieren |
-| `staat/verfassung/models/handoff.py` | REBUILD | Kein verpflichtendes `user_id`; muss konsistent mit neuem Schema entstehen | Neues Contract-Modell nach Schema bauen |
+| `staat/verfassung/handoff.schema.json` | REBUILT_NATIVE | Alt-Schema enthält Agent-Common-ID und kein finalisiertes Identitätsmodell | `schemas/handoff-v1.schema.json` ist ein eigenständiges, striktes GeniusNew-Schema mit verpflichtendem `user_id` |
+| `staat/verfassung/models/handoff.py` | REBUILT_NATIVE | Kein verpflichtendes `user_id`; keine 1:1-Übernahme | `geniusnew/contracts.py` bindet Identität, Job, Policy, Worker und Ablaufzeit neu |
 | `staat/verfassung/models/base.py` | PENDING_REVIEW | Strict-/forbid-Konzept fachlich relevant, Implementierung noch nicht Public- und Isolation-geprüft | Einzelreview |
-| `staat/verfassung/models/canonical.py` | PENDING_REVIEW | Kanonisches Hashing fachlich relevant | Kryptografische/Serialisierungsprüfung |
+| `staat/verfassung/models/canonical.py` | REBUILT_NATIVE | Kanonisches Hashing fachlich relevant, aber ohne Übernahme neu bewertet | Deterministisches JSON, SHA-256-Payload-Bindung und HMAC über den Handoff neu implementiert |
 | `staat/verfassung/job_result.schema.json` | PENDING_REVIEW | Vertragsbaustein relevant, Abhängigkeit von neuer Handoff-Verfassung | Nach neuem Handoff prüfen |
 | `staat/verfassung/audit_log.schema.json` | PENDING_REVIEW | Auditvertrag relevant | Datenminimierung/PII/Secret-Leak prüfen |
-| `staat/gesetze/approval-policy.json` | REBUILD | Altpolicy enthält historische Produktentscheidungen und muss zur neuen Tool-/Approval-Architektur passen | Neue Policy aus Anforderungen ableiten |
-| `staat/gesetze/policy.py` | REBUILD | Muss neue Policy und Identität konsistent erzwingen | Neu implementieren |
+| `staat/gesetze/approval-policy.json` | REBUILT_NATIVE | Altpolicy enthält historische Produktentscheidungen | Minimaler Policy-Vertrag mit serverseitigen Grants, Tool-/Sandbox-Allow-Lists und Approval-Gate neu definiert |
+| `staat/gesetze/policy.py` | REBUILT_NATIVE | Muss neue Policy und Identität konsistent erzwingen | `Policy` und `Grant` erzwingen die Regeln fail-closed |
 | `staat/regierung/orchestrator.py` | REBUILD | Zentrale Trust-Grenze; keine 1:1-Übernahme | Gegen neue Contracts neu bauen |
 | `polizei/grenzschutz/gateway.py` | PENDING_REVIEW | Fail-closed-Grenzschutz fachlich wertvoll | Gegen neue Contracts und Policies prüfen |
 | `polizei/forensik/audit_chain.py` | PENDING_REVIEW | Hash-Chain fachlich relevant | Integritätsmodell und Persistenz prüfen |
