@@ -21,10 +21,28 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 REPO="$TMP/repo"
 
-g()  { git -C "$REPO" -c core.quotepath=false "$@"; }
-md() { printf '%s' "$1" | sed 's/|/\\|/g'; }
+g() { git -C "$REPO" -c core.quotepath=false "$@"; }
 
-echo "Klone $SRC (nur lesend) ..." >&2
+# Werte, die in das öffentliche Markdown gelangen können, defensiv bereinigen.
+# Insbesondere darf eine HTTPS-Clone-URL mit eingebetteten Zugangsdaten nicht
+# im Inventurbericht oder in der Statusausgabe auftauchen.
+sanitize_src() {
+  printf '%s' "$1" | sed -E \
+    -e 's#(https?://)[^/@]+@#\1[REDACTED]@#' \
+    -e 's#([?&](access_token|token|auth|key)=)[^&]+#\1[REDACTED]#g'
+}
+
+# Git-Dateinamen können Zeichen enthalten, die Markdown-Tabellen aufbrechen.
+# CR/LF werden zu Leerzeichen; Backslash, Backtick und Pipe werden escaped.
+md() {
+  printf '%s' "$1" \
+    | tr '\r\n' '  ' \
+    | sed -e 's/\\/\\\\/g' -e 's/`/\\`/g' -e 's/|/\\|/g'
+}
+
+SRC_DISPLAY="$(sanitize_src "$SRC")"
+
+echo "Klone $SRC_DISPLAY (nur lesend) ..." >&2
 git clone --quiet --no-checkout "$SRC" "$REPO"
 
 g rev-parse --verify --quiet "${BASELINE}^{commit}" >/dev/null \
@@ -58,7 +76,10 @@ fund() {  # $1 Ref, $2 Begriff -> erster Treffer (Dateiname, sonst Inhalt) oder 
   [ -n "$1" ] || { echo "–"; return; }
   local hit
   hit="$(g ls-tree -r --name-only "$1" | grep -i -F -m1 -- "$2" || true)"
-  [ -n "$hit" ] || hit="$(g grep -l -I -i -F -e "$2" "$1" -- 2>/dev/null | head -n1 | sed "s#^$1:##" || true)"
+  if [ -z "$hit" ]; then
+    hit="$(g grep -l -I -i -F -e "$2" "$1" -- 2>/dev/null | head -n1 || true)"
+    hit="${hit#"$1:"}"
+  fi
   if [ -n "$hit" ]; then echo "\`$(md "$hit")\`"; else echo "–"; fi
 }
 
@@ -80,7 +101,7 @@ delta() {  # $1 Ref, $2 Überschrift
 {
   echo "# Inventur: Agent-Genius → GeniusNew"
   echo
-  echo "- **Quelle:** \`$SRC\`, Baseline \`$BASE\`"
+  echo "- **Quelle:** \`$(md "$SRC_DISPLAY")\`, Baseline \`$BASE\`"
   echo "- **MVP-Branch:** ${MVP_REF:-nicht gefunden}"
   echo "- **Draft-PR #1:** ${PR_REF:-nicht gefunden} (nur Einzelteile, nie als Ganzes)"
   echo "- **Erstellt:** $(date '+%d.%m.%Y %H:%M'), Status: ungeprüft"
