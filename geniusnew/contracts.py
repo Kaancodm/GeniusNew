@@ -17,6 +17,7 @@ _VERSION = "geniusnew-handoff-v1"
 _PENDING = "PENDING_APPROVAL"
 _NOT_REQUIRED = "NOT_REQUIRED"
 _MAX_WIRE_BYTES = 16 * 1024
+_MAX_WIRE_DEPTH = 4
 _HANDOFF_KEYS = frozenset(
     {
         "version",
@@ -212,11 +213,35 @@ class Handoff:
         )
 
 
+def _wire_depth(decoded: str) -> int:
+    """Deepest bracket nesting outside string literals, without parsing."""
+    depth = deepest = 0
+    in_string = escaped = False
+    for character in decoded:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            deepest = max(deepest, depth)
+        elif character in "]}":
+            depth -= 1
+    return deepest
+
+
 def _wire_object(wire: Any) -> dict[str, Any]:
     if type(wire) is not bytes or not wire or len(wire) > _MAX_WIRE_BYTES:
         _fail("handoff wire must be a bounded, non-empty bytes value")
     try:
         decoded = wire.decode("utf-8")
+        if _wire_depth(decoded) > _MAX_WIRE_DEPTH:
+            _fail("handoff JSON nests too deeply")
 
         def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             result: dict[str, Any] = {}
@@ -231,7 +256,7 @@ def _wire_object(wire: Any) -> dict[str, Any]:
             object_pairs_hook=reject_duplicates,
             parse_constant=lambda _: _fail("handoff JSON contains a non-finite value"),
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ContractError("handoff wire is not valid JSON") from exc
     if not isinstance(value, dict):
         _fail("handoff wire must contain an object")
