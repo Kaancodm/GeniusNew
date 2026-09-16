@@ -1,8 +1,18 @@
-# GeniusNew Import Manifest
+# GeniusNew Import Manifest — historisch
+
+> **Kein aktives Gate.** Diese erste Inventur ist an den älteren Quell-SHA
+> `09496c94c064ae36ee98b1a21553c7b3b358e864` gebunden. Das kanonische Import-Gate
+> ist `docs/MIGRATION-MATRIX.md`, gebunden an den aktuellen Quell-SHA
+> `b0c7ce136160a4ba818eee028b7980c952848b5a`. Bei Abweichung gilt die Matrix.
+>
+> Dieses Dokument bleibt als Herkunftsnachweis erhalten und wird nicht mehr
+> fortgeschrieben. Die `REBUILT_NATIVE`-Einträge bleiben gültig: sie belegen
+> bereits GeniusNew-nativ gebaute Bestandteile. Alle übrigen Status hier sind
+> gegenüber der Matrix überholt und dürfen keine Importentscheidung mehr tragen.
 
 Quelle für diese erste Inventur: `Kaancodm/Agent-Genius@09496c94c064ae36ee98b1a21553c7b3b358e864`
 
-Dieses Manifest ist ein Sicherheits- und Herkunfts-Gate. `PENDING_REVIEW` bedeutet ausdrücklich: noch nicht nach GeniusNew kopieren.
+Dieses Manifest war das ursprüngliche Sicherheits- und Herkunfts-Gate. `PENDING_REVIEW` bedeutete darin ausdrücklich: noch nicht nach GeniusNew kopieren.
 
 | Bereich / Altpfad | Status | Grund | Nächster Schritt |
 |---|---|---|---|
@@ -35,4 +45,6 @@ Dieses Manifest ist ein Sicherheits- und Herkunfts-Gate. `PENDING_REVIEW` bedeut
 
 ## Regel
 
-`ACCEPT` darf erst gesetzt werden, nachdem eine Komponente einzeln geprüft wurde. Für Bootstrap Phase 0 ist daher bewusst noch keine Altkomponente als `ACCEPT` markiert.
+`ACCEPT` darf erst gesetzt werden, nachdem eine Komponente einzeln geprüft wurde. In dieser Inventur ist daher bewusst keine Altkomponente als `ACCEPT` markiert.
+
+Diese Regel gilt unverändert weiter, wird aber in `docs/MIGRATION-MATRIX.md` geführt. Auch dort ist derzeit keine Komponente `ACCEPT`.
