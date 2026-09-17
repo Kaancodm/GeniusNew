@@ -47,6 +47,12 @@ class ContractsTest(unittest.TestCase):
         self.assertFalse(schema['additionalProperties'])
         self.assertEqual(schema['properties']['version']['const'], body['version'])
 
+    def test_schema_identifier_does_not_depend_on_a_domain(self):
+        schema_path = Path(__file__).parents[1] / 'schemas' / 'handoff-v1.schema.json'
+        schema = json.loads(schema_path.read_text(encoding='utf-8'))
+        self.assertEqual(schema['$id'], 'urn:geniusnew:schema:handoff:v1')
+        self.assertFalse(schema['$id'].startswith(('http://', 'https://')))
+
     def test_noncanonical_json_is_rejected_even_with_a_valid_signature(self):
         body = json.loads(self.issue())
         noncanonical = json.dumps(body, sort_keys=True).encode()
