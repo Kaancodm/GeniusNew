@@ -4,12 +4,18 @@ Dieses Dokument ist ein **Plan, kein Zustandsbericht.** Was tatsächlich gilt, s
 `main`, in den Tests und in der CI. Wenn dieses Dokument und das Repository sich
 widersprechen, hat das Repository recht.
 
+Maßgeblich bleiben `SECURITY.md`, `docs/CONSTITUTION-V1-DRAFT.md` und als Import-Gate
+`docs/MIGRATION-MATRIX.md`. Diese Roadmap ordnet Arbeit, sie erzeugt keine eigene
+Autorität und darf keiner dieser Quellen widersprechen.
+
 ## Ziel von v0.1
 
 > Ein Fremder klont das Repository, führt **einen** Befehl aus, und sieht: ein Job geht
-> über HTTP hinein, die Identität wird serverseitig bestimmt, die Policy prüft ihn, er
-> läuft isoliert, das Ergebnis kommt signiert zurück, und die Audit-Chain lässt sich
-> verifizieren. Die CI beweist denselben Pfad bei jedem Push.
+> über HTTP hinein, die Identität wird serverseitig bestimmt, eine vom Orchestrator
+> unabhängige Instanz prüft die Policy, der Job läuft isoliert, das Ergebnis kommt
+> **signiert** zurück und wird von einer weiteren unabhängigen Instanz angenommen, und die
+> Audit-Chain lässt sich gegen einen extern festgehaltenen Kopf verifizieren. Die CI
+> beweist denselben Pfad bei jedem Push.
 
 Erst wenn das gilt, ist v0.1 erreicht. Nicht vorher.
 
@@ -18,19 +24,20 @@ echten Betrieb. Es ist der erste durchgehende, nachvollziehbare Pfad durch alle 
 
 ## Bewusst nicht in v0.1
 
-Diese Entscheidungen stehen bereits in `docs/IMPORT-MANIFEST.md` und werden hier nur
-zusammengefasst:
+Kanonisches Import-Gate ist `docs/MIGRATION-MATRIX.md`, gebunden an den exakten
+Quell-SHA. Die folgenden Ausschlüsse sind Scope-Entscheidungen dieser Roadmap; ihre
+ursprüngliche Einstufung als `REJECT_FOR_BOOTSTRAP` stammt aus dem inzwischen
+historischen `docs/IMPORT-MANIFEST.md` und wird hier bewusst fortgeschrieben:
 
-- **Firecracker / microVM** — `REJECT_FOR_BOOTSTRAP`. Erhöht Komplexität und
-  Angriffsfläche, ohne die v0.1 nicht nachweisbar wäre. Isolation beginnt auf
-  Prozessebene.
-- **Datenbank / Persistenz** — `REJECT_FOR_BOOTSTRAP`. Der Kern ist prozesslokal.
-  Persistenz ist eine eigene, bewusst zu entwerfende Phase.
+- **Firecracker / microVM** — erhöht Komplexität und Angriffsfläche, ohne die v0.1 nicht
+  nachweisbar wäre. Isolation beginnt auf Prozessebene.
+- **Datenbank / Persistenz** — der Kern bleibt prozesslokal. Persistenz ist eine eigene,
+  bewusst zu entwerfende Phase.
 - **Portal / Web-UI** — externe Angriffsfläche, kommt nach den Kernverträgen.
 - **Semantisches Gedächtnis** — nicht Teil des minimalen Trust-Kerns.
 
-Etwas aus dieser Liste vorzuziehen, ist kein Fortschritt, sondern eine Verbreiterung des
-Scopes. Wer es trotzdem tut, nimmt die Entscheidung bewusst zurück und begründet sie.
+Etwas hiervon vorzuziehen ist kein Fortschritt, sondern eine Verbreiterung des Scopes. Wer
+es tut, nimmt die Entscheidung bewusst zurück und begründet sie.
 
 ## Die Schritte
 
@@ -43,38 +50,83 @@ vorangegangenen Neuaufbauten. Deshalb steht dieser Teil vorn.
 2. **#5** — Contract-CI auf GitHub Actions. Wird nach #9 ohne weitere Änderung grün.
 3. **#8** — Migrationsmatrix wird kanonisches Import-Gate; `IMPORT-MANIFEST.md` wird als
    historisch markiert.
-4. **#6** — serverseitige Einmal-Approval-Tokens, scope-gebunden. Enthält einen offenen
-   Vorschlag zur Herkunftsprüfung von `ApprovalScope`; siehe die Diskussion am PR.
+4. **#6** — serverseitige Einmal-Approval-Tokens, scope-gebunden, mit Herkunftsprüfung
+   beim Grant.
 5. **#3** — schließen. Eine Datenbank-Grundlage widerspricht dem Bootstrap-Scope oben.
    Kommt als eigene Phase zurück, wenn sie gebraucht wird.
 
 ### Teil 2 — die vertikale Scheibe
 
-Ein Pfad durch alle Schichten, nicht alle Schichten halb fertig.
+Ein Pfad durch alle Schichten, nicht alle Schichten halb fertig. Die Reihenfolge folgt der
+Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
 
-6. **Audit-Chain** — append-only, hash-verkettet, mit einer `verify()`-Funktion, die eine
-   manipulierte Kette erkennt. Tests gegen Einfügen, Löschen und Verändern.
-7. **Worker-Schnittstelle** plus ein deterministischer Trivial-Worker als Referenz.
-8. **Isolationsgrenze auf Prozessebene** — kein Netz, kein Schreibzugriff außerhalb eines
-   temporären Verzeichnisses, Zeitlimit, Ressourcenlimit. Nachweisbar durch Tests, die den
-   Ausbruch versuchen.
-9. **Orchestrator** — Admission, Policy-Prüfung, Approval, Dispatch, Ergebnisannahme.
-   Keine geteilte veränderliche Autorität, deterministische Zuordnung, fail closed.
-10. **HTTP-Eingang** — API-Key wird serverseitig auf einen Principal abgebildet.
+6. **Schema-Kennungen auf URN umstellen** — `schemas/handoff-v1.schema.json` trägt eine
+   `$id` unter einer Domain, die nicht gehalten wird und damit von Dritten registrierbar
+   ist. Die Entscheidung steht in der Migrationsmatrix: `urn:geniusnew:schema:<name>:v1`.
+   Das geschieht **vor** Schritt 7, damit v0.1 nicht auf einer fremdregistrierbaren
+   Vertragskennung aufbaut.
+
+7. **Audit-Ereignisvertrag** — was ein Eintrag enthalten darf: Akteur, Aktion,
+   Entscheidung, Integritätsbezug, Zeitbezug. **Keine Roh-Payloads, keine Secrets**
+   (`CONSTITUTION-V1-DRAFT.md` §7, `SECURITY.md`). Nutzdaten erscheinen ausschließlich als
+   Hash oder Referenz. Ein Test muss belegen, dass Payload-Inhalt keinen Eintrag erreichen
+   kann.
+
+8. **Audit-Chain** — append-only, hash-verkettet, mit `verify()`. Eine für sich stehende
+   Kette erkennt Änderung und Einfügung, **nicht** aber das Abschneiden des Endes: eine um
+   die letzten Einträge gekürzte Kette bleibt in sich gültig. Deshalb gehört ein extern
+   festgehaltener, signierter Kettenkopf dazu. Tests gegen Änderung, Einfügung **und
+   Löschung des letzten Eintrags**.
+
+9. **Ergebnisvertrag** — das Ergebnis wird vom Worker signiert und bei der Annahme
+   geprüft, symmetrisch zum eingehenden Handoff. Ohne diesen Schritt bleibt „das Ergebnis
+   kommt signiert zurück" im Ziel oben unerfüllt.
+
+10. **Worker-Schnittstelle** plus ein deterministischer Trivial-Worker als Referenz.
+
+11. **Isolationsgrenze auf Prozessebene** — kein Netz, kein Schreibzugriff außerhalb eines
+    temporären Verzeichnisses, Zeitlimit, Ressourcenlimit. Nachweisbar durch Tests, die
+    den Ausbruch versuchen.
+
+12. **Gateway** — unabhängige Default-Deny-Durchsetzung **vor** dem Dispatch. Eigene
+    Instanz, nicht Teil des Orchestrators.
+
+13. **Orchestrator** — Admission, Zuordnung, Dispatch. Deterministisch, fail closed, keine
+    geteilte veränderliche Autorität. Er trifft Entscheidungen, er bestätigt sie nicht
+    selbst.
+
+14. **Ergebnisprüfung** — unabhängige Annahme: Signatur, Integrität, TTL. Weder Worker
+    noch Orchestrator validieren ihr eigenes Ergebnis.
+
+    Die Schritte 12 bis 14 sind bewusst getrennt. `CONSTITUTION-V1-DRAFT.md` §8 verlangt,
+    dass Orchestrierung, Policy-/Gateway-Prüfung, Ausführung, Ergebnisprüfung und
+    Audit/Forensik logisch getrennt bleiben und keine Instanz ihre eigene
+    sicherheitsrelevante Entscheidung allein bestätigt. Eine Zusammenlegung wäre eine
+    Verletzung dieser Regel, keine Vereinfachung.
+
+15. **TTL an allen vier Kontrollpunkten** — Admission, vor dem Dispatch, Revalidierung im
+    Worker, Annahme des Ergebnisses. Ein Handoff, der bei der Admission gültig war und
+    während der Ausführung abläuft, muss abgelehnt werden. Ein Ressourcen-Zeitlimit aus
+    Schritt 11 ersetzt das nicht. Eigener End-to-End-Test für Ablauf **während** der
+    Ausführung.
+
+16. **HTTP-Eingang** — API-Key wird serverseitig auf einen Principal abgebildet.
     Identität, Tier und Rechte kommen **nie** aus dem Request.
-11. **Verdrahtung** plus ein End-to-End-Test, der den gesamten Pfad geht und die
-    Audit-Chain am Ende verifiziert.
+
+17. **Verdrahtung** plus ein End-to-End-Test, der den gesamten Pfad geht, die
+    Ergebnissignatur prüft und die Audit-Chain gegen den festgehaltenen Kopf verifiziert.
 
 ### Teil 3 — nachweisbar machen
 
 Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
 
-12. **`scripts/demo.sh`** — ein Befehl. Startet einen Job, druckt die Audit-Chain,
-    verifiziert sie und sagt deutlich, ob die Prüfung bestanden wurde.
-13. **CI führt den End-to-End-Test mit aus**, nicht nur die Unit-Tests.
-14. **README-Quickstart**, den ein Fremder ohne Rückfragen befolgen kann. Am besten von
+18. **`scripts/demo.sh`** — ein Befehl. Startet einen Job, gibt die Audit-Chain aus,
+    verifiziert sie gegen den festgehaltenen Kopf und sagt deutlich, ob die Prüfung
+    bestanden wurde. Die Ausgabe enthält nur, was Schritt 7 erlaubt.
+19. **CI führt den End-to-End-Test mit aus**, nicht nur die Unit-Tests.
+20. **README-Quickstart**, den ein Fremder ohne Rückfragen befolgen kann. Am besten von
     jemandem gegengelesen, der das Projekt nicht kennt.
-15. **Tag `v0.1`** auf einem grünen, verifizierten Commit.
+21. **Tag `v0.1`** auf einem grünen, verifizierten Commit.
 
 ## Arbeitsregeln
 
@@ -88,9 +140,11 @@ Arbeit, die nicht mehr landen kann.
 
 **Behauptungen gehören in Checks, nicht in Sätze.** Dokumente veralten lautlos, Checks
 nicht. Drei Aussagen in der Projektdokumentation waren nachweislich falsch, bis sie
-geprüft wurden: eine Aussage über den Paketnamen, eine über die Sichtbarkeit des
-Repositories und eine über das gültige Import-Gate. Keine davon war böswillig; alle drei
-sind entstanden, weil niemand sie nachrechnen musste.
+geprüft wurden: eine über den Paketnamen, eine über die Sichtbarkeit des Repositories und
+eine über das gültige Import-Gate. Keine davon war böswillig; alle drei sind entstanden,
+weil niemand sie nachrechnen musste. Die erste Fassung dieser Roadmap war die vierte: sie
+wurde geschrieben, ohne `CONSTITUTION-V1-DRAFT.md` zu lesen, und widersprach ihr an vier
+Stellen. Ein unabhängiger Review hat das gefunden.
 
 **Nicht umbenennen.** Jede Identitätsänderung bisher hat einen vollständigen
 Migrationszyklus gekostet und strukturell nichts verbessert. Das Projekt heißt GeniusNew.
@@ -99,8 +153,3 @@ Migrationszyklus gekostet und strukturell nichts verbessert. Das Projekt heißt 
 
 Was nach v0.1 kommt, ist in `docs/MIGRATION-MATRIX.md` unter `REBUILD` klassifiziert und
 an einen exakten Quell-SHA gebunden. Diese Roadmap greift dem nicht vor.
-
-Eine Aufgabe ist bereits notiert und gehört in die erste Phase nach v0.1: das bestehende
-`schemas/handoff-v1.schema.json` trägt eine `$id` unter einer Domain, die nicht gehalten
-wird. Die Entscheidung dazu steht in der Migrationsmatrix — GeniusNew verwendet künftig
-`urn:geniusnew:schema:<name>:v1`.
