@@ -267,7 +267,7 @@ def _wire_object(wire: Any) -> dict[str, Any]:
     return value
 
 
-def _from_object(value: dict[str, Any], *, subject: str, job_id: str, policy: Policy, integrity_key: bytes, now: int) -> Handoff:
+def _from_object(value: dict[str, Any], *, subject: str, job_id: str, policy: Policy, integrity_key: bytes, now: int, allow_pending: bool = False) -> Handoff:
     if not isinstance(policy, Policy):
         _fail("policy is invalid")
     _string(job_id, "job_id")
@@ -305,7 +305,7 @@ def _from_object(value: dict[str, Any], *, subject: str, job_id: str, policy: Po
             _fail(f"handoff {field} does not match trusted policy")
     if issued_at > now or now >= expires_at:
         _fail("handoff is not currently valid")
-    if value["approval_state"] == _PENDING:
+    if value["approval_state"] == _PENDING and not allow_pending:
         _fail("pending approval handoff cannot reach a worker")
     return Handoff(
         version=value["version"], job_id=value["job_id"], user_id=value["user_id"],
@@ -353,3 +353,14 @@ def validate(wire: Any, *, subject: str, job_id: str, policy: Policy, integrity_
         _wire_object(wire), subject=subject, job_id=job_id, policy=policy,
         integrity_key=integrity_key, now=now,
     )
+
+
+def validate_pending(wire: Any, *, subject: str, job_id: str, policy: Policy, integrity_key: bytes, now: int) -> Handoff:
+    """Validate a pending handoff at the server-side approval boundary only."""
+    handoff = _from_object(
+        _wire_object(wire), subject=subject, job_id=job_id, policy=policy,
+        integrity_key=integrity_key, now=now, allow_pending=True,
+    )
+    if handoff.approval_state != _PENDING:
+        _fail("handoff does not require approval")
+    return handoff

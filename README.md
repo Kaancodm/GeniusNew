@@ -38,7 +38,7 @@ GeniusNew wird Zero-Trust aufgebaut. Sicherheitsrelevante Identität, Rechte, Po
 
 ## Aktueller Stand
 
-Phase 1: deterministischer Zero-Trust-Contract-Kern.
+Phase 2: Contract-Kern und serverseitige Approval-Grenze.
 
 Die Phasennummern in `docs/MIGRATION-MATRIX.md` zählen die Migration aus dem
 Altprojekt und sind nicht dieselben wie die Bauphasen hier.
@@ -56,8 +56,10 @@ Siehe:
 - `docs/IMPORT-MANIFEST.md` — historische erste Inventur
 - `SECURITY.md`
 - `docs/HANDOFF-V1.md`
+- `docs/APPROVAL-V1.md`
 - `schemas/handoff-v1.schema.json`
 - `geniusnew/contracts.py`
+- `geniusnew/approvals.py`
 
 ## Lokale Prüfung
 
