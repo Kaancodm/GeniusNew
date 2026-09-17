@@ -344,7 +344,10 @@ def issue(request: Any, *, subject: str, job_id: str, policy: Policy, integrity_
         "payload_sha256": hashlib.sha256(canonical(payload)).hexdigest(),
     }
     body["signature"] = _signature(body, integrity_key)
-    return canonical(body)
+    wire = canonical(body)
+    if len(wire) > _MAX_WIRE_BYTES:
+        _fail("handoff wire must be a bounded, non-empty bytes value")
+    return wire
 
 
 def validate(wire: Any, *, subject: str, job_id: str, policy: Policy, integrity_key: bytes, now: int) -> Handoff:
