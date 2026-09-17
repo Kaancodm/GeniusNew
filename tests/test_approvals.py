@@ -58,6 +58,21 @@ class ApprovalTest(unittest.TestCase):
         with self.assertRaises(ContractError):
             store.consume(b'a' * 32, other_scope, now=102)
 
+    def test_grant_requires_a_scope_created_from_a_signed_handoff(self):
+        verified = self.scope()
+        forged = ApprovalScope('0' * 64, verified.handoff_expires_at, 'job-demo',
+                               'victim', verified.worker_agent_id, verified.risk_tier,
+                               verified.policy_version, verified.action)
+        with self.assertRaises(ContractError):
+            ApprovalStore().grant(forged, now=101, ttl_seconds=60)
+        rehydrated = ApprovalScope(verified.handoff_sha256, verified.handoff_expires_at,
+                                   verified.job_id, verified.user_id, verified.worker_agent_id,
+                                   verified.risk_tier, verified.policy_version, verified.action)
+        self.assertEqual(rehydrated, verified)
+        store = ApprovalStore()
+        grant = store.grant(verified, now=101, ttl_seconds=60)
+        self.assertEqual(store.consume(grant.token, rehydrated, now=102).state, 'CONSUMED')
+
     def test_expiry_ttl_and_token_fail_closed(self):
         scope = self.scope()
         for ttl in (0, 601, True, 1.0):

@@ -18,6 +18,7 @@ _REVOKED = "REVOKED"
 _EXECUTE_HANDOFF = "EXECUTE_HANDOFF"
 _MAX_TTL_SECONDS = 600
 _TOKEN_BYTES = 32
+_PROVENANCE = object()
 
 
 def _fail(message: str) -> None:
@@ -52,6 +53,7 @@ class ApprovalScope:
     risk_tier: str
     policy_version: str
     action: str
+    origin: object = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         for field in ("handoff_sha256", "job_id", "user_id", "worker_agent_id", "risk_tier", "policy_version", "action"):
@@ -134,6 +136,7 @@ def create_scope(wire: bytes, *, subject: str, job_id: str, policy: object,
         integrity_key=integrity_key, now=now,
     )
     return ApprovalScope(
+        origin=_PROVENANCE,
         handoff_sha256=_sha256_hex(handoff.to_bytes()),
         handoff_expires_at=handoff.expires_at,
         job_id=handoff.job_id,
@@ -156,6 +159,8 @@ class ApprovalStore:
     def grant(self, scope: ApprovalScope, *, now: int, ttl_seconds: int) -> ApprovalGrant:
         if not isinstance(scope, ApprovalScope):
             _fail("scope is invalid")
+        if scope.origin is not _PROVENANCE:
+            _fail("approval scope must come from create_scope")
         now = _integer(now, "now")
         ttl_seconds = _integer(ttl_seconds, "ttl_seconds")
         if ttl_seconds <= 0 or ttl_seconds > _MAX_TTL_SECONDS:
