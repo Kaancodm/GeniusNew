@@ -18,13 +18,13 @@ class AuditEventTest(unittest.TestCase):
                              ('summarize',), ('isolated',), (grant,))
         self.handoff = self.issue_handoff({'text': f'Please summarise {PAYLOAD_CANARY}'})
 
-    def issue_handoff(self, request):
-        wire = issue(request, subject='subject-demo', job_id='job-demo',
+    def issue_handoff(self, request, job_id='job-demo'):
+        wire = issue(request, subject='subject-demo', job_id=job_id,
                      policy=self.policy, integrity_key=self.key, now=100)
-        return validate(wire, subject='subject-demo', job_id='job-demo',
+        return validate(wire, subject='subject-demo', job_id=job_id,
                         policy=self.policy, integrity_key=self.key, now=101)
 
-    def event(self, **kw):
+    def event(self, job_id_override=None, **kw):
         args = dict(trace_id='trace-demo', actor='gateway', action='HANDOFF_ADMITTED',
                     decision='ALLOWED', reason_code='POLICY_SATISFIED', occurred_at=101)
         args.update(kw)
@@ -59,7 +59,7 @@ class AuditEventTest(unittest.TestCase):
                 self.event(reason_code=code)
 
     def test_identifiers_are_bounded_and_carry_no_whitespace(self):
-        for value in (f'trace {PAYLOAD_CANARY}', 'x' * 129, 'has\nnewline', '', 1, None):
+        for value in (f'trace {PAYLOAD_CANARY}', 'x' * 200, 'has\nnewline', '', 1, None):
             with self.subTest(value=value), self.assertRaises(ContractError):
                 self.event(trace_id=value)
             with self.subTest(value=value), self.assertRaises(ContractError):
@@ -98,6 +98,39 @@ class AuditEventTest(unittest.TestCase):
         self.assertEqual(recorded['trace_id'], PAYLOAD_CANARY)
         with self.assertRaises(ContractError):
             self.event(trace_id=PAYLOAD_CANARY * 4)
+
+    def test_non_ascii_identifiers_cannot_inflate_an_entry(self):
+        with self.assertRaises(ContractError):
+            self.event(trace_id='\U0001f600' * 128)
+        self.assertLess(len(self.event(trace_id='\U0001f600' * 12).to_bytes()), 2048)
+
+    def test_time_reference_has_an_upper_bound(self):
+        with self.assertRaises(ContractError):
+            self.event(occurred_at=10 ** 4000)
+        with self.assertRaises(ContractError):
+            self.event(occurred_at=4102444801)
+        self.assertEqual(self.event(occurred_at=4102444800).occurred_at, 4102444800)
+
+    def test_unhashable_action_or_decision_fails_as_a_contract_error(self):
+        recorded = self.event().to_dict()
+        for bad in ([], {}, set()):
+            for field in ('action', 'decision'):
+                with self.subTest(field=field, bad=type(bad)), self.assertRaises(ContractError):
+                    AuditEvent(**{**recorded, field: bad})
+
+    def test_a_mutated_payload_cannot_be_audited(self):
+        self.handoff.payload['text'] = 'swapped after validation'
+        with self.assertRaises(ContractError):
+            self.event()
+
+    def test_every_valid_handoff_stays_auditable(self):
+        for job_id in ('j' * 200, 'job id with spaces', '\U0001f600' * 40):
+            with self.subTest(job_id=job_id):
+                self.handoff = self.issue_handoff({'text': 'ordinary'}, job_id=job_id)
+                recorded = self.event(job_id_override=None).to_dict()
+                self.assertTrue(recorded['job_id'].startswith('sha256:'))
+                self.assertNotIn(' ', recorded['job_id'])
+                self.assertLess(len(self.event(job_id_override=None).to_bytes()), 2048)
 
     def test_event_hash_is_deterministic_and_binds_every_field(self):
         self.assertEqual(self.event().event_sha256(), self.event().event_sha256())

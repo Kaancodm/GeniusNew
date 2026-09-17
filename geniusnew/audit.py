@@ -10,8 +10,11 @@ This module makes that structural rather than conventional:
 - No field accepts free text. `action` and `decision` come from closed sets,
   `reason_code` must match an uppercase code, digests must be digests, and the
   time reference must be a positive integer.
-- No field accepts arbitrary data. Every remaining field is a bounded
-  identifier, so an entry cannot exceed roughly 1.2 KB whatever a caller does.
+- No field accepts arbitrary data. Every remaining field is an identifier
+  bounded by its *serialized* size and the time reference has an upper bound, so
+  an entry stays small whatever a caller does. Bounding identifiers by code
+  points would not have been enough: `canonical()` escapes non-ASCII, so 128
+  emoji serialize to over 1.5 KB each.
 - Payload content is representable only as the digest the handoff already
   carries, and `event_from_handoff` never copies payload content into an event.
 
@@ -27,6 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import hmac
 import re
 from typing import Any
 
@@ -46,7 +50,8 @@ _ACTIONS = frozenset({
     "RESULT_REJECTED",
 })
 _DECISIONS = frozenset({"ALLOWED", "DENIED"})
-_MAX_IDENTIFIER_CHARS = 128
+_MAX_IDENTIFIER_BYTES = 160
+_MAX_OCCURRED_AT = 4102444800  # 2100-01-01T00:00:00Z
 _REASON_CODE = re.compile(r"\A[A-Z][A-Z0-9_]{0,63}\Z")
 _DIGEST = re.compile(r"\A[0-9a-f]{64}\Z")
 
@@ -56,11 +61,35 @@ def _fail(message: str) -> None:
 
 
 def _identifier(value: Any, field: str) -> str:
-    if type(value) is not str or not value or len(value) > _MAX_IDENTIFIER_CHARS:
-        _fail(f"{field} must be a non-empty identifier of at most {_MAX_IDENTIFIER_CHARS} characters")
+    """Bound an identifier by what it costs once serialized, not by code points.
+
+    `canonical()` escapes non-ASCII, so a single emoji becomes twelve bytes. A
+    code-point bound would let a caller put nine kilobytes into an entry that
+    claims to be bounded at one.
+    """
+    if type(value) is not str or not value:
+        _fail(f"{field} must be a non-empty identifier")
     if any(character.isspace() for character in value):
         _fail(f"{field} must not contain whitespace")
+    if len(canonical(value)) > _MAX_IDENTIFIER_BYTES:
+        _fail(f"{field} must serialize to at most {_MAX_IDENTIFIER_BYTES} bytes")
     return value
+
+
+def _audit_safe(value: Any, field: str) -> str:
+    """Project a handoff identifier into one an entry can always carry.
+
+    The handoff contract accepts identifiers this module would refuse, so a
+    decision about an unusual but perfectly valid handoff would otherwise be
+    impossible to audit. Refusing to record a security decision is the worse
+    failure, so such a value is recorded as a digest of itself instead.
+    """
+    if type(value) is not str or not value:
+        _fail(f"{field} must be a non-empty identifier")
+    try:
+        return _identifier(value, field)
+    except ContractError:
+        return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _digest(value: Any, field: str) -> str:
@@ -97,14 +126,14 @@ class AuditEvent:
             _identifier(getattr(self, field), field)
         for field in ("handoff_sha256", "payload_sha256"):
             _digest(getattr(self, field), field)
-        if self.action not in _ACTIONS:
+        if type(self.action) is not str or self.action not in _ACTIONS:
             _fail("action is not an allowed audit action")
-        if self.decision not in _DECISIONS:
+        if type(self.decision) is not str or self.decision not in _DECISIONS:
             _fail("decision is not an allowed audit decision")
         if type(self.reason_code) is not str or not _REASON_CODE.match(self.reason_code):
             _fail("reason_code must be an uppercase code of at most 64 characters")
-        if _integer(self.occurred_at, "occurred_at") <= 0:
-            _fail("occurred_at must be positive")
+        if not 0 < _integer(self.occurred_at, "occurred_at") <= _MAX_OCCURRED_AT:
+            _fail(f"occurred_at must be between 1 and {_MAX_OCCURRED_AT}")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -140,15 +169,18 @@ def event_from_handoff(handoff: Handoff, *, trace_id: str, actor: str, action: s
     """
     if not isinstance(handoff, Handoff):
         _fail("handoff is invalid")
+    if not hmac.compare_digest(hashlib.sha256(canonical(handoff.payload)).hexdigest(),
+                               handoff.payload_sha256):
+        _fail("handoff payload no longer matches its digest")
     return AuditEvent(
         trace_id=_identifier(trace_id, "trace_id"),
-        job_id=handoff.job_id,
+        job_id=_audit_safe(handoff.job_id, "job_id"),
         actor=_identifier(actor, "actor"),
-        subject=handoff.user_id,
+        subject=_audit_safe(handoff.user_id, "subject"),
         action=action,
         decision=decision,
         reason_code=reason_code,
-        policy_version=handoff.policy_version,
+        policy_version=_audit_safe(handoff.policy_version, "policy_version"),
         constitution_version=CONSTITUTION_VERSION,
         handoff_sha256=hashlib.sha256(handoff.to_bytes()).hexdigest(),
         payload_sha256=handoff.payload_sha256,
