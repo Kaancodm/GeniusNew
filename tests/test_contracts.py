@@ -175,6 +175,17 @@ class ContractsTest(unittest.TestCase):
             with self.subTest(kind=type(wire)), self.assertRaises(ContractError):
                 self.check(wire)
 
+    def test_parser_rejects_deep_nesting_instead_of_crashing(self):
+        for wire in (b'[' * 2000, b'[' * 2000 + b']' * 2000,
+                     b'{"a":' * 500 + b'1' + b'}' * 500):
+            with self.subTest(size=len(wire)), self.assertRaises(ContractError):
+                self.check(wire)
+
+    def test_bracket_characters_inside_payload_text_stay_valid(self):
+        text = '[' * 100 + '{"nested": "value"}' + ']' * 100 + ' back\\slash'
+        wire = self.issue({'text': text})
+        self.assertEqual(self.check(wire).payload['text'], text)
+
     def test_policy_configuration_fails_closed(self):
         for tools, profiles, grants in (((), ('isolated',), (self.grant,)),
                                        (('summarize',), (), (self.grant,)),
