@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://geniusnew.dev/schemas/handoff-v1.schema.json",
+  "$id": "urn:geniusnew:schema:handoff:v1",
   "title": "GeniusNew Handoff v1",
   "$comment": "Wire format, HMAC-SHA-256 signature, key boundary and validation rules: docs/HANDOFF-V1.md",
   "type": "object",
