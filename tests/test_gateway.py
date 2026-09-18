@@ -241,7 +241,9 @@ class GatewayTest(unittest.TestCase):
     def test_dispatch_permit_internal_fields_fail_closed(self):
         permit = self.admit()
         for handoff in (None, "handoff", 42, {}):
-            with self.subTest(handoff=type(handoff)), self.assertRaises(ContractError):
+            with self.subTest(handoff=type(handoff)), self.assertRaisesRegex(
+                ContractError, "handoff must be a Handoff"
+            ):
                 replace(permit, handoff=handoff)
         for use in (None, "use", 42, {}):
             with self.subTest(use=type(use)), self.assertRaises(ContractError):
@@ -255,7 +257,9 @@ class GatewayTest(unittest.TestCase):
             with self.subTest(admitted_at=admitted_at), self.assertRaises(ContractError):
                 replace(permit, admitted_at=admitted_at)
         for admitted_at in (permit.handoff.issued_at - 1, permit.handoff.expires_at):
-            with self.subTest(admitted_at=admitted_at), self.assertRaises(ContractError):
+            with self.subTest(admitted_at=admitted_at), self.assertRaisesRegex(
+                ContractError, "outside the handoff lifetime"
+            ):
                 replace(permit, admitted_at=admitted_at)
         with self.assertRaisesRegex(ContractError, "gateway binding"):
             replace(permit, admitted_at=permit.admitted_at + 1)
@@ -264,7 +268,9 @@ class GatewayTest(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "gateway binding"):
             replace(permit, approval_record_hash="a" * 64)
         for receipt_hash in ("", "z" * 64, "A" * 64, "a" * 63, 42):
-            with self.subTest(receipt_hash=receipt_hash), self.assertRaises(ContractError):
+            with self.subTest(receipt_hash=receipt_hash), self.assertRaisesRegex(
+                ContractError, "approval_record_hash"
+            ):
                 replace(permit, approval_record_hash=receipt_hash)
 
     def test_admit_requires_a_real_policy_object(self):
