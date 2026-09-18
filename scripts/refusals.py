@@ -52,7 +52,7 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/audit.py", "geniusnew/audit_chain.py",
            "geniusnew/results.py", "geniusnew/keys.py",
            "geniusnew/workers.py", "geniusnew/isolation.py",
-           "geniusnew/isolation_child.py")
+           "geniusnew/isolation_child.py", "geniusnew/gateway.py")
 
 _REFUSAL_CALLS = {"_fail"}
 _REFUSAL_RAISES = {"ContractError"}
