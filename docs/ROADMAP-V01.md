@@ -101,6 +101,21 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    geprüft, symmetrisch zum eingehenden Handoff. Ohne diesen Schritt bleibt „das Ergebnis
    kommt signiert zurück" im Ziel oben unerfüllt.
 
+   **Status: Vertrag steht** (`geniusnew/results.py`). `produce` verhält sich zu `issue`
+   wie `accept` zu `validate`; beide Wire-Formate gehen durch denselben Decoder. Der
+   Worker signiert mit einem eigenen Schlüssel — nicht dem Handoff-Integritätsschlüssel,
+   denn der prägt Autorisierungen, und ein Worker damit könnte sich selbst beauftragen.
+   Die Signatur ist an den Digest des exakten Handoff-Artefakts gebunden, sonst ließe
+   sich ein Ergebnis von Job A als Antwort auf Job B ausgeben. Ein `FAILED`-Ergebnis
+   trägt keinerlei Output, damit „Fehler" kein Kanal wird, der an den Output-Prüfungen
+   vorbeiführt.
+
+   Offen bleibt, was kein Vertrag lösen kann: die Annahme ist **nicht einmalig**. Ein
+   Vertrag hält keinen Zustand; dasselbe Ergebnis zweimal anzunehmen verhindert erst die
+   annehmende Instanz aus Schritt 14, so wie `approvals.py` es für Approvals tut. Ein
+   Test hält diese Grenze offen fest. Ebenso bleibt HMAC symmetrisch: die von §8
+   geforderte Unabhängigkeit ist hier organisatorisch, nicht kryptografisch.
+
 10. **Worker-Schnittstelle** plus ein deterministischer Trivial-Worker als Referenz.
 
 11. **Isolationsgrenze auf Prozessebene** — kein Netz, kein Schreibzugriff außerhalb eines
