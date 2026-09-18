@@ -5,7 +5,14 @@ from geniusnew.approvals import ApprovalScope, ApprovalStore, create_scope
 from geniusnew.contracts import ContractError, Grant, Policy, issue
 
 
-class ApprovalTest(unittest.TestCase):
+class ApprovalFixture:
+    """Shared setup. Deliberately not a TestCase.
+
+    Subclassing a TestCase to reuse its fixture re-runs every one of its tests
+    inside the subclass, which silently doubles the suite and inflates any count
+    taken from it.
+    """
+
     def setUp(self):
         self.key = b'phase-2-test-integrity-key-32bytes'
         grant = Grant('subject-demo', 'user-demo', 'worker-demo', 'high',
@@ -22,6 +29,8 @@ class ApprovalTest(unittest.TestCase):
         args.update(kw)
         return create_scope(self.wire if wire is None else wire, **args)
 
+
+class ApprovalTest(ApprovalFixture, unittest.TestCase):
     def test_scope_binds_pending_handoff_facts(self):
         scope = self.scope()
         self.assertEqual(scope.job_id, 'job-demo')
@@ -135,7 +144,7 @@ class ApprovalTest(unittest.TestCase):
         self.assertNotIn("b'g'", repr(grant))
 
 
-class UncoveredApprovalRefusalsTest(ApprovalTest):
+class UncoveredApprovalRefusalsTest(ApprovalFixture, unittest.TestCase):
     """One test per refusal that `scripts/refusals.py` found nothing covering."""
 
     def raw_scope(self, **over):
