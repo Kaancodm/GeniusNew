@@ -19,3 +19,5 @@ jobs:
           python-version: '3.11'
       - name: Run contract tests
         run: python -m unittest discover -s tests -v
+      - name: Every refusal must have a test that notices its removal
+        run: python scripts/refusals.py

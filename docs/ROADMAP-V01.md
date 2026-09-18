@@ -138,7 +138,14 @@ eine künftige Abschreibung. Lässt sich etwas heute nicht mergen, ist es zu gro
 geschnitten. Das Altprojekt trägt zehn offene Pull Requests auf veralteten Basen — gute
 Arbeit, die nicht mehr landen kann.
 
-**Behauptungen gehören in Checks, nicht in Sätze.** Dokumente veralten lautlos, Checks
+**Behauptungen gehören in Checks, nicht in Sätze.** Das gilt auch für Tests selbst.
+Dreimal in drei Tagen bestand hier ein Test aus einem anderen Grund als dem behaupteten:
+eine Zusicherung, die ein anderer Pfad erfüllte als der geprüfte. Jedes Mal von Hand
+gefunden, im Nachhinein. `scripts/refusals.py` macht daraus eine Prüfung: jede Ablehnung
+im Code wird einzeln abgeschaltet, und die Suite *muss* rot werden. Beim ersten Lauf
+überlebten 24 von 46 Ablehnungen auf `main` — darunter der Payload-Hash-Abgleich, die
+Grant-Allow-List und der Approval-Scope-Abgleich. Keine davon war redundant; sie waren
+ungetestet. Die CI führt das bei jedem Push aus. Dokumente veralten lautlos, Checks
 nicht. Drei Aussagen in der Projektdokumentation waren nachweislich falsch, bis sie
 geprüft wurden: eine über den Paketnamen, eine über die Sichtbarkeit des Repositories und
 eine über das gültige Import-Gate. Keine davon war böswillig; alle drei sind entstanden,

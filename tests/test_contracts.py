@@ -202,5 +202,109 @@ class ContractsTest(unittest.TestCase):
             Grant('subject-demo', 'user-demo', 'worker-demo', 'admin', (), 'isolated', False)
 
 
+class UncoveredRefusalsTest(ContractsTest):
+    """One test per refusal that `scripts/refusals.py` found nothing covering.
+
+    Each of these checks was doing its job — none was redundant. They simply
+    had no test, so deleting any of them left the suite green. Several assert
+    on the refusal message, because a later check would refuse the same input
+    anyway and only the message distinguishes which one fired.
+    """
+
+    def test_a_grant_field_may_not_be_empty(self):
+        for position in range(4):
+            fields = ['subject-x', 'user-x', 'worker-x', 'basic']
+            fields[position] = ''
+            with self.subTest(position=position), self.assertRaises(ContractError):
+                Grant(*fields, ('summarize',), 'isolated', False)
+        with self.assertRaises(ContractError):
+            Grant('subject-x', 'user-x', 'worker-x', 'basic', ('summarize',), '', False)
+
+    def test_tools_may_not_repeat(self):
+        with self.assertRaises(ContractError):
+            Grant('subject-x', 'user-x', 'worker-x', 'basic',
+                  ('summarize', 'summarize'), 'isolated', False)
+
+    def test_a_short_integrity_key_is_refused(self):
+        for key in (b'', b'short', b'x' * 31):
+            with self.subTest(length=len(key)), self.assertRaises(ContractError):
+                self.issue()  # sanity: the good key still works
+                issue(self.request, subject='subject-demo', job_id='job-demo',
+                      policy=self.policy, integrity_key=key, now=100)
+
+    def test_requires_approval_must_be_a_boolean(self):
+        for value in (1, 0, 'true', None, []):
+            with self.subTest(value=value), self.assertRaises(ContractError):
+                Grant('subject-x', 'user-x', 'worker-x', 'basic',
+                      ('summarize',), 'isolated', value)
+
+    def test_the_handoff_ttl_is_bounded_at_both_ends(self):
+        for ttl in (0, -1, 301, 10 ** 6):
+            with self.subTest(ttl=ttl), self.assertRaises(ContractError):
+                Policy('policy-v1', 'orchestrator-demo', ttl,
+                       ('summarize',), ('isolated',), (self.grant,))
+        self.assertEqual(Policy('policy-v1', 'orchestrator-demo', 300, ('summarize',),
+                                ('isolated',), (self.grant,)).handoff_ttl_seconds, 300)
+
+    def test_a_policy_needs_real_grants(self):
+        for grants in ((), [], None, 'grants', ('not-a-grant',), (self.grant, 'x')):
+            with self.subTest(grants=repr(grants)[:30]), self.assertRaises(ContractError):
+                Policy('policy-v1', 'orchestrator-demo', 60,
+                       ('summarize',), ('isolated',), grants)
+
+    def test_a_grant_may_not_exceed_the_policy_allow_lists(self):
+        """The privilege-escalation check: a grant cannot hand out what policy withholds."""
+        wider_tools = Grant('subject-demo', 'user-demo', 'worker-demo', 'basic',
+                            ('summarize', 'exfiltrate'), 'isolated', False)
+        wider_sandbox = Grant('subject-demo', 'user-demo', 'worker-demo', 'basic',
+                              ('summarize',), 'wide-open', False)
+        for grant in (wider_tools, wider_sandbox):
+            with self.subTest(grant=grant.tools + (grant.sandbox_profile,)):
+                with self.assertRaises(ContractError):
+                    Policy('policy-v1', 'orchestrator-demo', 60,
+                           ('summarize',), ('isolated',), (grant,))
+
+    def test_nesting_past_the_limit_is_refused_by_the_depth_check(self):
+        """Depth between the limit and the recursion limit — nothing else catches it.
+
+        The existing nesting test uses wires so deep or so malformed that the
+        JSON parser refuses them first, so the depth guard itself was never
+        reached. This asserts the message to pin which refusal fired.
+        """
+        wire = b'{"a":' * 6 + b'1' + b'}' * 6
+        with self.assertRaisesRegex(ContractError, 'nests too deeply'):
+            self.check(wire)
+
+    def test_duplicate_keys_are_refused_by_their_own_check(self):
+        with self.assertRaisesRegex(ContractError, 'duplicate keys'):
+            self.check(b'{"job_id":"a","job_id":"b"}')
+
+    def test_a_payload_that_does_not_match_its_digest_is_refused(self):
+        """A validly signed handoff whose payload_sha256 is simply wrong.
+
+        Nothing downstream compares the payload to its digest, so without this
+        check the handoff is accepted and everything built on `payload_sha256`
+        — the audit entry, the result binding — describes something else.
+        """
+        from geniusnew.contracts import _signature
+        body = json.loads(self.issue())
+        body['payload_sha256'] = '0' * 64
+        del body['signature']
+        body['signature'] = _signature(body, self.key)
+        with self.assertRaisesRegex(ContractError, 'payload hash'):
+            self.check(canonical(body))
+
+    def test_a_policy_argument_that_is_not_a_policy_fails_closed(self):
+        """Without the guard this reaches `policy.grant_for` and escapes as AttributeError."""
+        wire = self.issue()
+        for policy in (None, 'policy', 42, {}, self.grant):
+            with self.subTest(policy=type(policy)):
+                with self.assertRaises(ContractError):
+                    self.check(wire, policy=policy)
+                with self.assertRaises(ContractError):
+                    issue(self.request, subject='subject-demo', job_id='job-demo',
+                          policy=policy, integrity_key=self.key, now=100)
+
+
 if __name__ == '__main__':
     unittest.main()
