@@ -52,9 +52,14 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/audit.py", "geniusnew/audit_chain.py",
            "geniusnew/results.py", "geniusnew/keys.py",
            "geniusnew/workers.py", "geniusnew/isolation.py",
-           "geniusnew/isolation_child.py", "geniusnew/gateway.py")
+           "geniusnew/isolation_child.py", "geniusnew/gateway.py",
+           "geniusnew/orchestrator.py")
 
-_REFUSAL_CALLS = {"_fail"}
+# `_deny` is `orchestrator.py`'s refusal helper: it raises a `ContractError`
+# subclass carrying the decision that gets audited. Leaving it out would have
+# made every admission refusal invisible to this check while the module sat in
+# the guarded list looking covered.
+_REFUSAL_CALLS = {"_fail", "_deny"}
 _REFUSAL_RAISES = {"ContractError"}
 
 

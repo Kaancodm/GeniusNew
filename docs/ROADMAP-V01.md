@@ -189,6 +189,56 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
     geteilte veränderliche Autorität. Er trifft Entscheidungen, er bestätigt sie nicht
     selbst.
 
+    **Status: steht** (`geniusnew/orchestrator.py`). Er entscheidet dreierlei und hält
+    jede Entscheidung fest: ob ein Auftrag überhaupt zulässig ist, welchen Worker die
+    Policy dafür benennt, und dass ein Dispatch stattgefunden hat. Das signierte Ergebnis
+    gibt er **unbewertet** zurück — er hält keinen Ergebnisschlüssel und ruft `accept` nie
+    auf, kann seinen eigenen Job also nicht für gelungen erklären. Das ist Schritt 14, und
+    §8 verlangt, dass es eine andere Rolle bleibt.
+
+    Umgekehrt kann er seinen Handoff auch nicht selbst zulassen: einen `DispatchPermit`
+    mintet nur `gateway.py`, und `WorkerRunner.execute` nimmt nichts anderes an. Er prüft
+    zusätzlich, dass der zurückgegebene Permit **genau den ausgestellten Handoff** trägt —
+    sonst liefe der Worker einen Auftrag, den dieser Orchestrator nie ausgestellt hat.
+
+    Die Zuordnung ist eine Entscheidung, kein Nachschlagen: ein Grant benennt nicht nur
+    die Tools, sondern auch die `worker_agent_id`. Die Worker-Grenze prüft nur, ob ihr
+    Tool im Handoff steht — das tun alle Tools des Grants. Ein Orchestrator, der an einen
+    anderen registrierten Worker verteilt, erreicht also einen Agenten, den die Policy nie
+    benannt hat, und **jede** nachfolgende Schicht wäre einverstanden. Diese Stelle ist die
+    einzige, die das prüfen kann.
+
+    Deterministisch heißt hier: Zuordnung über ein Dict nach Tool, also unabhängig von der
+    Registrierungsreihenfolge; genau ein Worker pro Tool, also keine Wahl; **kein
+    Failover**, denn ein zweiter Versuch nach einer Ablehnung ist genau der Rückfall, der
+    aus Default-Deny ein Default-Retry macht. Keine Uhr, keine Entropie — `now` ist ein
+    Argument.
+
+    Der einzige Zustand ist das Job-Ledger: eine `job_id` wird einmal verbraucht und
+    bleibt verbraucht, auch wenn der Dispatch scheitert — sie wieder freizugeben machte
+    das Ledger zum Replay-Fenster statt zum Nachweis. Es ist beschränkt; eine unbegrenzte
+    Menge, die ein Aufrufer wachsen lassen kann, ist ein Speicher-DoS mit Beleg.
+
+    Ablehnungen tragen geschlossene Reason-Codes, wie in `results.py`, damit der
+    Ablehnungspfad kein Textkanal wird; jede verwendete Aktion liegt im geschlossenen
+    Audit-Vokabular von `audit.py` (ein Test prüft das gegen dessen Menge). Fremde
+    Ablehnungen — die des Gateways, die der Worker-Grenze — werden **unverändert**
+    durchgereicht: die Entscheidung einer anderen Instanz als eigene zu protokollieren
+    wäre derselbe Fehler in die andere Richtung.
+
+    **Offen bleibt die Herkunft der Policy.** Das Gateway prüft den Wire unabhängig,
+    bekommt die Policy aber als Parameter — in dieser Verdrahtung vom Orchestrator.
+    Unabhängigkeit verlangt, dass beide Rollen dieselbe Policy aus derselben
+    vertrauenswürdigen serverseitigen Quelle beziehen, nicht die eine von der anderen. Das
+    ist eine Verdrahtungs- und Deployment-Frage (Schritte 16 und 17), kein Vertragsdefekt,
+    und bleibt bis dahin ausdrücklich offen.
+
+    **Offen bleibt außerdem die Prozessgrenze.** In einem Prozess gibt es keine
+    Speichergrenze; der Orchestrator hält ein aufrufbares Objekt in die Ausführung hinein.
+    Nachweisbar ist, was an der API gilt: er hält keine fremde Autorität in seinem eigenen
+    Zustand, kann kein Permit minten und kein Ergebnis annehmen. Die Trennung nach §8 ist
+    in v0.1 eine logische Rollentrennung, keine Speichertrennung.
+
 14. **Ergebnisprüfung** — unabhängige Annahme: Signatur, Integrität, TTL. Weder Worker
     noch Orchestrator validieren ihr eigenes Ergebnis.
 
