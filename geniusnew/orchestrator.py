@@ -1,59 +1,64 @@
-"""Admission, assignment and dispatch — decisions this component does not confirm.
+"""Admission, routing and dispatch — decisions this component does not confirm.
 
 `docs/ROADMAP-V01.md` step 13 asks for an orchestrator that is deterministic,
 fails closed, holds no shared mutable authority, and — the sentence that shapes
-the whole module — "trifft Entscheidungen, er bestätigt sie nicht selbst".
+the module — "trifft Entscheidungen, er bestätigt sie nicht selbst".
+
+This file reconciles two independent implementations of that step. The routing
+model is the one from `feat/orchestrator`: the grant names the worker, so there
+is nothing to choose and nothing to check afterwards. The admission state,
+decision records and permit binding come from `feat/orchestrator-decisions`.
 
 ## What it decides, and what it must not
 
-It decides three things and records each one: whether a request is admissible at
-all, which worker the policy names for it, and that a dispatch happened. It then
-hands the signed result wire back **unjudged**. It never calls `accept`, holds no
-`WorkerAuthority`, and so has no way to declare its own job a success. That is
-step 14's role, and `CONSTITUTION-V1-DRAFT.md` §8 requires it to stay a different
-one.
+It decides whether a request is admissible, which configured worker the trusted
+policy names for it, and that a dispatch happened — and records each. It hands
+the signed result wire back **unjudged**: it holds no result key and never calls
+`accept`, so it cannot declare its own job a success. That is step 14's role, and
+`CONSTITUTION-V1-DRAFT.md` §8 requires it to stay a different one.
 
-Symmetrically, it cannot admit its own handoff. `DispatchPermit` can only be
-minted inside `gateway.py`, and `WorkerRunner.execute` accepts nothing else, so
-the orchestrator must go through the independent gateway to reach a worker —
-default deny before dispatch is structural here, not a convention.
+Symmetrically it cannot admit its own handoff. `DispatchPermit` is minted only
+inside `gateway.py` and `WorkerRunner.execute` accepts nothing else, so default
+deny before dispatch is structural here rather than conventional. What it can
+check — and does — is that the permit it got back binds the exact wire it sent.
 
-## Assignment is a decision, not a lookup
+## Routing is a fact of the grant
 
-A grant names both the tools a subject may use **and** the `worker_agent_id` that
-may run them. Nothing downstream checks the second half: the worker boundary
-verifies that its tool is in the handoff's tool list, and every tool in the grant
-passes that. So an orchestrator that dispatched `summarize` to some other
-registered worker would be sending the job to an agent the policy never named,
-and every layer after it would agree. This module refuses that
-(`WORKER_NOT_GRANTED`), because it is the only place that can.
+A grant names the `worker_agent_id` that may run a subject's jobs, so routing is
+a dictionary lookup on that id and never a choice between candidates. The
+configured endpoint's tool must still be in the grant: a worker wired under the
+right agent id but implementing another tool would otherwise reach a capability
+the policy never granted. Both checks happen **before** the gateway is called,
+so a misrouted job cannot burn a one-time approval on the way to being refused.
 
 ## Deterministic
 
-The assignment is a function of the request and the policy alone: a dict keyed by
-tool, so registration order cannot change it; one worker per tool, so there is
-never a choice to make; and no failover, because a second attempt after a refusal
-is precisely the fallback that turns default deny into default retry. The module
-reads no clock — `now` is an argument — and draws no randomness.
+No clock and no entropy — `now` is an argument. The registry is copied into an
+immutable mapping at construction, so a caller cannot add workers, change
+routing, or smuggle a different runner into the dispatch path afterwards. There
+is no failover: a second attempt after a refusal is exactly the fallback that
+turns default deny into default retry.
 
 ## The ledger is the one piece of state
 
-A job id may be submitted once. A retry needs a new id: releasing a burned one on
-failure would make the ledger a replay window rather than a record. It is bounded,
-because an unbounded set that a caller can grow is a memory exhaustion
-with a paper trail.
+A job id is burned when a permit exists and the work is about to run, not before:
+a request refused by the gateway leaves nothing behind and can be retried under
+its own id, while a dispatch that was reached stays burned even if it failed.
+Releasing a burned id on failure would make the ledger a replay window rather
+than a record. It is bounded, because an unbounded set a caller can grow is
+memory exhaustion with a paper trail.
 
 ## What a refusal carries
 
-Denials use a closed set of reason codes, like `results.py` does, so that a
-refusal cannot become a text channel out of the admission domain. Every action
-recorded here is in the audit event vocabulary of `audit.py`
+Denials use a closed set of reason codes with fixed sentences, like `results.py`
+does, so a refusal cannot become a text channel out of the admission domain.
+Every action recorded here is in the audit event vocabulary of `audit.py`
 (`tests/test_orchestrator.py` checks that against it): a decision this component
 cannot audit is a decision nobody can see.
 
 Refusals from another role — the gateway's, the worker boundary's — are passed
 through unchanged rather than relabelled as orchestrator decisions. Recording
-another instance's refusal as its own is the same error in the other direction.
+another instance's refusal as one's own is the same error in the other direction.
 """
 
 from __future__ import annotations
@@ -62,11 +67,13 @@ import hmac
 import re
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any, Callable, Iterable, Mapping
+from types import MappingProxyType
+from typing import Any, Iterable, Mapping
 
 from .contracts import ContractError, Policy, issue
 from .gateway import DispatchPermit, Gateway
 from .results import handoff_digest
+from .workers import WorkerRunner
 
 _INSTANCE_ID = re.compile(r"\A[a-z0-9][a-z0-9-]{0,62}\Z")
 
@@ -78,15 +85,17 @@ _DISPATCHED = "EXECUTION_DISPATCHED"
 ACTIONS = frozenset({_ISSUED, _REJECTED, _DISPATCHED})
 
 _SATISFIED = "POLICY_SATISFIED"
-DENIAL_REASONS = frozenset({
-    "POLICY_NOT_FOR_THIS_ORCHESTRATOR",
-    "SUBJECT_NOT_AUTHORIZED",
-    "TOOL_NOT_IN_POLICY",
-    "TOOL_NOT_GRANTED",
-    "NO_WORKER_FOR_TOOL",
-    "WORKER_NOT_GRANTED",
-    "JOB_ID_REUSED",
-    "JOB_LEDGER_FULL",
+
+# Closed set, with one fixed sentence each. Nothing from a request, a payload or
+# another component's exception is ever interpolated into these.
+DENIALS = MappingProxyType({
+    "POLICY_NOT_FOR_THIS_ORCHESTRATOR":
+        "policy orchestrator_id does not name this orchestrator",
+    "SUBJECT_NOT_AUTHORIZED": "subject is not authorized by the trusted policy",
+    "WORKER_NOT_CONFIGURED": "trusted policy names an unconfigured worker",
+    "TOOL_NOT_GRANTED": "configured worker tool is not granted by policy",
+    "JOB_ID_REUSED": "job_id has already been dispatched",
+    "JOB_LEDGER_FULL": "job ledger is full",
 })
 
 _MAX_JOB_ID_BYTES = 128
@@ -97,9 +106,15 @@ def _fail(message: str) -> None:
     raise ContractError(message)
 
 
+def _instance_id(value: Any, field: str) -> str:
+    if type(value) is not str or not _INSTANCE_ID.match(value):
+        _fail(f"{field} must be a lowercase identifier of at most 63 characters")
+    return value
+
+
 @dataclass(frozen=True)
 class Decision:
-    """One admission decision, in a shape `audit.py` can turn into an event."""
+    """One decision by this component, shaped so `audit.py` can record it."""
 
     action: str
     decision: str
@@ -111,60 +126,62 @@ class Decision:
             _fail("action is not an orchestrator action")
         if self.decision not in ("ALLOWED", "DENIED"):
             _fail("decision must be ALLOWED or DENIED")
-        if self.reason_code != _SATISFIED and self.reason_code not in DENIAL_REASONS:
+        if self.reason_code != _SATISFIED and self.reason_code not in DENIALS:
             _fail("reason_code is not an orchestrator reason code")
         if type(self.occurred_at) is not int:
             _fail("occurred_at must be an integer")
 
 
 class Denied(ContractError):
-    """A refusal by this component, carrying the decision that can be audited.
+    """A refusal by this component, carrying the decision that gets audited.
 
     It is a `ContractError`, so every caller that already handles refusals keeps
-    handling this one. The reason code is from the closed set above; the message
-    is built from it and nothing else.
+    handling this one. The message is the fixed sentence for its reason code and
+    nothing else.
     """
 
     def __init__(self, decision: Decision) -> None:
-        super().__init__(f"{decision.action} denied: {decision.reason_code}")
+        super().__init__(f"{DENIALS[decision.reason_code]} ({decision.reason_code})")
         self.decision = decision
 
 
-def _deny(reason_code: str, *, action: str, now: int) -> None:
-    raise Denied(Decision(action=action, decision="DENIED",
+def _deny(reason_code: str, *, now: int) -> None:
+    raise Denied(Decision(action=_REJECTED, decision="DENIED",
                           reason_code=reason_code, occurred_at=now))
 
 
 @dataclass(frozen=True)
-class WorkerEntry:
-    """One registered worker: the agent identity, its tool, and the way in."""
+class WorkerEndpoint:
+    """Trusted routing metadata plus the execution boundary for one worker."""
 
-    worker_id: str
-    tool: str
-    dispatch: Callable[..., bytes]
+    worker_agent_id: str
+    runner: WorkerRunner
 
     def __post_init__(self) -> None:
-        if type(self.worker_id) is not str or not _INSTANCE_ID.match(self.worker_id):
-            _fail("worker_id must be a lowercase identifier of at most 63 characters")
-        if type(self.tool) is not str or not self.tool:
-            _fail("tool must be a non-empty string")
-        if not callable(self.dispatch):
-            _fail("dispatch must be callable")
+        _instance_id(self.worker_agent_id, "worker_agent_id")
+        if not isinstance(self.runner, WorkerRunner):
+            _fail("runner must be a WorkerRunner")
+
+    @property
+    def tool(self) -> str:
+        return self.runner.tool
+
+    def dispatch(self, permit: DispatchPermit, *, now: int) -> bytes:
+        return self.runner.execute(permit, now=now)
 
 
 @dataclass(frozen=True)
 class Dispatch:
-    """What one submitted job produced — evidence, not a verdict.
+    """What one dispatched job produced — evidence, not a verdict.
 
-    `result_wire` is exactly what the worker signed. This component has not
-    checked it and cannot: `handoff_wire` is included so the independent result
-    verifier of step 14 can revalidate the handoff for itself rather than trust
-    an object handed over by the instance that requested the work.
+    `result_wire` is exactly what the worker signed; this component has not
+    checked it and cannot. `handoff_wire` travels with it so the independent
+    result verifier of step 14 can revalidate the contract for itself instead of
+    trusting an object handed over by the instance that requested the work.
     """
 
     job_id: str
-    tool: str
-    worker_id: str
+    worker_agent_id: str
     handoff_sha256: str
     handoff_wire: bytes
     result_wire: bytes
@@ -172,31 +189,39 @@ class Dispatch:
 
 
 class Orchestrator:
-    """Admission, assignment and dispatch for one policy-named orchestrator."""
+    """Admission, routing and dispatch for one policy-named orchestrator."""
 
     def __init__(self, *, orchestrator_id: str, integrity_key: bytes,
-                 gateway: Gateway, workers: Iterable[WorkerEntry]) -> None:
-        if type(orchestrator_id) is not str or not _INSTANCE_ID.match(orchestrator_id):
-            _fail("orchestrator_id must be a lowercase identifier of at most 63 characters")
+                 gateway: Gateway, workers: Iterable[WorkerEndpoint]) -> None:
+        self._orchestrator_id = _instance_id(orchestrator_id, "orchestrator_id")
+        # Its own key, not the gateway's. The handoff HMAC is symmetric in v0.1
+        # so the bytes are the same today, but reaching into the verifier for the
+        # key to sign with is the shared authority step 13 rules out: it makes
+        # separate keys impossible and rotation a shared decision.
         if type(integrity_key) is not bytes or len(integrity_key) < 32:
             _fail("integrity_key must be at least 32 bytes")
         if not isinstance(gateway, Gateway):
             _fail("gateway must be a Gateway")
-        registry: dict[str, WorkerEntry] = {}
-        for entry in tuple(workers):
-            if not isinstance(entry, WorkerEntry):
-                _fail("workers must be WorkerEntry values")
-            # One worker per tool. Two would make the assignment a choice, and a
-            # choice made here is a choice no test can pin down.
-            if entry.tool in registry:
-                _fail("two workers registered for the same tool")
-            registry[entry.tool] = entry
-        if not registry:
-            _fail("at least one worker must be registered")
-        self._orchestrator_id = orchestrator_id
         self._integrity_key = integrity_key
         self._gateway = gateway
-        self._workers: Mapping[str, WorkerEntry] = registry
+
+        # Checked on the type, not by catching TypeError from `tuple()`: a
+        # storage object whose iterator raises TypeError would otherwise be
+        # reported as a configuration error. `audit_chain.py` had this exact bug.
+        kind = type(workers)
+        if not hasattr(kind, "__iter__") and not hasattr(kind, "__getitem__"):
+            _fail("workers must be an iterable of WorkerEndpoint")
+        endpoints = tuple(workers)
+        if not endpoints:
+            _fail("workers must not be empty")
+        if not all(isinstance(endpoint, WorkerEndpoint) for endpoint in endpoints):
+            _fail("workers must contain only WorkerEndpoint values")
+        ids = tuple(endpoint.worker_agent_id for endpoint in endpoints)
+        if len(ids) != len(set(ids)):
+            _fail("worker_agent_id values must be unique")
+        self._workers: Mapping[str, WorkerEndpoint] = MappingProxyType({
+            endpoint.worker_agent_id: endpoint for endpoint in endpoints
+        })
         self._jobs: set[str] = set()
         self._lock = Lock()
 
@@ -205,59 +230,48 @@ class Orchestrator:
         return self._orchestrator_id
 
     @property
-    def tools(self) -> tuple[str, ...]:
+    def worker_ids(self) -> tuple[str, ...]:
         return tuple(sorted(self._workers))
 
-    def assign(self, *, subject: str, tool: str, policy: Policy, now: int) -> WorkerEntry:
-        """Decide which registered worker the policy names for this request.
+    def route(self, *, subject: str, policy: Policy, now: int) -> WorkerEndpoint:
+        """Decide which configured worker the trusted policy names.
 
-        Pure: same request and policy, same answer, whatever the registration
-        order was and whenever it is called.
+        Pure: same subject and policy, same answer, whenever it is called and
+        whatever order the endpoints were configured in.
         """
         if type(now) is not int:
             _fail("now must be an integer")
-        if not isinstance(policy, Policy):
-            _fail("policy is invalid")
-        if type(tool) is not str or not tool:
-            _fail("tool must be a non-empty string")
-        if policy.orchestrator_id != self._orchestrator_id:
-            _deny("POLICY_NOT_FOR_THIS_ORCHESTRATOR", action=_REJECTED, now=now)
+        trusted = self._trusted(policy, now=now)
         try:
-            grant = policy.grant_for(subject)
+            grant = trusted.grant_for(subject)
         except ContractError:
-            # The lookup is a pure policy function, so its refusal is this
+            # A policy lookup is a pure function, so its refusal is this
             # component's own admission decision and is recorded as one.
-            _deny("SUBJECT_NOT_AUTHORIZED", action=_REJECTED, now=now)
-        if tool not in policy.allowed_tools:
-            _deny("TOOL_NOT_IN_POLICY", action=_REJECTED, now=now)
-        if tool not in grant.tools:
-            _deny("TOOL_NOT_GRANTED", action=_REJECTED, now=now)
-        entry = self._workers.get(tool)
-        if entry is None:
-            _deny("NO_WORKER_FOR_TOOL", action=_REJECTED, now=now)
-        # The grant names the agent, not just the capability. Nothing downstream
-        # rechecks this, so failing to check it here means never checking it.
-        if entry.worker_id != grant.worker_agent_id:
-            _deny("WORKER_NOT_GRANTED", action=_REJECTED, now=now)
-        return entry
+            _deny("SUBJECT_NOT_AUTHORIZED", now=now)
+        endpoint = self._workers.get(grant.worker_agent_id)
+        if endpoint is None:
+            _deny("WORKER_NOT_CONFIGURED", now=now)
+        # A worker wired under the right agent id but implementing another tool
+        # would reach a capability the grant never carried.
+        if endpoint.tool not in grant.tools:
+            _deny("TOOL_NOT_GRANTED", now=now)
+        return endpoint
 
-    def submit(self, request: Any, *, subject: str, job_id: str, tool: str,
-               policy: Policy, now: int,
-               approval_token: bytes | None = None) -> Dispatch:
-        """Admit one job, assign its worker, and dispatch it through the gateway."""
-        if type(job_id) is not str or not job_id:
-            _fail("job_id must be a non-empty string")
-        if len(job_id.encode("utf-8", "surrogatepass")) > _MAX_JOB_ID_BYTES:
-            _fail(f"job_id must be at most {_MAX_JOB_ID_BYTES} bytes")
-        entry = self.assign(subject=subject, tool=tool, policy=policy, now=now)
-        self._reserve(job_id, now=now)
-
-        wire = issue(request, subject=subject, job_id=job_id, policy=policy,
+    def admit(self, request: Any, *, subject: str, job_id: str, policy: Policy,
+              now: int) -> bytes:
+        """Create the raw handoff wire from trusted server-side facts only."""
+        trusted = self._trusted(policy, now=now)
+        self._job_id(job_id)
+        return issue(request, subject=subject, job_id=job_id, policy=trusted,
                      integrity_key=self._integrity_key, now=now)
-        decisions = [Decision(action=_ISSUED, decision="ALLOWED",
-                              reason_code=_SATISFIED, occurred_at=now)]
 
-        # The gateway revalidates these bytes on its own and mints the only
+    def dispatch(self, wire: Any, *, subject: str, job_id: str, policy: Policy,
+                 now: int, approval_token: bytes | None = None) -> Dispatch:
+        """Route one admitted wire, let the gateway confirm it, and run it once."""
+        self._job_id(job_id)
+        endpoint = self.route(subject=subject, policy=policy, now=now)
+
+        # The gateway revalidates these bytes independently and mints the only
         # capability the worker boundary accepts. Its refusals are its own and
         # travel unchanged.
         permit = self._gateway.admit(wire, subject=subject, job_id=job_id,
@@ -265,46 +279,84 @@ class Orchestrator:
                                      approval_token=approval_token)
         if not isinstance(permit, DispatchPermit):
             _fail("gateway did not return a dispatch permit")
-        # The permit has to be for the job that was sent. A gateway handing back
-        # a permit for some other handoff would have the worker run a job this
-        # orchestrator never issued, while `handoff_wire` below still described
-        # the one it did — the result verifier would then be checking a result
-        # against the wrong contract.
+        # The permit has to be for the job that was sent. A permit for some other
+        # handoff would have the worker run a contract this orchestrator never
+        # submitted, while the wire reported below still described the one it did.
         if not hmac.compare_digest(permit.handoff.to_bytes(), wire):
-            _fail("gateway admitted a different handoff than the one issued")
+            _fail("gateway admitted a different handoff than the one submitted")
 
-        result_wire = self._dispatch(entry, permit, now=now)
-        decisions.append(Decision(action=_DISPATCHED, decision="ALLOWED",
-                                  reason_code=_SATISFIED, occurred_at=now))
+        # Burned here: a permit exists and the work is about to run. Earlier, and
+        # a job the gateway refused would lose its id for good; later, and two
+        # callers could each hold a valid permit for the same job.
+        self._reserve(job_id, now=now)
+        result_wire = self._run(endpoint, permit, now=now)
         return Dispatch(
             job_id=job_id,
-            tool=tool,
-            worker_id=entry.worker_id,
+            worker_agent_id=endpoint.worker_agent_id,
             handoff_sha256=handoff_digest(permit.handoff),
-            handoff_wire=wire,
+            handoff_wire=permit.handoff.to_bytes(),
             result_wire=result_wire,
-            decisions=tuple(decisions),
+            decisions=(Decision(action=_DISPATCHED, decision="ALLOWED",
+                                reason_code=_SATISFIED, occurred_at=now),),
         )
+
+    def submit(self, request: Any, *, subject: str, job_id: str, policy: Policy,
+               now: int, approval_token: bytes | None = None) -> Dispatch:
+        """Admit and dispatch one job — the whole path a caller normally wants."""
+        # Routed before anything is issued, so a job that cannot run produces no
+        # signed artifact at all.
+        self.route(subject=subject, policy=policy, now=now)
+        wire = self.admit(request, subject=subject, job_id=job_id, policy=policy,
+                          now=now)
+        dispatched = self.dispatch(wire, subject=subject, job_id=job_id,
+                                   policy=policy, now=now,
+                                   approval_token=approval_token)
+        issued = Decision(action=_ISSUED, decision="ALLOWED",
+                          reason_code=_SATISFIED, occurred_at=now)
+        return Dispatch(
+            job_id=dispatched.job_id,
+            worker_agent_id=dispatched.worker_agent_id,
+            handoff_sha256=dispatched.handoff_sha256,
+            handoff_wire=dispatched.handoff_wire,
+            result_wire=dispatched.result_wire,
+            decisions=(issued,) + dispatched.decisions,
+        )
+
+    def _trusted(self, policy: Any, *, now: int) -> Policy:
+        if not isinstance(policy, Policy):
+            _fail("policy is invalid")
+        if policy.orchestrator_id != self._orchestrator_id:
+            _deny("POLICY_NOT_FOR_THIS_ORCHESTRATOR", now=now)
+        return policy
+
+    def _job_id(self, job_id: Any) -> str:
+        if type(job_id) is not str or not job_id:
+            _fail("job_id must be a non-empty string")
+        # Bounded before the ledger can hold it: `contracts._string` does not
+        # limit length, and the ledger keeps what it is given.
+        if len(job_id.encode("utf-8", "surrogatepass")) > _MAX_JOB_ID_BYTES:
+            _fail(f"job_id must be at most {_MAX_JOB_ID_BYTES} bytes")
+        return job_id
 
     def _reserve(self, job_id: str, *, now: int) -> None:
         """Burn one job id, atomically, and keep it burned."""
         with self._lock:
             if job_id in self._jobs:
-                _deny("JOB_ID_REUSED", action=_REJECTED, now=now)
+                _deny("JOB_ID_REUSED", now=now)
             if len(self._jobs) >= _MAX_JOBS:
-                _deny("JOB_LEDGER_FULL", action=_REJECTED, now=now)
+                _deny("JOB_LEDGER_FULL", now=now)
             self._jobs.add(job_id)
 
-    def _dispatch(self, entry: WorkerEntry, permit: DispatchPermit, *,
-                  now: int) -> bytes:
-        """Call the assigned worker once. No failover, no second attempt."""
+    def _run(self, endpoint: WorkerEndpoint, permit: DispatchPermit, *,
+             now: int) -> bytes:
+        """Call the routed worker once. No failover, no second attempt."""
         try:
-            result_wire = entry.dispatch(permit, now=now)
+            result_wire = endpoint.dispatch(permit, now=now)
         except ContractError:
             raise
-        except Exception as exc:  # noqa: BLE001 - a dispatcher is not trusted to be tidy
-            # Deliberately not `str(exc)`: a dispatcher's exception text must not
-            # become a channel out of the execution domain, the same reason
+        except Exception as exc:  # noqa: BLE001 - a runner is not trusted to be tidy
+            # Deliberately not `str(exc)`: an execution-side exception text must
+            # not become a channel out of that domain, the same reason
             # `workers.py` keeps reason_code closed.
             raise ContractError("dispatch failed") from exc
         if type(result_wire) is not bytes or not result_wire:

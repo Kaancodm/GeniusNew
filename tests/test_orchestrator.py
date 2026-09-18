@@ -4,68 +4,108 @@ from unittest import mock
 from geniusnew import orchestrator as orchestrator_module
 from geniusnew.approvals import ApprovalStore, create_scope
 from geniusnew.audit import AuditAuthority, event_from_handoff
-from geniusnew.contracts import ContractError, Grant, Policy, issue, validate
+from geniusnew.contracts import ContractError, Grant, Policy, validate
 from geniusnew.gateway import Gateway
-from geniusnew.keys import derive_keys
-from geniusnew.orchestrator import (ACTIONS, DENIAL_REASONS, Decision, Denied,
-                                    Dispatch, Orchestrator, WorkerEntry)
+from geniusnew.orchestrator import (ACTIONS, DENIALS, Decision, Denied, Dispatch,
+                                    Orchestrator, WorkerEndpoint)
 from geniusnew.results import WorkerAuthority, accept
-from geniusnew.workers import DeterministicSummarizer, WorkerRunner
+from geniusnew.workers import DeterministicSummarizer, Worker, WorkerRunner
 
 # Zero-entropy and self-describing. Its job is to be unmistakable if it ever
-# turns up somewhere a dispatcher's exception text must not reach.
+# turns up where an execution-side exception text must not reach.
 CANARY = 'DISPATCH-CANARY-MUST-NOT-REACH-A-REFUSAL'
 
-ROOT_SECRET = b'an-orchestrator-test-root-secret!!!!'
-
 # The helpers below take a sentinel rather than None. Defaulting on falsiness is
-# how four tests in `test_results.py` ended up passing for the wrong reason: a
+# how four tests in `test_results.py` came to pass for the wrong reason: a
 # `policy=None` case silently became the valid policy and asserted nothing.
 DEFAULT = object()
+
+
+class OtherToolWorker(Worker):
+    tool = 'translate'
+
+    def run(self, payload):
+        return {'text': payload['text']}
+
+
+class CountingRunner(WorkerRunner):
+    """A runner that records every dispatch, and optionally misbehaves.
+
+    It is a real `WorkerRunner` subclass because `WorkerEndpoint` accepts
+    nothing else — an arbitrary callable in the dispatch path is exactly what
+    the endpoint exists to prevent.
+    """
+
+    def __init__(self, *, authority, wire=DEFAULT, raises=None):
+        super().__init__(DeterministicSummarizer(), authority=authority)
+        self.calls = []
+        self.wire = b'not-a-real-result' if wire is DEFAULT else wire
+        self.raises = raises
+
+    def execute(self, permit, *, now):
+        self.calls.append((permit, now))
+        if self.raises is not None:
+            raise self.raises
+        return self.wire
 
 
 class Fixture:
     """Shared setup. A mixin, not a TestCase: subclassing one re-runs its suite."""
 
     def setUp(self):
-        self.keys = derive_keys(ROOT_SECRET)
-        self.store = ApprovalStore()
-        self.gateway = Gateway(gateway_id='gateway-1',
-                               integrity_key=self.keys.integrity_key,
+        self.key = b'phase-2-test-integrity-key-32bytes'
+        self.store = ApprovalStore(token_source=lambda: b'a' * 32)
+        self.gateway = Gateway(gateway_id='gateway-test', integrity_key=self.key,
                                approval_store=self.store)
-        self.worker_authority = WorkerAuthority(result_key=self.keys.result_key,
-                                                integrity_key=self.keys.integrity_key)
-        self.runner = WorkerRunner(DeterministicSummarizer(),
-                                   authority=self.worker_authority)
-        self.policy = self.policy_for()
+        self.result_authority = WorkerAuthority(
+            result_key=b'a-separate-result-key-of-32bytes!')
+        self.endpoint = WorkerEndpoint(
+            'worker-demo',
+            WorkerRunner(DeterministicSummarizer(), authority=self.result_authority))
         self.orchestrator = self.orchestrator_for()
+        self.policy = self.policy_for()
 
-    def policy_for(self, *, requires_approval=False, tools=('summarize',),
-                   allowed=('summarize', 'translate'), worker_agent_id='worker-demo',
-                   orchestrator_id='orchestrator-1'):
+    def policy_for(self, *, worker_agent_id='worker-demo', tools=('summarize',),
+                   requires_approval=False, orchestrator_id='orchestrator-demo'):
         grant = Grant('subject-demo', 'user-demo', worker_agent_id, 'basic',
                       tools, 'isolated', requires_approval)
-        return Policy('policy-v1', orchestrator_id, 60, allowed, ('isolated',), (grant,))
-
-    def entry(self, *, worker_id='worker-demo', tool='summarize', dispatch=DEFAULT):
-        return WorkerEntry(worker_id, tool,
-                           self.runner.execute if dispatch is DEFAULT else dispatch)
+        return Policy('policy-v1', orchestrator_id, 60,
+                      ('summarize', 'translate'), ('isolated',), (grant,))
 
     def orchestrator_for(self, *, workers=DEFAULT, gateway=DEFAULT,
-                         orchestrator_id='orchestrator-1'):
-        return Orchestrator(orchestrator_id=orchestrator_id,
-                            integrity_key=self.keys.integrity_key,
-                            gateway=self.gateway if gateway is DEFAULT else gateway,
-                            workers=(self.entry(),) if workers is DEFAULT else workers)
+                         orchestrator_id='orchestrator-demo', integrity_key=DEFAULT):
+        return Orchestrator(
+            orchestrator_id=orchestrator_id,
+            integrity_key=self.key if integrity_key is DEFAULT else integrity_key,
+            gateway=self.gateway if gateway is DEFAULT else gateway,
+            workers=(self.endpoint,) if workers is DEFAULT else workers)
 
-    def submit(self, orchestrator=DEFAULT, *, request=DEFAULT, subject='subject-demo',
-               job_id='job-1', tool='summarize', policy=DEFAULT, now=1000,
+    def counting(self, **arguments):
+        return CountingRunner(authority=self.result_authority, **arguments)
+
+    def admit(self, *, orchestrator=DEFAULT, policy=DEFAULT, job_id='job-demo',
+              now=100, request=DEFAULT, subject='subject-demo'):
+        return (self.orchestrator if orchestrator is DEFAULT else orchestrator).admit(
+            {'text': 'the quick brown fox'} if request is DEFAULT else request,
+            subject=subject, job_id=job_id,
+            policy=self.policy if policy is DEFAULT else policy, now=now)
+
+    def dispatch(self, wire, *, orchestrator=DEFAULT, policy=DEFAULT,
+                 job_id='job-demo', now=110, subject='subject-demo',
+                 approval_token=None):
+        return (self.orchestrator if orchestrator is DEFAULT else orchestrator).dispatch(
+            wire, subject=subject, job_id=job_id,
+            policy=self.policy if policy is DEFAULT else policy, now=now,
+            approval_token=approval_token)
+
+    def submit(self, *, orchestrator=DEFAULT, policy=DEFAULT, job_id='job-demo',
+               now=100, request=DEFAULT, subject='subject-demo',
                approval_token=None):
         return (self.orchestrator if orchestrator is DEFAULT else orchestrator).submit(
             {'text': 'the quick brown fox'} if request is DEFAULT else request,
-            subject=subject, job_id=job_id, tool=tool,
-            policy=self.policy if policy is DEFAULT else policy,
-            now=now, approval_token=approval_token)
+            subject=subject, job_id=job_id,
+            policy=self.policy if policy is DEFAULT else policy, now=now,
+            approval_token=approval_token)
 
     def denied(self, callable_, *args, **kwargs):
         """Run something expected to be denied and hand back its decision."""
@@ -73,38 +113,42 @@ class Fixture:
             callable_(*args, **kwargs)
         return caught.exception.decision
 
-
-class Counter:
-    """A dispatcher that records every call, and optionally misbehaves."""
-
-    def __init__(self, *, wire=b'not-a-real-result', raises=None):
-        self.calls = []
-        self.wire = wire
-        self.raises = raises
-
-    def __call__(self, permit, *, now):
-        self.calls.append((permit, now))
-        if self.raises is not None:
-            raise self.raises
-        return self.wire
+    def taken(self, dispatched, *, policy=DEFAULT, job_id='job-demo', now=120):
+        """Accept a result the way an independent verifier would have to."""
+        handoff = validate(dispatched.handoff_wire, subject='subject-demo',
+                           job_id=job_id,
+                           policy=self.policy if policy is DEFAULT else policy,
+                           integrity_key=self.key, now=now)
+        return accept(dispatched.result_wire, handoff=handoff,
+                      authority=self.result_authority, now=now)
 
 
 class OrchestratorTest(Fixture, unittest.TestCase):
-    """Roadmap step 13: admission, assignment, dispatch."""
+    """Roadmap step 13: admission, routing, dispatch."""
 
     # --- the path it exists for ---------------------------------------------
 
-    def test_a_submitted_job_runs_and_comes_back_signed(self):
-        dispatch = self.submit()
-        self.assertIsInstance(dispatch, Dispatch)
-        handoff = validate(dispatch.handoff_wire, subject='subject-demo',
-                           job_id='job-1', policy=self.policy,
-                           integrity_key=self.keys.integrity_key, now=1001)
-        taken = accept(dispatch.result_wire, handoff=handoff,
-                       authority=self.worker_authority, now=1002)
-        self.assertTrue(taken.succeeded)
-        self.assertEqual(taken.reason_code, 'WORK_COMPLETED')
-        self.assertEqual(dispatch.worker_id, 'worker-demo')
+    def test_admission_derives_identity_and_capabilities_only_from_policy(self):
+        handoff = validate(self.admit(), subject='subject-demo', job_id='job-demo',
+                           policy=self.policy, integrity_key=self.key, now=101)
+        self.assertEqual(handoff.user_id, 'user-demo')
+        self.assertEqual(handoff.worker_agent_id, 'worker-demo')
+        self.assertEqual(handoff.tools, ('summarize',))
+        self.assertEqual(handoff.orchestrator_id, 'orchestrator-demo')
+
+    def test_non_approval_job_runs_through_gateway_and_selected_worker(self):
+        dispatched = self.dispatch(self.admit())
+        self.assertIsInstance(dispatched, Dispatch)
+        result = self.taken(dispatched)
+        self.assertTrue(result.succeeded)
+        self.assertEqual(result.reason_code, 'WORK_COMPLETED')
+        self.assertEqual(dispatched.worker_agent_id, 'worker-demo')
+
+    def test_submit_is_admission_and_dispatch_in_one_call(self):
+        dispatched = self.submit()
+        self.assertTrue(self.taken(dispatched).succeeded)
+        self.assertEqual([decision.action for decision in dispatched.decisions],
+                         ['HANDOFF_ISSUED', 'EXECUTION_DISPATCHED'])
 
     def test_it_does_not_judge_the_result_it_collected(self):
         """A FAILED result comes back as evidence, not as a verdict.
@@ -117,98 +161,98 @@ class OrchestratorTest(Fixture, unittest.TestCase):
             def run(self, payload):
                 raise RuntimeError('boom')
 
-        runner = WorkerRunner(Exploding(), authority=self.worker_authority)
-        orchestrator = self.orchestrator_for(
-            workers=(self.entry(dispatch=runner.execute),))
-        dispatch = self.submit(orchestrator)
-
+        endpoint = WorkerEndpoint('worker-demo', WorkerRunner(
+            Exploding(), authority=self.result_authority))
+        dispatched = self.submit(orchestrator=self.orchestrator_for(
+            workers=(endpoint,)))
         for name in ('succeeded', 'status', 'ok', 'accepted'):
-            self.assertFalse(hasattr(dispatch, name), name)
-        handoff = validate(dispatch.handoff_wire, subject='subject-demo',
-                           job_id='job-1', policy=self.policy,
-                           integrity_key=self.keys.integrity_key, now=1001)
-        taken = accept(dispatch.result_wire, handoff=handoff,
-                       authority=self.worker_authority, now=1002)
-        self.assertFalse(taken.succeeded)
-        self.assertEqual(taken.reason_code, 'WORKER_FAILED')
+            self.assertFalse(hasattr(dispatched, name), name)
+        result = self.taken(dispatched)
+        self.assertFalse(result.succeeded)
+        self.assertEqual(result.reason_code, 'WORKER_FAILED')
 
     def test_it_holds_no_other_role_authority_in_its_own_state(self):
         """No shared mutable authority: not the approvals, not the signing keys.
 
-        In one process nothing is truly out of reach — the dispatcher is a bound
-        method and Python offers no memory boundary. What is checkable is that
-        this component keeps no usable handle of another role's authority, and
+        In one process nothing is truly out of reach — the endpoint holds a
+        runner and Python offers no memory boundary. What is checkable is that
+        this component keeps no usable handle on another role's authority, and
         has no API through which to mint a permit or accept a result.
         """
         for value in vars(self.orchestrator).values():
             self.assertNotIsInstance(value, (ApprovalStore, WorkerAuthority,
                                              AuditAuthority))
 
-    # --- assignment is a decision -------------------------------------------
+    def test_it_signs_with_its_own_key_not_the_gateway_s(self):
+        """The issuer does not reach into the verifier for a key to sign with.
 
-    def test_a_worker_the_grant_does_not_name_is_refused(self):
-        """The grant names the agent, and this is the only layer that checks it.
-
-        The worker boundary only verifies that its tool is in the handoff's tool
-        list, and every tool in the grant passes that. So dispatching `summarize`
-        to some other registered worker would reach an agent the policy never
-        named, and every layer after this one would agree.
+        Handoff v1 is HMAC, so the bytes are the same today. Taking the key as
+        its own input is what keeps separate keys possible at all, and keeps
+        rotation from being a decision two roles have to make together.
         """
-        other = Counter()
-        orchestrator = self.orchestrator_for(
-            workers=(self.entry(worker_id='worker-elsewhere', dispatch=other),))
-        decision = self.denied(self.submit, orchestrator)
-        self.assertEqual(decision.reason_code, 'WORKER_NOT_GRANTED')
-        self.assertEqual(other.calls, [])
+        stranger = Gateway(gateway_id='gateway-other',
+                           integrity_key=b'a-different-integrity-key-32bytes',
+                           approval_store=ApprovalStore())
+        orchestrator = self.orchestrator_for(gateway=stranger)
+        wire = self.admit(orchestrator=orchestrator)
+        validate(wire, subject='subject-demo', job_id='job-demo',
+                 policy=self.policy, integrity_key=self.key, now=101)
+        # And the gateway with the other key refuses it, as an independent
+        # verifier must — that refusal stays the gateway's word, not a Denied.
+        with self.assertRaises(ContractError) as caught:
+            self.dispatch(wire, orchestrator=orchestrator)
+        self.assertNotIsInstance(caught.exception, Denied)
 
-    def test_assignment_does_not_depend_on_registration_order(self):
-        second = WorkerEntry('worker-demo', 'translate', Counter())
-        first = self.entry()
-        forwards = self.orchestrator_for(workers=(first, second))
-        backwards = self.orchestrator_for(workers=(second, first))
-        for tool in ('summarize', 'translate'):
-            with self.subTest(tool=tool):
-                self.assertEqual(
-                    forwards.assign(subject='subject-demo', tool=tool,
-                                    policy=self.policy_for(tools=('summarize', 'translate')),
-                                    now=1000),
-                    backwards.assign(subject='subject-demo', tool=tool,
-                                     policy=self.policy_for(tools=('summarize', 'translate')),
-                                     now=1000))
-        self.assertEqual(forwards.tools, backwards.tools)
+    # --- routing is a fact of the grant -------------------------------------
 
-    def test_two_workers_for_one_tool_are_refused_at_construction(self):
-        """Two would make the assignment a choice, and a choice nobody can pin down."""
-        with self.assertRaisesRegex(ContractError, 'same tool'):
-            self.orchestrator_for(workers=(self.entry(),
-                                           self.entry(worker_id='worker-other')))
+    def test_routing_is_exactly_by_trusted_worker_id(self):
+        missing = self.policy_for(worker_agent_id='worker-missing')
+        wire = self.admit(policy=missing)
+        decision = self.denied(self.dispatch, wire, policy=missing)
+        self.assertEqual(decision.reason_code, 'WORKER_NOT_CONFIGURED')
 
-    def test_assignment_is_deterministic_across_instances(self):
-        """Same request, same bytes — no clock and no entropy anywhere in the path."""
-        first = self.submit(self.orchestrator_for(), job_id='job-a')
-        second = self.submit(self.orchestrator_for(), job_id='job-a')
+    def test_misconfigured_endpoint_tool_is_refused_before_gateway(self):
+        endpoint = WorkerEndpoint('worker-demo', WorkerRunner(
+            OtherToolWorker(), authority=self.result_authority))
+        orchestrator = self.orchestrator_for(workers=(endpoint,))
+        wire = self.admit(orchestrator=orchestrator)
+        decision = self.denied(self.dispatch, wire, orchestrator=orchestrator)
+        self.assertEqual(decision.reason_code, 'TOOL_NOT_GRANTED')
+
+    def test_routing_does_not_depend_on_configuration_order(self):
+        other = WorkerEndpoint('worker-other', WorkerRunner(
+            OtherToolWorker(), authority=self.result_authority))
+        forwards = self.orchestrator_for(workers=(self.endpoint, other))
+        backwards = self.orchestrator_for(workers=(other, self.endpoint))
+        self.assertEqual(forwards.route(subject='subject-demo', policy=self.policy, now=100),
+                         backwards.route(subject='subject-demo', policy=self.policy, now=100))
+        self.assertEqual(forwards.worker_ids, backwards.worker_ids)
+
+    def test_worker_registry_is_copied_and_deterministic(self):
+        workers = [self.endpoint]
+        orchestrator = self.orchestrator_for(workers=workers)
+        workers.clear()
+        self.assertEqual(orchestrator.worker_ids, ('worker-demo',))
+        self.assertIsInstance(self.submit(orchestrator=orchestrator), Dispatch)
+
+    def test_the_same_request_produces_the_same_bytes(self):
+        """No clock and no entropy anywhere in the path."""
+        first = self.submit(orchestrator=self.orchestrator_for())
+        second = self.submit(orchestrator=self.orchestrator_for())
         self.assertEqual(first.handoff_wire, second.handoff_wire)
         self.assertEqual(first.result_wire, second.result_wire)
         self.assertEqual(first.decisions, second.decisions)
 
-    # --- every refusal, by the reason it claims ------------------------------
+    # --- every admission refusal, by the reason it claims --------------------
 
     def test_each_admission_refusal_names_its_own_reason(self):
-        """Refused is not enough: refused by the check under test.
-
-        Several of these inputs would be refused by a later check too — an
-        ungranted tool with no worker registered for it reaches
-        NO_WORKER_FOR_TOOL — so asserting only that a refusal happened would
-        survive deleting the earlier one.
-        """
-        two_tools = self.policy_for(tools=('summarize', 'translate'))
+        """Refused is not enough: refused by the check under test."""
         cases = [
             ('POLICY_NOT_FOR_THIS_ORCHESTRATOR',
              dict(policy=self.policy_for(orchestrator_id='orchestrator-other'))),
             ('SUBJECT_NOT_AUTHORIZED', dict(subject='subject-unknown')),
-            ('TOOL_NOT_IN_POLICY', dict(tool='exfiltrate')),
-            ('TOOL_NOT_GRANTED', dict(tool='translate')),
-            ('NO_WORKER_FOR_TOOL', dict(tool='translate', policy=two_tools)),
+            ('WORKER_NOT_CONFIGURED',
+             dict(policy=self.policy_for(worker_agent_id='worker-missing'))),
         ]
         for reason, arguments in cases:
             with self.subTest(reason=reason):
@@ -217,161 +261,184 @@ class OrchestratorTest(Fixture, unittest.TestCase):
                 self.assertEqual(decision.action, 'HANDOFF_REJECTED')
                 self.assertEqual(decision.decision, 'DENIED')
 
-    def test_a_refused_job_never_reaches_a_worker_or_burns_its_id(self):
-        counter = Counter()
-        orchestrator = self.orchestrator_for(workers=(self.entry(dispatch=counter),))
-        self.denied(self.submit, orchestrator, tool='exfiltrate')
-        self.assertEqual(counter.calls, [])
+    def test_a_refused_job_reaches_no_worker_and_leaves_no_artifact(self):
+        runner = self.counting()
+        orchestrator = self.orchestrator_for(
+            workers=(WorkerEndpoint('worker-demo', runner),))
+        self.denied(self.submit, orchestrator=orchestrator,
+                    policy=self.policy_for(worker_agent_id='worker-missing'))
+        self.assertEqual(runner.calls, [])
         self.assertEqual(orchestrator._jobs, set())
+
+    def test_misrouting_is_refused_before_an_approval_can_be_burned(self):
+        """A one-time approval must not pay for a job that was never routable."""
+        policy = self.policy_for(worker_agent_id='worker-missing',
+                                 requires_approval=True)
+        wire = self.admit(policy=policy)
+        scope = create_scope(wire, subject='subject-demo', job_id='job-demo',
+                             policy=policy, integrity_key=self.key, now=101)
+        granted = self.store.grant(scope, now=101, ttl_seconds=30)
+        decision = self.denied(self.dispatch, wire, policy=policy, now=102,
+                               approval_token=granted.token)
+        self.assertEqual(decision.reason_code, 'WORKER_NOT_CONFIGURED')
+        self.assertEqual(self.store.consume(granted.token, scope, now=102).state,
+                         'CONSUMED', 'routing failure must not burn the approval')
+
+    # --- the job ledger ------------------------------------------------------
 
     def test_a_job_id_is_burned_once_and_stays_burned(self):
         """A retry needs a new id: releasing a burned one is a replay window."""
-        counter = Counter(wire=b'x')
-        orchestrator = self.orchestrator_for(workers=(self.entry(dispatch=counter),))
-        self.submit(orchestrator, job_id='job-once')
-        decision = self.denied(self.submit, orchestrator, job_id='job-once')
+        runner = self.counting(wire=b'x')
+        orchestrator = self.orchestrator_for(
+            workers=(WorkerEndpoint('worker-demo', runner),))
+        self.submit(orchestrator=orchestrator)
+        decision = self.denied(self.submit, orchestrator=orchestrator)
         self.assertEqual(decision.reason_code, 'JOB_ID_REUSED')
-        self.assertEqual(len(counter.calls), 1)
+        self.assertEqual(len(runner.calls), 1)
 
     def test_a_failed_dispatch_does_not_release_the_job_id(self):
-        counter = Counter(raises=ContractError('worker said no'))
-        orchestrator = self.orchestrator_for(workers=(self.entry(dispatch=counter),))
+        runner = self.counting(raises=ContractError('worker said no'))
+        orchestrator = self.orchestrator_for(
+            workers=(WorkerEndpoint('worker-demo', runner),))
         with self.assertRaises(ContractError):
-            self.submit(orchestrator, job_id='job-once')
-        decision = self.denied(self.submit, orchestrator, job_id='job-once')
+            self.submit(orchestrator=orchestrator)
+        decision = self.denied(self.submit, orchestrator=orchestrator)
         self.assertEqual(decision.reason_code, 'JOB_ID_REUSED')
-        self.assertEqual(len(counter.calls), 1)
+        self.assertEqual(len(runner.calls), 1)
+
+    def test_a_job_the_gateway_refused_keeps_its_id(self):
+        """The ledger records what ran, not what was attempted.
+
+        Burning the id before the gateway had spoken would cost a caller their
+        job id for a refusal they can fix — a missing approval token, most
+        obviously, where the approval is scoped to a wire that carries that very
+        id and so cannot simply be reissued under a new one.
+        """
+        policy = self.policy_for(requires_approval=True)
+        wire = self.admit(policy=policy)
+        with self.assertRaisesRegex(ContractError, 'required'):
+            self.dispatch(wire, policy=policy, now=102)
+        self.assertEqual(self.orchestrator._jobs, set())
+
+        scope = create_scope(wire, subject='subject-demo', job_id='job-demo',
+                             policy=policy, integrity_key=self.key, now=101)
+        granted = self.store.grant(scope, now=101, ttl_seconds=30)
+        # The same id goes through once the approval is there. The result is not
+        # accepted here: an approval-bound wire stays PENDING_APPROVAL, which
+        # `validate` refuses outright, so step 14's verifier will need the
+        # pending path for these — one more reason acceptance is its own role.
+        dispatched = self.dispatch(wire, policy=policy, now=102,
+                                   approval_token=granted.token)
+        self.assertIsInstance(dispatched.result_wire, bytes)
+        self.assertEqual(self.orchestrator._jobs, {'job-demo'})
+
+    def test_the_approval_is_consumed_by_the_gateway_and_only_once(self):
+        policy = self.policy_for(requires_approval=True)
+        wire = self.admit(policy=policy)
+        scope = create_scope(wire, subject='subject-demo', job_id='job-demo',
+                             policy=policy, integrity_key=self.key, now=101)
+        granted = self.store.grant(scope, now=101, ttl_seconds=30)
+        self.dispatch(wire, policy=policy, now=102, approval_token=granted.token)
+        with self.assertRaises(ContractError):
+            self.dispatch(wire, policy=policy, job_id='job-second', now=103,
+                          approval_token=granted.token)
 
     def test_the_job_ledger_is_bounded(self):
         """An unbounded set a caller can grow is memory exhaustion with a receipt."""
-        counter = Counter(wire=b'x')
-        orchestrator = self.orchestrator_for(workers=(self.entry(dispatch=counter),))
+        runner = self.counting(wire=b'x')
+        orchestrator = self.orchestrator_for(
+            workers=(WorkerEndpoint('worker-demo', runner),))
         with mock.patch.object(orchestrator_module, '_MAX_JOBS', 1):
-            self.submit(orchestrator, job_id='job-1')
-            decision = self.denied(self.submit, orchestrator, job_id='job-2')
+            self.submit(orchestrator=orchestrator, job_id='job-1')
+            decision = self.denied(self.submit, orchestrator=orchestrator,
+                                   job_id='job-2')
         self.assertEqual(decision.reason_code, 'JOB_LEDGER_FULL')
-        self.assertEqual(len(counter.calls), 1)
+        self.assertEqual(len(runner.calls), 1)
 
     def test_an_oversized_job_id_is_refused_before_the_ledger_stores_it(self):
-        with self.assertRaisesRegex(ContractError, 'at most 128 bytes'):
-            self.submit(job_id='j' * 129)
+        for call in (lambda: self.admit(job_id='j' * 129),
+                     lambda: self.submit(job_id='j' * 129),
+                     lambda: self.dispatch(b'wire', job_id='j' * 129)):
+            with self.subTest(call=call):
+                with self.assertRaisesRegex(ContractError, 'at most 128 bytes'):
+                    call()
         self.assertEqual(self.orchestrator._jobs, set())
 
     # --- it cannot admit its own job ----------------------------------------
 
-    def test_the_gateway_revalidates_and_its_refusal_travels_unchanged(self):
-        """A gateway with a different key refuses, and that stays the gateway's word.
-
-        Relabelling another instance's refusal as an orchestrator decision would
-        be the same error as confirming one's own.
-        """
-        stranger = Gateway(gateway_id='gateway-2',
-                           integrity_key=b'a-different-integrity-key-32bytes',
-                           approval_store=ApprovalStore())
-        orchestrator = self.orchestrator_for(gateway=stranger)
-        with self.assertRaises(ContractError) as caught:
-            self.submit(orchestrator)
-        self.assertNotIsInstance(caught.exception, Denied)
+    def test_the_gateway_still_rejects_a_tampered_wire(self):
+        wire = self.admit()
+        with self.assertRaises(ContractError):
+            self.dispatch(wire.replace(b'quick', b'QUICK'))
 
     def test_a_gateway_that_returns_something_else_is_refused(self):
         class Forged(Gateway):
             def admit(self, *args, **kwargs):
                 return 'permit'
 
-        forged = Forged(gateway_id='gateway-1',
-                        integrity_key=self.keys.integrity_key,
-                        approval_store=ApprovalStore())
-        counter = Counter()
+        runner = self.counting()
         orchestrator = self.orchestrator_for(
-            gateway=forged, workers=(self.entry(dispatch=counter),))
+            gateway=Forged(gateway_id='gateway-test', integrity_key=self.key,
+                           approval_store=ApprovalStore()),
+            workers=(WorkerEndpoint('worker-demo', runner),))
         with self.assertRaisesRegex(ContractError, 'dispatch permit'):
-            self.submit(orchestrator)
-        self.assertEqual(counter.calls, [])
+            self.submit(orchestrator=orchestrator)
+        self.assertEqual(runner.calls, [])
 
     def test_a_permit_for_another_handoff_is_refused(self):
-        """The permit has to be for the job that was sent.
+        """The permit has to be for the job that was submitted.
 
         A gateway returning a permit for a different handoff would have the
-        worker run a job this orchestrator never issued, while the handoff wire
-        it reports still describes the one it did — leaving the result verifier
+        worker run a contract this orchestrator never sent, while the wire it
+        reports still described the one it did — leaving the result verifier
         checking a result against the wrong contract.
         """
-        elsewhere = issue({'text': 'another job entirely'}, subject='subject-demo',
-                          job_id='job-other', policy=self.policy,
-                          integrity_key=self.keys.integrity_key, now=1000)
+        elsewhere = self.admit(job_id='job-other')
 
         class Substituting(Gateway):
             def admit(inner, wire, **kwargs):
-                return Gateway.admit(inner, elsewhere, **{**kwargs, 'job_id': 'job-other'})
+                return Gateway.admit(inner, elsewhere,
+                                     **{**kwargs, 'job_id': 'job-other'})
 
-        counter = Counter()
+        runner = self.counting()
         orchestrator = self.orchestrator_for(
-            gateway=Substituting(gateway_id='gateway-1',
-                                 integrity_key=self.keys.integrity_key,
+            gateway=Substituting(gateway_id='gateway-test', integrity_key=self.key,
                                  approval_store=ApprovalStore()),
-            workers=(self.entry(dispatch=counter),))
+            workers=(WorkerEndpoint('worker-demo', runner),))
         with self.assertRaisesRegex(ContractError, 'different handoff'):
-            self.submit(orchestrator)
-        self.assertEqual(counter.calls, [])
-
-    def test_the_approval_path_goes_through_the_gateway(self):
-        """The orchestrator forwards the token; only the gateway may consume it.
-
-        The two job ids are not cosmetic. A job id is burned on reservation, so
-        the run that is refused for a missing token cannot be retried under the
-        same id — and an approval is scoped to the exact wire, job id included,
-        so a retry needs a fresh approval as well. That is the cost of not
-        releasing a burned id, and it is the cheaper of the two mistakes.
-        """
-        policy = self.policy_for(requires_approval=True)
-        request = {'text': 'the quick brown fox'}
-        with self.assertRaisesRegex(ContractError, 'required'):
-            self.submit(job_id='job-unapproved', policy=policy)
-
-        wire = issue(request, subject='subject-demo', job_id='job-approved',
-                     policy=policy, integrity_key=self.keys.integrity_key, now=1000)
-        scope = create_scope(wire, subject='subject-demo', job_id='job-approved',
-                             policy=policy, integrity_key=self.keys.integrity_key,
-                             now=1000)
-        granted = self.store.grant(scope, now=1000, ttl_seconds=30)
-        dispatch = self.submit(job_id='job-approved', policy=policy,
-                               approval_token=granted.token)
-        # The orchestrator reproduced the exact bytes the approval was scoped to.
-        self.assertEqual(dispatch.handoff_wire, wire)
-        # And the token was consumed by the gateway, so it buys nothing twice.
-        with self.assertRaises(ContractError):
-            self.submit(job_id='job-approved-again', policy=policy,
-                        approval_token=granted.token)
+            self.submit(orchestrator=orchestrator)
+        self.assertEqual(runner.calls, [])
 
     # --- dispatch is one call, to one worker --------------------------------
 
     def test_a_refused_dispatch_is_not_retried_on_another_worker(self):
         """No failover. A second attempt is default retry wearing default deny."""
-        refusing = Counter(raises=ContractError('no'))
-        spare = Counter()
+        refusing = self.counting(raises=ContractError('no'))
+        spare = self.counting()
         orchestrator = self.orchestrator_for(workers=(
-            self.entry(dispatch=refusing),
-            WorkerEntry('worker-demo', 'translate', spare)))
+            WorkerEndpoint('worker-demo', refusing),
+            WorkerEndpoint('worker-other', spare)))
         with self.assertRaises(ContractError):
-            self.submit(orchestrator)
+            self.submit(orchestrator=orchestrator)
         self.assertEqual(len(refusing.calls), 1)
         self.assertEqual(spare.calls, [])
 
-    def test_a_dispatcher_exception_text_never_reaches_the_refusal(self):
-        counter = Counter(raises=RuntimeError(CANARY))
-        orchestrator = self.orchestrator_for(workers=(self.entry(dispatch=counter),))
+    def test_an_execution_exception_text_never_reaches_the_refusal(self):
+        runner = self.counting(raises=RuntimeError(CANARY))
+        orchestrator = self.orchestrator_for(
+            workers=(WorkerEndpoint('worker-demo', runner),))
         with self.assertRaises(ContractError) as caught:
-            self.submit(orchestrator)
+            self.submit(orchestrator=orchestrator)
         self.assertNotIn(CANARY, str(caught.exception))
         self.assertEqual(str(caught.exception), 'dispatch failed')
 
-    def test_a_dispatcher_that_returns_no_wire_is_refused(self):
+    def test_a_runner_that_returns_no_wire_is_refused(self):
         for value in (None, '', b'', 'wire', 42, {}, bytearray(b'x')):
             with self.subTest(value=repr(value)):
-                orchestrator = self.orchestrator_for(
-                    workers=(self.entry(dispatch=Counter(wire=value)),))
+                orchestrator = self.orchestrator_for(workers=(
+                    WorkerEndpoint('worker-demo', self.counting(wire=value)),))
                 with self.assertRaisesRegex(ContractError, 'signed result wire'):
-                    self.submit(orchestrator)
+                    self.submit(orchestrator=orchestrator)
 
     # --- decisions have to be auditable -------------------------------------
 
@@ -380,18 +447,18 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         from geniusnew.audit import _ACTIONS, _DECISIONS, _REASON_CODE
         self.assertTrue(ACTIONS.issubset(_ACTIONS), ACTIONS - _ACTIONS)
         self.assertIn('DENIED', _DECISIONS)
-        for reason in DENIAL_REASONS | {'POLICY_SATISFIED'}:
+        for reason in set(DENIALS) | {'POLICY_SATISFIED'}:
             with self.subTest(reason=reason):
                 self.assertRegex(reason, _REASON_CODE)
 
     def test_a_decision_becomes_an_audit_event(self):
-        dispatch = self.submit()
-        handoff = validate(dispatch.handoff_wire, subject='subject-demo',
-                           job_id='job-1', policy=self.policy,
-                           integrity_key=self.keys.integrity_key, now=1001)
-        authority = AuditAuthority(audit_key=self.keys.audit_key)
-        actor = authority.actor('orchestrator', 'orchestrator-1')
-        for decision in dispatch.decisions:
+        dispatched = self.submit()
+        handoff = validate(dispatched.handoff_wire, subject='subject-demo',
+                           job_id='job-demo', policy=self.policy,
+                           integrity_key=self.key, now=101)
+        authority = AuditAuthority(audit_key=b'an-audit-key-of-thirty-two-bytes')
+        actor = authority.actor('orchestrator', 'orchestrator-demo')
+        for decision in dispatched.decisions:
             event = event_from_handoff(handoff, trace_id='trace-1', actor=actor,
                                        action=decision.action,
                                        decision=decision.decision,
@@ -399,13 +466,17 @@ class OrchestratorTest(Fixture, unittest.TestCase):
                                        occurred_at=decision.occurred_at)
             self.assertEqual(event.action, decision.action)
 
-    def test_the_recorded_decisions_are_its_own_and_in_order(self):
-        dispatch = self.submit()
-        self.assertEqual([decision.action for decision in dispatch.decisions],
-                         ['HANDOFF_ISSUED', 'EXECUTION_DISPATCHED'])
-        # HANDOFF_ADMITTED is absent on purpose: that is the gateway's decision.
-        self.assertNotIn('HANDOFF_ADMITTED',
-                         {decision.action for decision in dispatch.decisions})
+    def test_it_records_its_own_decisions_and_not_the_gateway_s(self):
+        dispatched = self.submit()
+        actions = {decision.action for decision in dispatched.decisions}
+        self.assertNotIn('HANDOFF_ADMITTED', actions)
+
+    def test_a_denial_message_is_the_fixed_sentence_for_its_code(self):
+        decision = self.denied(self.submit,
+                               policy=self.policy_for(worker_agent_id='worker-missing'))
+        self.assertIn(decision.reason_code, DENIALS)
+        with self.assertRaisesRegex(ContractError, 'unconfigured worker'):
+            self.submit(policy=self.policy_for(worker_agent_id='worker-missing'))
 
     def test_a_decision_outside_the_closed_sets_is_refused(self):
         valid = dict(action='HANDOFF_ISSUED', decision='ALLOWED',
@@ -416,86 +487,84 @@ class OrchestratorTest(Fixture, unittest.TestCase):
                              ('reason_code', 'POLICY_SATISFIED '),
                              ('occurred_at', '1'), ('occurred_at', 1.0),
                              ('occurred_at', True)):
-                with self.subTest(field=field, value=value):
-                    with self.assertRaises(ContractError):
-                        Decision(**{**valid, field: value})
-
-    def test_a_denial_is_a_contract_error_carrying_a_closed_reason(self):
-        decision = self.denied(self.submit, tool='exfiltrate')
-        self.assertIn(decision.reason_code, DENIAL_REASONS)
-        with self.assertRaises(ContractError):
-            self.submit(tool='exfiltrate')
+            with self.subTest(field=field, value=value):
+                with self.assertRaises(ContractError):
+                    Decision(**{**valid, field: value})
 
     # --- construction fails closed ------------------------------------------
 
-    def test_construction_refuses_anything_it_cannot_rely_on(self):
-        good = dict(orchestrator_id='orchestrator-1',
-                    integrity_key=self.keys.integrity_key,
-                    gateway=self.gateway, workers=(self.entry(),))
-        cases = [
-            ('orchestrator_id', 'Orchestrator-1'), ('orchestrator_id', ''),
-            ('orchestrator_id', 'x' * 64), ('orchestrator_id', None),
-            ('orchestrator_id', b'orchestrator-1'),
-            ('integrity_key', b'too-short'), ('integrity_key', None),
-            ('integrity_key', 'x' * 32),
-            ('gateway', None), ('gateway', 'gateway'), ('gateway', object()),
-            ('workers', ()), ('workers', ('worker',)), ('workers', (None,)),
-            ('workers', (self.runner,)),
-        ]
-        for field, value in cases:
-            with self.subTest(field=field, value=repr(value)[:40]):
+    def test_constructor_configuration_fails_closed(self):
+        for orchestrator_id in ('', 'UPPER', 'with space', None, 42, 'x' * 64):
+            with self.subTest(orchestrator_id=orchestrator_id):
                 with self.assertRaises(ContractError):
-                    Orchestrator(**{**good, field: value})
+                    self.orchestrator_for(orchestrator_id=orchestrator_id)
+        for integrity_key in (b'too-short', None, 'x' * 32, 42):
+            with self.subTest(integrity_key=repr(integrity_key)[:20]):
+                with self.assertRaisesRegex(ContractError, 'integrity_key'):
+                    self.orchestrator_for(integrity_key=integrity_key)
+        for gateway in (None, 'gateway', 42, {}):
+            with self.subTest(gateway=type(gateway)):
+                with self.assertRaisesRegex(ContractError, 'gateway'):
+                    self.orchestrator_for(gateway=gateway)
+        for workers in (None, 42):
+            with self.subTest(workers=workers):
+                with self.assertRaisesRegex(ContractError, 'iterable'):
+                    self.orchestrator_for(workers=workers)
+        with self.assertRaisesRegex(ContractError, 'must not be empty'):
+            self.orchestrator_for(workers=())
+        with self.assertRaisesRegex(ContractError, 'WorkerEndpoint'):
+            self.orchestrator_for(workers=(self.endpoint, 'not-endpoint'))
+        with self.assertRaisesRegex(ContractError, 'unique'):
+            self.orchestrator_for(workers=(self.endpoint, self.endpoint))
 
-    def test_a_worker_entry_refuses_anything_it_cannot_rely_on(self):
-        for arguments in (('Worker-1', 'summarize', print), ('', 'summarize', print),
-                          ('x' * 64, 'summarize', print), (None, 'summarize', print),
-                          ('worker-demo', '', print), ('worker-demo', None, print),
-                          ('worker-demo', b'summarize', print),
-                          ('worker-demo', 'summarize', None),
-                          ('worker-demo', 'summarize', 'execute')):
-            with self.subTest(arguments=repr(arguments)[:50]):
-                with self.assertRaises(ContractError):
-                    WorkerEntry(*arguments)
+    def test_worker_endpoint_configuration_fails_closed(self):
+        for worker_id in ('', 'UPPER', 'with space', None, 42, 'x' * 64):
+            with self.subTest(worker_id=worker_id), self.assertRaises(ContractError):
+                WorkerEndpoint(worker_id, self.endpoint.runner)
+        for runner in (None, 'runner', 42, {}, self.endpoint):
+            with self.subTest(runner=type(runner)):
+                with self.assertRaisesRegex(ContractError, 'WorkerRunner'):
+                    WorkerEndpoint('worker-demo', runner)
 
-    def test_submit_fails_closed_on_malformed_arguments(self):
-        for now in (None, '1000', 1000.0, object()):
-            with self.subTest(now=type(now)), self.assertRaises(ContractError):
-                self.submit(now=now)
-        for tool in (None, '', 42, b'summarize'):
-            with self.subTest(tool=repr(tool)), self.assertRaises(ContractError):
-                self.submit(tool=tool)
-        for job_id in (None, '', 42, b'job-1'):
-            with self.subTest(job_id=repr(job_id)), self.assertRaises(ContractError):
-                self.submit(job_id=job_id)
-        for policy in (None, 'policy', 42, object()):
-            with self.subTest(policy=type(policy)), self.assertRaises(ContractError):
-                self.submit(policy=policy)
-
-    def test_assign_fails_closed_on_malformed_arguments(self):
-        """Asserted on `assign` and by message, because `submit` hides both checks.
-
-        Downstream of `submit`, `issue` refuses a non-integer `now` with the
-        same sentence, and a non-string tool is refused by the allow-list
-        comparison a few lines later. Either check could be deleted with the
-        whole suite still green if it were only exercised through `submit` and
-        only asserted as "a ContractError happened". `assign` is public and
-        documented as a pure decision, so it is where they are visible.
-        """
-        good = dict(subject='subject-demo', tool='summarize', policy=self.policy,
-                    now=1000)
-        for now in (None, '1000', 1000.0, True, object()):
-            with self.subTest(now=repr(now)):
-                with self.assertRaisesRegex(ContractError, 'now must be an integer'):
-                    self.orchestrator.assign(**{**good, 'now': now})
-        for tool in (None, '', 42, b'summarize'):
-            with self.subTest(tool=repr(tool)):
-                with self.assertRaisesRegex(ContractError, 'tool must be a non-empty string'):
-                    self.orchestrator.assign(**{**good, 'tool': tool})
-        for policy in (None, 'policy', 42, object()):
+    def test_the_public_calls_fail_closed_on_malformed_arguments(self):
+        for policy in (None, 'policy', 42, {}):
             with self.subTest(policy=type(policy)):
                 with self.assertRaisesRegex(ContractError, 'policy is invalid'):
-                    self.orchestrator.assign(**{**good, 'policy': policy})
+                    self.admit(policy=policy)
+                with self.assertRaisesRegex(ContractError, 'policy is invalid'):
+                    self.submit(policy=policy)
+        for job_id in (None, '', 42, b'job-demo'):
+            with self.subTest(job_id=repr(job_id)):
+                with self.assertRaisesRegex(ContractError, 'job_id must be'):
+                    self.admit(job_id=job_id)
+                with self.assertRaisesRegex(ContractError, 'job_id must be'):
+                    self.dispatch(b'wire', job_id=job_id)
+        for now in (None, '100', 100.0, True, object()):
+            with self.subTest(now=repr(now)):
+                with self.assertRaises(ContractError):
+                    self.submit(now=now)
+
+    def test_route_fails_closed_on_malformed_arguments(self):
+        """Asserted on `route` and by message, because `submit` hides both checks.
+
+        Downstream, `issue` refuses a non-integer `now` with the same sentence a
+        few frames later. Either check could be deleted with the whole suite
+        still green if it were only exercised through `submit` and only asserted
+        as "a ContractError happened". `route` is public and documented as a pure
+        decision, so it is where they are visible.
+        """
+        good = dict(subject='subject-demo', policy=self.policy, now=100)
+        for now in (None, '100', 100.0, True, object()):
+            with self.subTest(now=repr(now)):
+                with self.assertRaisesRegex(ContractError, 'now must be an integer'):
+                    self.orchestrator.route(**{**good, 'now': now})
+        for policy in (None, 'policy', 42, {}):
+            with self.subTest(policy=type(policy)):
+                with self.assertRaisesRegex(ContractError, 'policy is invalid'):
+                    self.orchestrator.route(**{**good, 'policy': policy})
+        wrong = self.policy_for(orchestrator_id='orchestrator-other')
+        with self.assertRaisesRegex(ContractError, 'does not name this orchestrator'):
+            self.orchestrator.route(**{**good, 'policy': wrong})
 
 
 if __name__ == '__main__':
