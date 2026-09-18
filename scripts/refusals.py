@@ -48,7 +48,8 @@ ROOT = Path(__file__).resolve().parent.parent
 # Modules whose refusals must each be covered. A module belongs here once it
 # makes a security decision; leaving one out is a decision to be made openly
 # rather than by forgetting to add it.
-GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py")
+GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
+           "geniusnew/audit.py", "geniusnew/audit_chain.py")
 
 _REFUSAL_CALLS = {"_fail"}
 _REFUSAL_RAISES = {"ContractError"}

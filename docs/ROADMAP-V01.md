@@ -78,6 +78,25 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    festgehaltener, signierter Kettenkopf dazu. Tests gegen Änderung, Einfügung **und
    Löschung des letzten Eintrags**.
 
+   **Status: nicht abgeschlossen.** Mechanismus, Autoritätstrennung und Tests stehen
+   (`geniusnew/audit_chain.py`): Position, signierter Kopf mit eigenem Audit-Schlüssel,
+   und ein Anker, gegen den eine gekürzte und neu signierte Kette scheitert. Der Anker
+   bindet sich an eine *Kette*, nicht an eine Länge: ein Vorrücken muss belegen, dass der
+   Eintrag an der bereits festgehaltenen Position weiterhin auf den festgehaltenen Hash
+   führt. Ein bloß monotoner Zähler war hier nachweislich zu wenig — er akzeptiert jede
+   längere Kette, auch eine ohne gemeinsame Geschichte.
+   Offen bleibt die *Externalität* des Ankers. Er liegt derzeit im selben Prozess wie die
+   Kette, und damit im Vertrauensbereich dessen, der schreibt — das modelliert die Grenze,
+   es ist sie nicht. Wo der Anker tatsächlich liegt, ist eine Deployment-Entscheidung, und
+   sie hängt an Schritten 12 bis 14: erst wenn Gateway und Ergebnisprüfung als getrennte
+   Instanzen existieren, gibt es überhaupt einen Ort außerhalb des Schreibers. Der Schritt
+   gilt als erledigt, wenn der Anker dort liegt.
+
+   Zweite offene Abhängigkeit: die Kopfsignatur ist HMAC und damit symmetrisch — wer
+   prüfen kann, kann auch signieren. Eine Trennung in privaten Signatur- und öffentlichen
+   Prüfschlüssel braucht ein Primitiv außerhalb der Standardbibliothek und ist deshalb
+   eine Abhängigkeitsentscheidung, keine Codeänderung.
+
 9. **Ergebnisvertrag** — das Ergebnis wird vom Worker signiert und bei der Annahme
    geprüft, symmetrisch zum eingehenden Handoff. Ohne diesen Schritt bleibt „das Ergebnis
    kommt signiert zurück" im Ziel oben unerfüllt.
