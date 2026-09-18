@@ -63,7 +63,10 @@ _FORBIDDEN_PROCESS_EVENTS = frozenset({
     "os.system",
     "pty.spawn",
     "subprocess.Popen",
+    "resource.setrlimit",
+    "resource.prlimit",
 })
+_FORBIDDEN_READ_ROOTS = ("/proc", "/sys", "/dev")
 
 
 def _fail(message: str) -> None:
@@ -133,6 +136,19 @@ def _open_is_write(mode: Any, flags: Any) -> bool:
     return isinstance(flags, int) and bool(flags & _WRITE_FLAGS)
 
 
+def _sensitive_read(value: Any) -> bool:
+    if isinstance(value, int):
+        return False
+    try:
+        target = os.path.realpath(os.path.abspath(os.fsdecode(os.fspath(value))))
+    except TypeError:
+        return True
+    return any(
+        target == root or target.startswith(root + os.sep)
+        for root in _FORBIDDEN_READ_ROOTS
+    )
+
+
 def _audit_hook(root: str, state: dict[str, bool]):
     """Return the child-side audit hook."""
 
@@ -151,11 +167,17 @@ def _audit_hook(root: str, state: dict[str, bool]):
             deny()
         if event in _FORBIDDEN_FS_EVENTS:
             deny()
-        if event == "open" and len(args) >= 3 and _open_is_write(args[1], args[2]):
-            # Low-level os.open write calls are refused entirely because the
-            # audit event does not expose dir_fd. Normal builtins.open writes
-            # are accepted only under the empty per-job sandbox root.
-            if args[1] is None or not _path_is_inside(root, args[0]):
+        if event == "open" and len(args) >= 3:
+            if _open_is_write(args[1], args[2]):
+                # Low-level os.open write calls are refused entirely because
+                # the audit event does not expose dir_fd. Normal builtins.open
+                # writes are accepted only under the empty per-job sandbox.
+                if args[1] is None or not _path_is_inside(root, args[0]):
+                    deny()
+            elif _sensitive_read(args[0]):
+                # The child gets a minimal environment and no inherited parent
+                # descriptors. Blocking proc/sys/dev reads closes the obvious
+                # path back into the parent's environment, memory and FDs.
                 deny()
 
     return hook
