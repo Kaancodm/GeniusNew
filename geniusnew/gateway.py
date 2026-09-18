@@ -29,18 +29,27 @@ _PERMIT_PROVENANCE = object()
 
 
 class _PermitUse:
-    """Atomic one-shot state shared by every reference to one permit."""
+    """Atomic one-shot state bound to the exact fields of one permit."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, handoff_sha256: str, gateway_id: str, admitted_at: int,
+                 approval_record_hash: str | None) -> None:
+        self._binding = (
+            handoff_sha256, gateway_id, admitted_at, approval_record_hash,
+        )
         self._used = False
         self._lock = Lock()
+
+    def matches(self, *, handoff_sha256: str, gateway_id: str, admitted_at: int,
+                approval_record_hash: str | None) -> bool:
+        return self._binding == (
+            handoff_sha256, gateway_id, admitted_at, approval_record_hash,
+        )
 
     def consume(self) -> None:
         with self._lock:
             if self._used:
                 _fail("dispatch permit has already been consumed")
             self._used = True
-
 
 def _fail(message: str) -> None:
     raise ContractError(message)
@@ -79,6 +88,8 @@ class DispatchPermit:
             _fail("dispatch permit handoff is invalid")
         if type(self.handoff_sha256) is not str or not _DIGEST.match(self.handoff_sha256):
             _fail("dispatch permit digest must be a lowercase SHA-256 digest")
+        if not hmac.compare_digest(handoff_digest(self.handoff), self.handoff_sha256):
+            _fail("dispatch permit digest does not bind its handoff")
         _gateway_id(self.gateway_id)
         if type(self.admitted_at) is not int:
             _fail("dispatch permit admitted_at must be an integer")
@@ -88,15 +99,20 @@ class DispatchPermit:
             if (type(self.approval_record_hash) is not str
                     or not _DIGEST.match(self.approval_record_hash)):
                 _fail("approval_record_hash must be a lowercase SHA-256 digest")
+        if not self.use.matches(
+            handoff_sha256=self.handoff_sha256,
+            gateway_id=self.gateway_id,
+            admitted_at=self.admitted_at,
+            approval_record_hash=self.approval_record_hash,
+        ):
+            _fail("dispatch permit fields do not match their gateway binding")
 
 
 def handoff_from_permit(permit: Any) -> Handoff:
     """Inspect the admitted handoff while the capability still binds to it."""
     if not isinstance(permit, DispatchPermit) or permit.origin is not _PERMIT_PROVENANCE:
         _fail("dispatch requires a gateway-minted DispatchPermit")
-    current = handoff_digest(permit.handoff)
-    if not hmac.compare_digest(current, permit.handoff_sha256):
-        _fail("dispatch permit no longer matches its handoff")
+    handoff_digest(permit.handoff)
     return permit.handoff
 
 
@@ -156,12 +172,18 @@ class Gateway:
             )
             approval_record_hash = None
 
+        digest = handoff_digest(handoff)
         return DispatchPermit(
             handoff=handoff,
-            handoff_sha256=handoff_digest(handoff),
+            handoff_sha256=digest,
             gateway_id=self._gateway_id,
             admitted_at=now,
             approval_record_hash=approval_record_hash,
-            use=_PermitUse(),
+            use=_PermitUse(
+                handoff_sha256=digest,
+                gateway_id=self._gateway_id,
+                admitted_at=now,
+                approval_record_hash=approval_record_hash,
+            ),
             origin=_PERMIT_PROVENANCE,
         )
