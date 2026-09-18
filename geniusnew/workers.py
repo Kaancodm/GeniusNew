@@ -148,9 +148,6 @@ class WorkerRunner:
         # answer at all, so a signed FAILED is not available as a fallback.
         if now >= handoff.expires_at:
             _fail("handoff expired before execution")
-        if now < handoff.issued_at:
-            _fail("handoff is not valid yet")
-
         if self._tool not in handoff.tools:
             return self._refuse(handoff, _TOOL_NOT_GRANTED, now=now)
 
