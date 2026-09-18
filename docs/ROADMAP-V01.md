@@ -148,8 +148,9 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
     den Ausbruch versuchen.
 
     **Status: v0.1-Prozessgrenze steht** (`geniusnew/isolation.py`). Nur
-    `Worker.run(payload)` läuft im Kindprozess; Signaturautorität und Ergebnisannahme
-    bleiben im Elternprozess. Das Kind startet in einem pro Job erzeugten temporären
+    `Worker.run(payload)` läuft nach `exec` in einem **frischen Interpreter**;
+    Signaturautorität und Ergebnisannahme bleiben im Elternprozess und werden nicht durch
+    einen Fork in den Worker-Adressraum kopiert. Das Kind startet in einem pro Job erzeugten temporären
     Verzeichnis, erhält CPU-, Adressraum-, Dateigrößen- und FD-Limits sowie ein extern
     durchgesetztes Wall-Clock-Limit. Python-Audit-Hooks verweigern Socket-Erzeugung,
     Prozess-Spawn, native `ctypes`-Ladevorgänge und Dateischreibzugriffe außerhalb des
