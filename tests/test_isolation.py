@@ -74,6 +74,24 @@ class ParentProcReadWorker(Worker):
         return {"text": str(len(data))}
 
 
+class CtypesWorker(Worker):
+    tool = "summarize"
+
+    def run(self, payload):
+        import ctypes
+
+        ctypes.CDLL(None)
+        return {"text": "ctypes unexpectedly worked"}
+
+
+class FilesystemMutationWorker(Worker):
+    tool = "summarize"
+
+    def run(self, payload):
+        os.mkdir("nested")
+        return {"text": "mkdir unexpectedly worked"}
+
+
 class LimitTamperWorker(Worker):
     tool = "summarize"
 
@@ -389,6 +407,18 @@ class ProcessIsolationTest(unittest.TestCase):
     def test_parent_proc_environment_cannot_be_read(self):
         taken = self.taken(
             self.runner(ParentProcReadWorker()).execute(self.handoff, now=110)
+        )
+        self.assertFalse(taken.succeeded)
+        self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
+
+    def test_ctypes_native_loader_is_denied(self):
+        taken = self.taken(self.runner(CtypesWorker()).execute(self.handoff, now=110))
+        self.assertFalse(taken.succeeded)
+        self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
+
+    def test_filesystem_mutation_api_is_denied_even_inside_the_sandbox(self):
+        taken = self.taken(
+            self.runner(FilesystemMutationWorker()).execute(self.handoff, now=110)
         )
         self.assertFalse(taken.succeeded)
         self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
