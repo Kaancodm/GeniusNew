@@ -165,6 +165,26 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
 12. **Gateway** — unabhängige Default-Deny-Durchsetzung **vor** dem Dispatch. Eigene
     Instanz, nicht Teil des Orchestrators.
 
+    **Status: Gateway-Grenze steht** (`geniusnew/gateway.py`). Das Gateway akzeptiert
+    ausschließlich den rohen Handoff-Wire und führt die Contract-/Policy-Prüfung selbst
+    erneut aus; ein bereits validiertes `Handoff`-Objekt ist kein Ersatz. Bei
+    approval-pflichtigen Grants muss das Gateway den einmaligen Approval-Token gegen den
+    exakt aus diesem Wire abgeleiteten Scope konsumieren. Erst danach mintet es einen
+    `DispatchPermit`.
+
+    `WorkerRunner.execute` akzeptiert nur noch diesen Gateway-Permit, keinen rohen oder
+    bereits validierten Handoff. Damit ist Default-Deny vor Dispatch technisch
+    verpflichtend. Der Permit bindet den Digest des zugelassenen Handoffs, wird vor
+    Ausführung erneut geprüft und **atomar einmalig verbraucht**; Mutation nach Gateway-
+    Zulassung und Replay über denselben oder einen anderen Runner scheitern. Der Approval-
+    Token selbst verlässt den Gateway-Pfad nicht, im Permit steht nur der Receipt-Hash.
+
+    Handoff-HMAC bleibt symmetrisch: ein Gateway mit dem Integritätsschlüssel könnte
+    technisch auch signieren. Die Unabhängigkeit ist in v0.1 deshalb eine getrennte
+    Runtime-Rolle/Instanz mit eigener API-Grenze, nicht eine asymmetrische
+    Verifikationsautorität. Eine solche Schlüsseltrennung wäre eine spätere
+    Kryptographie-/Deployment-Entscheidung.
+
 13. **Orchestrator** — Admission, Zuordnung, Dispatch. Deterministisch, fail closed, keine
     geteilte veränderliche Autorität. Er trifft Entscheidungen, er bestätigt sie nicht
     selbst.

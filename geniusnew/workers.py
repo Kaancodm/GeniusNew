@@ -22,9 +22,10 @@ payload and nothing else.
 
 A handoff carries the tools its grant allows. The runner refuses to execute a
 worker whose tool is not among them, and records that refusal as a signed
-`FAILED` result rather than staying silent. A gateway should have caught it
-first (step 12), but a boundary that trusts the caller to have checked is not a
-boundary.
+`FAILED` result rather than staying silent. Step 12 now makes the upstream
+gateway mandatory as well: `execute` accepts only a gateway-minted
+`DispatchPermit`, never a raw or already validated `Handoff`. The local tool
+check remains defence in depth after that independent admission.
 
 ## Failure is an outcome, not a crash
 
@@ -50,6 +51,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from .contracts import ContractError, Handoff
+from .gateway import DispatchPermit, consume_handoff_from_permit
 from .results import WorkerAuthority, handoff_digest, produce
 
 _COMPLETED = "WORK_COMPLETED"
@@ -131,24 +133,22 @@ class WorkerRunner:
     def tool(self) -> str:
         return self._tool
 
-    def execute(self, handoff: Handoff, *, now: int) -> bytes:
-        """Run the work and hand back a signed result wire.
+    def execute(self, permit: DispatchPermit, *, now: int) -> bytes:
+        """Run a gateway-admitted job and hand back a signed result wire.
 
-        Returns a `FAILED` result for anything the work function does wrong, and
-        raises `ContractError` only when there is no handoff to answer or no
-        signable answer to give.
+        A raw or already validated Handoff is deliberately insufficient. The
+        worker boundary accepts only a capability minted by the independent
+        gateway after revalidation and any required approval consumption.
         """
-        if not isinstance(handoff, Handoff):
-            _fail("handoff is invalid")
+        handoff = consume_handoff_from_permit(permit)
         if type(now) is not int:
             _fail("now must be an integer")
+        if now < permit.admitted_at:
+            _fail("dispatch predates gateway admission")
         # Checked before anything runs: past `expires_at` there is no signable
         # answer at all, so a signed FAILED is not available as a fallback.
         if now >= handoff.expires_at:
             _fail("handoff expired before execution")
-        if now < handoff.issued_at:
-            _fail("handoff is not valid yet")
-
         if self._tool not in handoff.tools:
             return self._refuse(handoff, _TOOL_NOT_GRANTED, now=now)
 
