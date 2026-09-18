@@ -62,7 +62,9 @@ Siehe:
 - `geniusnew/approvals.py`
 - `geniusnew/workers.py`
 - `geniusnew/isolation.py`
+- `geniusnew/gateway.py`
 - `docs/ISOLATION-V01.md`
+- `docs/GATEWAY-V01.md`
 
 ## Lokale Prüfung
 
