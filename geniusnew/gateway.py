@@ -103,8 +103,6 @@ def handoff_from_permit(permit: Any) -> Handoff:
 def consume_handoff_from_permit(permit: Any) -> Handoff:
     """Atomically consume one dispatch capability and return its handoff."""
     handoff = handoff_from_permit(permit)
-    if not isinstance(permit.use, _PermitUse):
-        _fail("dispatch permit use state is invalid")
     permit.use.consume()
     return handoff
 
