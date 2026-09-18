@@ -60,6 +60,9 @@ Siehe:
 - `schemas/handoff-v1.schema.json`
 - `geniusnew/contracts.py`
 - `geniusnew/approvals.py`
+- `geniusnew/workers.py`
+- `geniusnew/isolation.py`
+- `docs/ISOLATION-V01.md`
 
 ## Lokale Prüfung
 
