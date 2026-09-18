@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hmac
 import re
+from threading import Lock
 from typing import Any
 
 from .approvals import ApprovalStore, create_scope
@@ -25,6 +26,20 @@ from .results import handoff_digest
 _GATEWAY_ID = re.compile(r"\A[a-z0-9][a-z0-9-]{0,62}\Z")
 _DIGEST = re.compile(r"\A[0-9a-f]{64}\Z")
 _PERMIT_PROVENANCE = object()
+
+
+class _PermitUse:
+    """Atomic one-shot state shared by every reference to one permit."""
+
+    def __init__(self) -> None:
+        self._used = False
+        self._lock = Lock()
+
+    def consume(self) -> None:
+        with self._lock:
+            if self._used:
+                _fail("dispatch permit has already been consumed")
+            self._used = True
 
 
 def _fail(message: str) -> None:
@@ -52,11 +67,14 @@ class DispatchPermit:
     gateway_id: str
     admitted_at: int
     approval_record_hash: str | None
+    use: object = field(default=None, repr=False, compare=False)
     origin: object = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.origin is not _PERMIT_PROVENANCE:
             _fail("dispatch permit must be minted by a Gateway")
+        if not isinstance(self.use, _PermitUse):
+            _fail("dispatch permit use state is invalid")
         if not isinstance(self.handoff, Handoff):
             _fail("dispatch permit handoff is invalid")
         if type(self.handoff_sha256) is not str or not _DIGEST.match(self.handoff_sha256):
@@ -73,13 +91,22 @@ class DispatchPermit:
 
 
 def handoff_from_permit(permit: Any) -> Handoff:
-    """Return the admitted handoff only while the capability still binds to it."""
+    """Inspect the admitted handoff while the capability still binds to it."""
     if not isinstance(permit, DispatchPermit) or permit.origin is not _PERMIT_PROVENANCE:
         _fail("dispatch requires a gateway-minted DispatchPermit")
     current = handoff_digest(permit.handoff)
     if not hmac.compare_digest(current, permit.handoff_sha256):
         _fail("dispatch permit no longer matches its handoff")
     return permit.handoff
+
+
+def consume_handoff_from_permit(permit: Any) -> Handoff:
+    """Atomically consume one dispatch capability and return its handoff."""
+    handoff = handoff_from_permit(permit)
+    if not isinstance(permit.use, _PermitUse):
+        _fail("dispatch permit use state is invalid")
+    permit.use.consume()
+    return handoff
 
 
 class Gateway:
@@ -137,5 +164,6 @@ class Gateway:
             gateway_id=self._gateway_id,
             admitted_at=now,
             approval_record_hash=approval_record_hash,
+            use=_PermitUse(),
             origin=_PERMIT_PROVENANCE,
         )
