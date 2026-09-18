@@ -64,6 +64,25 @@ class SpawnWorker(Worker):
         return {"text": "spawn unexpectedly worked"}
 
 
+class ParentProcReadWorker(Worker):
+    tool = "summarize"
+
+    def run(self, payload):
+        with open(f"/proc/{os.getppid()}/environ", "rb") as handle:
+            data = handle.read()
+        return {"text": str(len(data))}
+
+
+class LimitTamperWorker(Worker):
+    tool = "summarize"
+
+    def run(self, payload):
+        import resource
+
+        resource.setrlimit(resource.RLIMIT_NOFILE, (256, 256))
+        return {"text": "limit tamper unexpectedly worked"}
+
+
 class SlowWorker(Worker):
     tool = "summarize"
 
@@ -268,6 +287,20 @@ class ProcessIsolationTest(unittest.TestCase):
 
     def test_process_spawn_is_denied(self):
         taken = self.taken(self.runner(SpawnWorker()).execute(self.handoff, now=110))
+        self.assertFalse(taken.succeeded)
+        self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
+
+    def test_parent_proc_environment_cannot_be_read(self):
+        taken = self.taken(
+            self.runner(ParentProcReadWorker()).execute(self.handoff, now=110)
+        )
+        self.assertFalse(taken.succeeded)
+        self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
+
+    def test_worker_cannot_raise_or_replace_resource_limits(self):
+        taken = self.taken(
+            self.runner(LimitTamperWorker()).execute(self.handoff, now=110)
+        )
         self.assertFalse(taken.succeeded)
         self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
 
