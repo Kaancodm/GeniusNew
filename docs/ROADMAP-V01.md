@@ -174,8 +174,9 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
 
     `WorkerRunner.execute` akzeptiert nur noch diesen Gateway-Permit, keinen rohen oder
     bereits validierten Handoff. Damit ist Default-Deny vor Dispatch technisch
-    verpflichtend. Der Permit bindet den Digest des zugelassenen Handoffs und wird vor
-    Ausführung erneut geprüft; Mutation nach Gateway-Zulassung scheitert. Der Approval-
+    verpflichtend. Der Permit bindet den Digest des zugelassenen Handoffs, wird vor
+    Ausführung erneut geprüft und **atomar einmalig verbraucht**; Mutation nach Gateway-
+    Zulassung und Replay über denselben oder einen anderen Runner scheitern. Der Approval-
     Token selbst verlässt den Gateway-Pfad nicht, im Permit steht nur der Receipt-Hash.
 
     Handoff-HMAC bleibt symmetrisch: ein Gateway mit dem Integritätsschlüssel könnte
