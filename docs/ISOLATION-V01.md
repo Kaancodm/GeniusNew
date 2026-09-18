@@ -5,14 +5,18 @@ This document states exactly what GeniusNew's step-11 worker boundary enforces.
 ## Trust split
 
 `IsolatedWorkerRunner` keeps the `WorkerAuthority` and result signing key in the
-parent process. Only `Worker.run(payload)` executes in the child. The child receives a
-copy of the payload and returns an untrusted, bounded canonical-JSON message; the parent
+parent process. The worker is launched through **exec into a fresh Python interpreter**;
+there is no forked copy of the parent's address space. Only an importable worker class
+identifier, canonical-JSON instance state, limits and a copy of the payload cross that
+boundary. The child returns an untrusted, bounded canonical-JSON message; the parent
 applies the normal result contract before signing anything.
 
 ## Enforced boundary
 
 For the v0.1 Python worker path the child process:
 
+- starts in a fresh interpreter with inherited file descriptors closed, stdin isolated,
+  and stdout/stderr detached from worker-controlled protocol output;
 - starts in a fresh per-job temporary directory;
 - has a wall-clock deadline enforced by the parent;
 - receives POSIX limits for CPU time, address space, file size, open file descriptors,
@@ -37,6 +41,7 @@ process boundary.
 
 - the deterministic reference worker returns the same signed result in and out of the
   process boundary;
+- no `WorkerAuthority` instance exists in the fresh worker interpreter;
 - socket creation is denied;
 - a write outside the sandbox cannot create its target;
 - a write inside the sandbox is allowed and the directory is deleted before return;
