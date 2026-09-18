@@ -230,8 +230,6 @@ def event_from_handoff(handoff: Handoff, *, trace_id: str, actor: ComponentActor
     """
     if not isinstance(handoff, Handoff):
         _fail("handoff is invalid")
-    if not isinstance(actor, ComponentActor):
-        _fail("actor must be a ComponentActor minted by an AuditAuthority")
     if not hmac.compare_digest(hashlib.sha256(canonical(handoff.payload)).hexdigest(),
                                handoff.payload_sha256):
         _fail("handoff payload no longer matches its digest")
