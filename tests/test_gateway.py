@@ -1,4 +1,5 @@
 import hashlib
+from dataclasses import replace
 import unittest
 
 from geniusnew.approvals import ApprovalStore, create_scope
@@ -209,6 +210,37 @@ class GatewayTest(unittest.TestCase):
                 admitted_at=101,
                 approval_record_hash=None,
             )
+
+    def test_dispatch_permit_internal_fields_fail_closed(self):
+        permit = self.admit()
+        for handoff in (None, "handoff", 42, {}):
+            with self.subTest(handoff=type(handoff)), self.assertRaises(ContractError):
+                replace(permit, handoff=handoff)
+        for digest in ("", "z" * 64, "A" * 64, "a" * 63, None, 42):
+            with self.subTest(digest=digest), self.assertRaises(ContractError):
+                replace(permit, handoff_sha256=digest)
+        for admitted_at in (None, "101", 101.0, True):
+            with self.subTest(admitted_at=admitted_at), self.assertRaises(ContractError):
+                replace(permit, admitted_at=admitted_at)
+        for admitted_at in (permit.handoff.issued_at - 1, permit.handoff.expires_at):
+            with self.subTest(admitted_at=admitted_at), self.assertRaises(ContractError):
+                replace(permit, admitted_at=admitted_at)
+        for receipt_hash in ("", "z" * 64, "A" * 64, "a" * 63, 42):
+            with self.subTest(receipt_hash=receipt_hash), self.assertRaises(ContractError):
+                replace(permit, approval_record_hash=receipt_hash)
+
+    def test_admit_requires_a_real_policy_object(self):
+        for policy in (None, "policy", 42, {}, self.policy.__dict__):
+            with self.subTest(policy=type(policy)), self.assertRaisesRegex(
+                ContractError, "policy is invalid"
+            ):
+                self.gateway.admit(
+                    self.wire,
+                    subject="subject-demo",
+                    job_id="job-demo",
+                    policy=policy,
+                    now=101,
+                )
 
     def test_gateway_configuration_fails_closed(self):
         for gateway_id in ("", "UPPER", "with space", None, 42):
