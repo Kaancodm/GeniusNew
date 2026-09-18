@@ -200,6 +200,20 @@ class GatewayTest(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "not allowed"):
             self.admit(approval_token=b"x" * 32)
 
+    def test_permit_cannot_be_cloned_onto_another_valid_handoff(self):
+        permit = self.admit()
+        other_wire = self.issue(self.policy, job_id="job-other", text="other job")
+        other_handoff = validate(
+            other_wire,
+            subject="subject-demo",
+            job_id="job-other",
+            policy=self.policy,
+            integrity_key=self.key,
+            now=101,
+        )
+        with self.assertRaisesRegex(ContractError, "does not bind"):
+            replace(permit, handoff=other_handoff)
+
     def test_permit_detects_payload_mutation_after_gateway_admission(self):
         permit = self.admit()
         permit.handoff.payload["text"] = "mutated after admission"
@@ -235,12 +249,20 @@ class GatewayTest(unittest.TestCase):
         for digest in ("", "z" * 64, "A" * 64, "a" * 63, None, 42):
             with self.subTest(digest=digest), self.assertRaises(ContractError):
                 replace(permit, handoff_sha256=digest)
+        with self.assertRaisesRegex(ContractError, "does not bind"):
+            replace(permit, handoff_sha256="f" * 64)
         for admitted_at in (None, "101", 101.0, True):
             with self.subTest(admitted_at=admitted_at), self.assertRaises(ContractError):
                 replace(permit, admitted_at=admitted_at)
         for admitted_at in (permit.handoff.issued_at - 1, permit.handoff.expires_at):
             with self.subTest(admitted_at=admitted_at), self.assertRaises(ContractError):
                 replace(permit, admitted_at=admitted_at)
+        with self.assertRaisesRegex(ContractError, "gateway binding"):
+            replace(permit, admitted_at=permit.admitted_at + 1)
+        with self.assertRaisesRegex(ContractError, "gateway binding"):
+            replace(permit, gateway_id="gateway-other")
+        with self.assertRaisesRegex(ContractError, "gateway binding"):
+            replace(permit, approval_record_hash="a" * 64)
         for receipt_hash in ("", "z" * 64, "A" * 64, "a" * 63, 42):
             with self.subTest(receipt_hash=receipt_hash), self.assertRaises(ContractError):
                 replace(permit, approval_record_hash=receipt_hash)
