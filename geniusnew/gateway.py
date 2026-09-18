@@ -85,7 +85,7 @@ class DispatchPermit:
         if not isinstance(self.use, _PermitUse):
             _fail("dispatch permit use state is invalid")
         if not isinstance(self.handoff, Handoff):
-            _fail("dispatch permit handoff is invalid")
+            _fail("dispatch permit handoff must be a Handoff")
         if type(self.handoff_sha256) is not str or not _DIGEST.match(self.handoff_sha256):
             _fail("dispatch permit digest must be a lowercase SHA-256 digest")
         if not hmac.compare_digest(handoff_digest(self.handoff), self.handoff_sha256):
