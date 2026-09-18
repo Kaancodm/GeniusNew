@@ -235,36 +235,63 @@ def _wire_depth(decoded: str) -> int:
     return deepest
 
 
-def _wire_object(wire: Any) -> dict[str, Any]:
+def decode_wire(wire: Any, *, keys: frozenset[str], noun: str) -> dict[str, Any]:
+    """Decode one untrusted wire contract into an exact, canonical object.
+
+    Every rule here is a refusal an attacker would otherwise walk through: a
+    bound on size and nesting, no duplicate keys, no non-finite numbers, an
+    exact key set, and a byte-for-byte canonical re-encoding so two different
+    wires can never carry the same meaning.
+
+    `keys` and `noun` are the only things that differ between contract kinds.
+    A second copy of this function for the result contract would be a second
+    place for these rules to drift apart, which is why it takes parameters
+    instead.
+    """
     if type(wire) is not bytes or not wire or len(wire) > _MAX_WIRE_BYTES:
-        _fail("handoff wire must be a bounded, non-empty bytes value")
+        _fail(f"{noun} wire must be a bounded, non-empty bytes value")
     try:
         decoded = wire.decode("utf-8")
         if _wire_depth(decoded) > _MAX_WIRE_DEPTH:
-            _fail("handoff JSON nests too deeply")
+            _fail(f"{noun} JSON nests too deeply")
 
         def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             result: dict[str, Any] = {}
             for key, value in pairs:
                 if key in result:
-                    _fail("handoff JSON contains duplicate keys")
+                    _fail(f"{noun} JSON contains duplicate keys")
                 result[key] = value
             return result
 
         value = json.loads(
             decoded,
             object_pairs_hook=reject_duplicates,
-            parse_constant=lambda _: _fail("handoff JSON contains a non-finite value"),
+            parse_constant=lambda _: _fail(f"{noun} JSON contains a non-finite value"),
         )
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
-        raise ContractError("handoff wire is not valid JSON") from exc
+    except ContractError:
+        # ContractError subclasses ValueError, and the duplicate-key and depth
+        # refusals are raised from inside this block. Without this they would be
+        # caught below and re-raised as "not valid JSON", losing the message
+        # that says which rule was broken. Two tests caught exactly that.
+        raise
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
+        # ValueError rather than JSONDecodeError: CPython refuses to parse an
+        # integer literal past its digit limit with a plain ValueError, so a
+        # 5000-digit number inside an otherwise small wire escaped the refusal
+        # boundary entirely. JSONDecodeError is a ValueError, so this is a
+        # widening, not a replacement.
+        raise ContractError(f"{noun} wire is not valid JSON") from exc
     if not isinstance(value, dict):
-        _fail("handoff wire must contain an object")
-    if set(value) != _HANDOFF_KEYS:
-        _fail("handoff fields are not exact")
+        _fail(f"{noun} wire must contain an object")
+    if set(value) != keys:
+        _fail(f"{noun} fields are not exact")
     if wire != canonical(value):
-        _fail("handoff wire is not canonical JSON")
+        _fail(f"{noun} wire is not canonical JSON")
     return value
+
+
+def _wire_object(wire: Any) -> dict[str, Any]:
+    return decode_wire(wire, keys=_HANDOFF_KEYS, noun="handoff")
 
 
 def _from_object(value: dict[str, Any], *, subject: str, job_id: str, policy: Policy, integrity_key: bytes, now: int, allow_pending: bool = False) -> Handoff:
