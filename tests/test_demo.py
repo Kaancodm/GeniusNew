@@ -18,12 +18,36 @@ SECRET_CANARY = "ROOT-SECRET-CANARY-MUST-NOT-BE-PRINTED"
 PAYLOAD_CANARY = "PAYLOAD-CANARY-MUST-NOT-BE-PRINTED"
 
 
+DEFAULT_SECRET = b"a-demo-root-secret-of-32-bytes!!!!!!"
+_RUNS: dict[tuple[bytes, str], tuple[int, str]] = {}
+
+
 def run(root_secret=None, request_text="ordinary demo text"):
-    """Run the demo in-process and return its exit code and output."""
+    """Run the demo in-process and return its exit code and output.
+
+    Memoized per configuration. The demo is deterministic by construction —
+    `test_the_demo_is_deterministic` proves that against two genuinely separate
+    runs — so repeating an identical one buys nothing. `scripts/refusals.py`
+    runs this whole suite once per refusal, so anything the suite does, it does
+    a hundred-odd times.
+
+    Measured, because the first version of this note guessed and was wrong: one
+    demo run costs about two milliseconds, and these tests add roughly 0.18s to
+    a suite that already takes 1.9s. The memo is a small tidy-up, not a rescue.
+    """
+    key = (root_secret or DEFAULT_SECRET, request_text)
+    if key not in _RUNS:
+        captured = io.StringIO()
+        with redirect_stdout(captured):
+            code = main(root_secret=key[0], request_text=key[1])
+        _RUNS[key] = (code, captured.getvalue())
+    return _RUNS[key]
+
+
+def run_uncached(root_secret=None, request_text="ordinary demo text"):
     captured = io.StringIO()
     with redirect_stdout(captured):
-        code = main(root_secret=root_secret or b"a-demo-root-secret-of-32-bytes!!!!!!",
-                    request_text=request_text)
+        code = main(root_secret=root_secret or DEFAULT_SECRET, request_text=request_text)
     return code, captured.getvalue()
 
 
@@ -43,9 +67,40 @@ class DemoTest(unittest.TestCase):
     def test_every_attack_is_refused(self):
         """The half that matters. A pipeline printing success proves nothing."""
         _, output = run()
-        self.assertEqual(output.count("[ok]"), 5, output)
+        self.assertEqual(output.count("[ok]"), 7, output)
         self.assertNotIn("[!!]", output)
-        self.assertIn("5/5 attacks refused", output)
+        self.assertIn("7/7 attacks refused", output)
+
+    def test_each_attack_is_refused_by_the_check_it_targets(self):
+        """Refused is not enough — it has to be refused by the right check.
+
+        The permit-reuse attack first "passed" because the payload-swap attack
+        before it left the handoff mutated, so acceptance failed on the digest
+        instead of on the permit. That is the failure mode this repository keeps
+        hitting: an assertion satisfied by a path other than the one under test.
+        Matching the message is what distinguishes them.
+        """
+        _, output = run()
+        expected = {
+            "Replay the result against a different job": "job_id does not match",
+            "Accept a result after its handoff expired": "handoff expired before its result",
+            "Truncate the audit chain by one entry": "signed head claims",
+            "Sign results with the handoff key": "must not be the handoff integrity key",
+            "Swap the payload after validation": "payload no longer matches",
+            "Dispatch without a gateway permit": "requires a gateway-minted",
+            "Reuse the permit for a second dispatch": "already been consumed",
+        }
+        import re
+        refusals = dict(re.findall(r"\[ok\] (.+?)\s{2,}(.+)", output))
+        self.assertEqual(set(refusals), set(expected), "attack list changed")
+        for attack, fragment in expected.items():
+            with self.subTest(attack=attack):
+                self.assertIn(fragment, refusals[attack])
+
+    def test_an_attack_leaves_no_state_behind_for_the_next_one(self):
+        """The payload-swap attack must put the payload back, or it poisons the rest."""
+        _, second = run_uncached()
+        self.assertNotIn("payload no longer matches", second.split("Reuse the permit")[1])
 
     def test_the_root_secret_never_reaches_the_output(self):
         """Not even a truncated prefix: eight bytes of a key is eight real bytes.
@@ -63,9 +118,8 @@ class DemoTest(unittest.TestCase):
 
     def test_no_derived_key_material_reaches_the_output(self):
         from geniusnew.keys import derive_keys
-        secret = b"a-demo-root-secret-of-32-bytes!!!!!!"
-        _, output = run(root_secret=secret)
-        keys = derive_keys(secret)
+        _, output = run()
+        keys = derive_keys(DEFAULT_SECRET)
         for key in (keys.integrity_key, keys.result_key, keys.audit_key):
             with self.subTest(key=key.hex()[:8]):
                 self.assertNotIn(key.hex(), output)
@@ -83,8 +137,12 @@ class DemoTest(unittest.TestCase):
         self.assertNotIn(PAYLOAD_CANARY, output)
 
     def test_the_demo_is_deterministic(self):
-        """Two runs produce the same digests, so a reader can diff them."""
-        self.assertEqual(run()[1], run()[1])
+        """Two genuinely separate runs produce the same digests.
+
+        Uncached on purpose: comparing a memoized result with itself would pass
+        whatever the demo did.
+        """
+        self.assertEqual(run_uncached()[1], run_uncached()[1])
 
     def test_the_output_carries_the_evidence_not_the_content(self):
         """Every digest printed is 64 hex characters, and there are several."""
