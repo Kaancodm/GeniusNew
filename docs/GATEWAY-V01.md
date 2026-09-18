@@ -21,8 +21,10 @@ For a grant with `requires_approval=True`, the signed Handoff intentionally rema
 3. consumes the one-time token from `ApprovalStore`;
 4. mints a `DispatchPermit` carrying only the approval receipt hash.
 
-The raw approval token is not stored in the permit. Reuse fails because the approval
-record is already `CONSUMED`.
+The raw approval token is not stored in the permit. Reuse fails twice: the approval
+record is already `CONSUMED`, and the resulting `DispatchPermit` itself carries
+atomic one-shot state. The first worker dispatch consumes it; a second dispatch through
+the same or another runner is refused.
 
 For a grant that does not require approval, supplying an approval token is itself
 rejected. Security-relevant extra input is not silently ignored.
@@ -37,8 +39,9 @@ rejected. Security-relevant extra input is not silently ignored.
 - the admission time;
 - the approval receipt hash when approval was required.
 
-The worker boundary recomputes the Handoff digest before execution. Mutating the
-payload after gateway admission invalidates the permit.
+The worker boundary recomputes the Handoff digest before execution and atomically
+consumes the permit. Mutating the payload after gateway admission invalidates the
+permit, and a permit that has already been dispatched cannot be replayed.
 
 ## Separation and limitation
 
@@ -54,9 +57,9 @@ deployment design.
 ## Proof
 
 `tests/test_gateway.py` covers independent revalidation, tamper/wrong-identity/expiry
-refusals, mandatory gateway permits, one-time approval consumption, approval scope
-binding, unexpected-token refusal, post-admission mutation, and construction/config
-fail-closed behavior.
+refusals, mandatory and single-use gateway permits, one-time approval consumption,
+approval scope binding, unexpected-token refusal, post-admission mutation, and
+construction/config fail-closed behavior.
 
 `geniusnew/gateway.py` is part of `scripts/refusals.py`, so deleting any explicit
 security refusal must make CI fail.
