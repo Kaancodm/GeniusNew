@@ -483,7 +483,7 @@ class ProcessIsolationTest(unittest.TestCase):
     def test_invalid_output_still_uses_the_parent_side_output_contract(self):
         taken = self.taken(
             self.runner(ReturningWorker({"other": "not text"})).execute(
-                self.handoff, now=110
+                self.permit_for(self.handoff), now=110
             )
         )
         self.assertFalse(taken.succeeded)
