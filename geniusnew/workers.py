@@ -117,16 +117,19 @@ class WorkerRunner:
     def __init__(self, worker: Worker, *, authority: WorkerAuthority) -> None:
         if not isinstance(worker, Worker):
             _fail("worker must be a Worker")
-        if type(worker.tool) is not str or not worker.tool:
+        worker_type = type(worker)
+        tool = type.__getattribute__(worker_type, "tool")
+        if type(tool) is not str or not tool:
             _fail("worker must declare the tool it implements")
         if not isinstance(authority, WorkerAuthority):
             _fail("authority must be a WorkerAuthority")
         self._worker = worker
+        self._tool = tool
         self._authority = authority
 
     @property
     def tool(self) -> str:
-        return self._worker.tool
+        return self._tool
 
     def execute(self, handoff: Handoff, *, now: int) -> bytes:
         """Run the work and hand back a signed result wire.
@@ -146,7 +149,7 @@ class WorkerRunner:
         if now < handoff.issued_at:
             _fail("handoff is not valid yet")
 
-        if self._worker.tool not in handoff.tools:
+        if self._tool not in handoff.tools:
             return self._refuse(handoff, _TOOL_NOT_GRANTED, now=now)
 
         # The work function gets a copy. `Handoff.payload` is still mutable, and
