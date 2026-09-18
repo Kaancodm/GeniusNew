@@ -23,6 +23,8 @@ For the v0.1 Python worker path the child process:
   and core dumps;
 - has its environment replaced with values rooted in the temporary directory;
 - refuses Python socket operations;
+- refuses worker reads through `/proc`, `/sys`, and `/dev`, including the parent
+  process environment/FD view;
 - refuses process creation, exec, shell launch, and signals aimed at other processes;
 - refuses `ctypes` audit operations;
 - refuses writes opened outside the temporary directory and low-level write opens whose
@@ -46,6 +48,8 @@ process boundary.
 - a write outside the sandbox cannot create its target;
 - a write inside the sandbox is allowed and the directory is deleted before return;
 - a child cannot fork another process through the Python API;
+- the child cannot read the parent environment through `/proc` or replace its resource
+  limits;
 - an overlong worker is killed by the parent deadline;
 - configured POSIX resource limits are visible inside the child;
 - exception text does not leak;
