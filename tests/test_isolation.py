@@ -4,7 +4,9 @@ import time
 import unittest
 from unittest.mock import patch
 
+from geniusnew.approvals import ApprovalStore
 from geniusnew.contracts import ContractError, Grant, Policy, canonical, issue, validate
+from geniusnew.gateway import Gateway
 import geniusnew.isolation as isolation_module
 import geniusnew.isolation_child as isolation_child_module
 from geniusnew.isolation import IsolationLimits, IsolatedWorkerRunner
@@ -345,6 +347,21 @@ class ProcessIsolationTest(unittest.TestCase):
             integrity_key=self.integrity_key,
             now=101,
         )
+        self.gateway = Gateway(
+            gateway_id="gateway-test",
+            integrity_key=self.integrity_key,
+            approval_store=ApprovalStore(),
+        )
+
+    def permit_for(self, handoff=None, admitted_at=101):
+        handoff = handoff or self.handoff
+        return self.gateway.admit(
+            handoff.to_bytes(),
+            subject="subject-demo",
+            job_id=handoff.job_id,
+            policy=self.policy,
+            now=admitted_at,
+        )
 
     def runner(self, worker, limits=None):
         return IsolatedWorkerRunner(worker, authority=self.authority, limits=limits)
@@ -358,22 +375,22 @@ class ProcessIsolationTest(unittest.TestCase):
         )
 
     def test_reference_worker_matches_the_in_process_contract(self):
-        isolated = self.runner(DeterministicSummarizer()).execute(self.handoff, now=110)
+        isolated = self.runner(DeterministicSummarizer()).execute(self.permit_for(self.handoff), now=110)
         direct = WorkerRunner(
             DeterministicSummarizer(), authority=self.authority
-        ).execute(self.handoff, now=110)
+        ).execute(self.permit_for(self.handoff), now=110)
         self.assertEqual(isolated, direct)
         self.assertTrue(self.taken(isolated).succeeded)
 
     def test_signing_authority_object_is_not_present_in_the_fresh_interpreter(self):
         taken = self.taken(
-            self.runner(AuthorityProbeWorker()).execute(self.handoff, now=110)
+            self.runner(AuthorityProbeWorker()).execute(self.permit_for(self.handoff), now=110)
         )
         self.assertTrue(taken.succeeded)
         self.assertEqual(taken.output, {"text": "authority-absent"})
 
     def test_network_creation_is_denied_and_recorded(self):
-        taken = self.taken(self.runner(NetworkWorker()).execute(self.handoff, now=110))
+        taken = self.taken(self.runner(NetworkWorker()).execute(self.permit_for(self.handoff), now=110))
         self.assertFalse(taken.succeeded)
         self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
         self.assertIsNone(taken.output)
@@ -382,7 +399,7 @@ class ProcessIsolationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as outside:
             target = os.path.join(outside, "escape.txt")
             taken = self.taken(
-                self.runner(OutsideWriteWorker(target)).execute(self.handoff, now=110)
+                self.runner(OutsideWriteWorker(target)).execute(self.permit_for(self.handoff), now=110)
             )
             self.assertFalse(os.path.exists(target))
         self.assertFalse(taken.succeeded)
@@ -390,7 +407,7 @@ class ProcessIsolationTest(unittest.TestCase):
 
     def test_a_write_inside_the_temporary_directory_is_allowed_then_cleaned_up(self):
         taken = self.taken(
-            self.runner(InsideWriteWorker()).execute(self.handoff, now=110)
+            self.runner(InsideWriteWorker()).execute(self.permit_for(self.handoff), now=110)
         )
         self.assertTrue(taken.succeeded)
         sandbox_path = taken.output["text"]
@@ -400,32 +417,32 @@ class ProcessIsolationTest(unittest.TestCase):
         )
 
     def test_process_spawn_is_denied(self):
-        taken = self.taken(self.runner(SpawnWorker()).execute(self.handoff, now=110))
+        taken = self.taken(self.runner(SpawnWorker()).execute(self.permit_for(self.handoff), now=110))
         self.assertFalse(taken.succeeded)
         self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
 
     def test_parent_proc_environment_cannot_be_read(self):
         taken = self.taken(
-            self.runner(ParentProcReadWorker()).execute(self.handoff, now=110)
+            self.runner(ParentProcReadWorker()).execute(self.permit_for(self.handoff), now=110)
         )
         self.assertFalse(taken.succeeded)
         self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
 
     def test_ctypes_native_loader_is_denied(self):
-        taken = self.taken(self.runner(CtypesWorker()).execute(self.handoff, now=110))
+        taken = self.taken(self.runner(CtypesWorker()).execute(self.permit_for(self.handoff), now=110))
         self.assertFalse(taken.succeeded)
         self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
 
     def test_filesystem_mutation_api_is_denied_even_inside_the_sandbox(self):
         taken = self.taken(
-            self.runner(FilesystemMutationWorker()).execute(self.handoff, now=110)
+            self.runner(FilesystemMutationWorker()).execute(self.permit_for(self.handoff), now=110)
         )
         self.assertFalse(taken.succeeded)
         self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
 
     def test_worker_cannot_raise_or_replace_resource_limits(self):
         taken = self.taken(
-            self.runner(LimitTamperWorker()).execute(self.handoff, now=110)
+            self.runner(LimitTamperWorker()).execute(self.permit_for(self.handoff), now=110)
         )
         self.assertFalse(taken.succeeded)
         self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
@@ -433,7 +450,7 @@ class ProcessIsolationTest(unittest.TestCase):
     def test_wall_clock_timeout_kills_the_child_and_returns_a_signed_failure(self):
         limits = IsolationLimits(wall_seconds=0.1)
         taken = self.taken(
-            self.runner(SlowWorker(), limits).execute(self.handoff, now=110)
+            self.runner(SlowWorker(), limits).execute(self.permit_for(self.handoff), now=110)
         )
         self.assertFalse(taken.succeeded)
         self.assertEqual(taken.reason_code, "RESOURCE_EXHAUSTED")
@@ -448,7 +465,7 @@ class ProcessIsolationTest(unittest.TestCase):
             max_open_files=32,
         )
         taken = self.taken(
-            self.runner(LimitsWorker(), limits).execute(self.handoff, now=110)
+            self.runner(LimitsWorker(), limits).execute(self.permit_for(self.handoff), now=110)
         )
         self.assertTrue(taken.succeeded)
         self.assertEqual(
@@ -457,7 +474,7 @@ class ProcessIsolationTest(unittest.TestCase):
         )
 
     def test_an_exception_becomes_worker_failed_without_leaking_its_text(self):
-        wire = self.runner(ExplodingWorker()).execute(self.handoff, now=110)
+        wire = self.runner(ExplodingWorker()).execute(self.permit_for(self.handoff), now=110)
         self.assertNotIn(b"EXCEPTION-TEXT-MUST-STAY-IN-THE-CHILD", wire)
         taken = self.taken(wire)
         self.assertFalse(taken.succeeded)
