@@ -1,7 +1,9 @@
 import hashlib
 import unittest
 
+from geniusnew.approvals import ApprovalStore
 from geniusnew.contracts import ContractError, Grant, Policy, issue, validate
+from geniusnew.gateway import Gateway
 from geniusnew.results import WorkerAuthority, accept
 from geniusnew.workers import (DeterministicSummarizer, Worker, WorkerRunner)
 
@@ -50,6 +52,8 @@ class WorkerBoundaryTest(unittest.TestCase):
                       ('summarize',), 'isolated', False)
         self.policy = Policy('policy-v1', 'orchestrator-demo', 60,
                              ('summarize',), ('isolated',), (grant,))
+        self.gateway = Gateway(gateway_id='gateway-test', integrity_key=self.key,
+                               approval_store=ApprovalStore())
         self.handoff = self.issue_handoff()
         self.runner = WorkerRunner(DeterministicSummarizer(), authority=self.authority)
 
@@ -59,9 +63,16 @@ class WorkerBoundaryTest(unittest.TestCase):
         return validate(wire, subject='subject-demo', job_id=job_id,
                         policy=self.policy, integrity_key=self.key, now=now + 1)
 
+    def permit_for(self, handoff=None, *, admitted_at=None):
+        handoff = handoff or self.handoff
+        when = handoff.issued_at + 1 if admitted_at is None else admitted_at
+        return self.gateway.admit(handoff.to_bytes(), subject='subject-demo',
+                                  job_id=handoff.job_id, policy=self.policy, now=when)
+
     def run_with(self, worker, *, handoff=None, now=110):
+        handoff = handoff or self.handoff
         runner = WorkerRunner(worker, authority=self.authority)
-        return runner.execute(handoff or self.handoff, now=now)
+        return runner.execute(self.permit_for(handoff), now=now)
 
     def taken(self, wire, *, handoff=None, now=120):
         return accept(wire, handoff=handoff or self.handoff,
@@ -70,7 +81,7 @@ class WorkerBoundaryTest(unittest.TestCase):
     # --- the reference worker ----------------------------------------------
 
     def test_the_reference_worker_produces_an_acceptable_result(self):
-        taken = self.taken(self.runner.execute(self.handoff, now=110))
+        taken = self.taken(self.runner.execute(self.permit_for(self.handoff), now=110))
         self.assertTrue(taken.succeeded)
         self.assertEqual(taken.reason_code, 'WORK_COMPLETED')
         digest = hashlib.sha256('the quick brown fox'.encode()).hexdigest()
@@ -78,16 +89,16 @@ class WorkerBoundaryTest(unittest.TestCase):
 
     def test_the_reference_worker_is_deterministic(self):
         """Same handoff, same bytes — no clock, no entropy, no ordering."""
-        first = self.runner.execute(self.handoff, now=110)
-        second = self.runner.execute(self.handoff, now=110)
+        first = self.runner.execute(self.permit_for(self.handoff), now=110)
+        second = self.runner.execute(self.permit_for(self.handoff), now=110)
         self.assertEqual(first, second)
         fresh = WorkerRunner(DeterministicSummarizer(), authority=self.authority)
-        self.assertEqual(fresh.execute(self.handoff, now=110), first)
+        self.assertEqual(fresh.execute(self.permit_for(self.handoff), now=110), first)
 
     def test_different_input_gives_a_different_result(self):
         other = self.issue_handoff(text='a different job entirely')
-        self.assertNotEqual(self.runner.execute(other, now=110),
-                            self.runner.execute(self.handoff, now=110))
+        self.assertNotEqual(self.runner.execute(self.permit_for(other), now=110),
+                            self.runner.execute(self.permit_for(self.handoff), now=110))
 
     # --- default deny at the boundary --------------------------------------
 
@@ -178,11 +189,11 @@ class WorkerBoundaryTest(unittest.TestCase):
     def test_an_expired_handoff_cannot_be_executed_at_all(self):
         """Past expires_at nothing is signable, so a FAILED result is not a fallback."""
         with self.assertRaises(ContractError):
-            self.runner.execute(self.handoff, now=self.handoff.expires_at)
+            self.runner.execute(self.permit_for(self.handoff), now=self.handoff.expires_at)
         with self.assertRaises(ContractError):
-            self.runner.execute(self.handoff, now=self.handoff.expires_at + 1)
+            self.runner.execute(self.permit_for(self.handoff), now=self.handoff.expires_at + 1)
         self.assertTrue(
-            self.taken(self.runner.execute(self.handoff, now=self.handoff.expires_at - 1),
+            self.taken(self.runner.execute(self.permit_for(self.handoff), now=self.handoff.expires_at - 1),
                        now=self.handoff.expires_at - 1).succeeded)
 
     def test_an_expired_handoff_does_not_reach_the_worker(self):
@@ -203,9 +214,10 @@ class WorkerBoundaryTest(unittest.TestCase):
                     self.run_with(worker, now=now)
                 self.assertEqual(worker.seen, [])
 
-    def test_a_handoff_cannot_be_executed_before_it_was_issued(self):
-        with self.assertRaises(ContractError):
-            self.runner.execute(self.handoff, now=self.handoff.issued_at - 1)
+    def test_dispatch_cannot_predate_gateway_admission(self):
+        permit = self.permit_for(self.handoff, admitted_at=105)
+        with self.assertRaisesRegex(ContractError, 'predates gateway admission'):
+            self.runner.execute(permit, now=104)
 
     # --- construction and fail-closed --------------------------------------
 
@@ -229,7 +241,7 @@ class WorkerBoundaryTest(unittest.TestCase):
                 self.runner.execute(handoff, now=110)
         for now in (None, '110', 110.0, object()):
             with self.subTest(now=type(now)), self.assertRaises(ContractError):
-                self.runner.execute(self.handoff, now=now)
+                self.runner.execute(self.permit_for(self.handoff), now=now)
 
     def test_a_hostile_worker_never_escapes_the_contract_error_boundary(self):
         class Hostile(Worker):

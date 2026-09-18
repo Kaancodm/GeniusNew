@@ -22,9 +22,10 @@ payload and nothing else.
 
 A handoff carries the tools its grant allows. The runner refuses to execute a
 worker whose tool is not among them, and records that refusal as a signed
-`FAILED` result rather than staying silent. A gateway should have caught it
-first (step 12), but a boundary that trusts the caller to have checked is not a
-boundary.
+`FAILED` result rather than staying silent. Step 12 now makes the upstream
+gateway mandatory as well: `execute` accepts only a gateway-minted
+`DispatchPermit`, never a raw or already validated `Handoff`. The local tool
+check remains defence in depth after that independent admission.
 
 ## Failure is an outcome, not a crash
 
@@ -50,6 +51,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from .contracts import ContractError, Handoff
+from .gateway import DispatchPermit, consume_handoff_from_permit
 from .results import WorkerAuthority, handoff_digest, produce
 
 _COMPLETED = "WORK_COMPLETED"
@@ -57,6 +59,17 @@ _TOOL_NOT_GRANTED = "TOOL_NOT_GRANTED"
 _WORKER_FAILED = "WORKER_FAILED"
 _OUTPUT_REJECTED = "OUTPUT_REJECTED"
 _PAYLOAD_MUTATED = "PAYLOAD_MUTATED"
+_ISOLATION_VIOLATED = "ISOLATION_VIOLATED"
+_RESOURCE_EXHAUSTED = "RESOURCE_EXHAUSTED"
+
+
+class _WorkerIsolationViolation(Exception):
+    """The isolated worker attempted an operation the sandbox forbids."""
+
+
+class _WorkerResourceExhausted(Exception):
+    """The isolated worker exceeded a wall-clock or process resource limit."""
+
 
 
 def _fail(message: str) -> None:
@@ -106,36 +119,37 @@ class WorkerRunner:
     def __init__(self, worker: Worker, *, authority: WorkerAuthority) -> None:
         if not isinstance(worker, Worker):
             _fail("worker must be a Worker")
-        if type(worker.tool) is not str or not worker.tool:
+        worker_type = type(worker)
+        tool = type.__getattribute__(worker_type, "tool")
+        if type(tool) is not str or not tool:
             _fail("worker must declare the tool it implements")
         if not isinstance(authority, WorkerAuthority):
             _fail("authority must be a WorkerAuthority")
         self._worker = worker
+        self._tool = tool
         self._authority = authority
 
     @property
     def tool(self) -> str:
-        return self._worker.tool
+        return self._tool
 
-    def execute(self, handoff: Handoff, *, now: int) -> bytes:
-        """Run the work and hand back a signed result wire.
+    def execute(self, permit: DispatchPermit, *, now: int) -> bytes:
+        """Run a gateway-admitted job and hand back a signed result wire.
 
-        Returns a `FAILED` result for anything the work function does wrong, and
-        raises `ContractError` only when there is no handoff to answer or no
-        signable answer to give.
+        A raw or already validated Handoff is deliberately insufficient. The
+        worker boundary accepts only a capability minted by the independent
+        gateway after revalidation and any required approval consumption.
         """
-        if not isinstance(handoff, Handoff):
-            _fail("handoff is invalid")
+        handoff = consume_handoff_from_permit(permit)
         if type(now) is not int:
             _fail("now must be an integer")
+        if now < permit.admitted_at:
+            _fail("dispatch predates gateway admission")
         # Checked before anything runs: past `expires_at` there is no signable
         # answer at all, so a signed FAILED is not available as a fallback.
         if now >= handoff.expires_at:
             _fail("handoff expired before execution")
-        if now < handoff.issued_at:
-            _fail("handoff is not valid yet")
-
-        if self._worker.tool not in handoff.tools:
+        if self._tool not in handoff.tools:
             return self._refuse(handoff, _TOOL_NOT_GRANTED, now=now)
 
         # The work function gets a copy. `Handoff.payload` is still mutable, and
@@ -144,7 +158,11 @@ class WorkerRunner:
         # the check afterwards catches one that found another way.
         before = handoff_digest(handoff)
         try:
-            output = self._worker.run(dict(handoff.payload))
+            output = self._run_worker(dict(handoff.payload))
+        except _WorkerIsolationViolation:
+            return self._refuse(handoff, _ISOLATION_VIOLATED, now=now)
+        except _WorkerResourceExhausted:
+            return self._refuse(handoff, _RESOURCE_EXHAUSTED, now=now)
         except Exception:  # noqa: BLE001 - a worker failing is an outcome here
             # Deliberately not `str(exc)`: reason_code is a closed shape so that
             # a failure cannot carry text out of the execution domain.
@@ -158,6 +176,14 @@ class WorkerRunner:
                            authority=self._authority, now=now)
         except ContractError:
             return self._refuse(handoff, _OUTPUT_REJECTED, now=now)
+
+    def _run_worker(self, payload: Mapping[str, str]) -> Mapping[str, str]:
+        """Execute the untrusted work function.
+
+        Step 11 overrides this single seam to cross a process boundary while
+        keeping the signing authority in this parent-side runner.
+        """
+        return self._worker.run(payload)
 
     def _refuse(self, handoff: Handoff, reason_code: str, *, now: int) -> bytes:
         return produce(None, handoff=handoff, status="FAILED", reason_code=reason_code,
