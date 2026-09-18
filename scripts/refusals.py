@@ -49,7 +49,8 @@ ROOT = Path(__file__).resolve().parent.parent
 # makes a security decision; leaving one out is a decision to be made openly
 # rather than by forgetting to add it.
 GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
-           "geniusnew/audit.py", "geniusnew/audit_chain.py")
+           "geniusnew/audit.py", "geniusnew/audit_chain.py",
+           "geniusnew/results.py", "geniusnew/keys.py")
 
 _REFUSAL_CALLS = {"_fail"}
 _REFUSAL_RAISES = {"ContractError"}
