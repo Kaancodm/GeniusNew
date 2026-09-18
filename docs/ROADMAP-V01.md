@@ -234,6 +234,20 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
     eine unbegrenzte Menge, die ein Aufrufer wachsen lassen kann, ist ein Speicher-DoS mit
     Beleg.
 
+    Aus dem Review dazugekommen: `admit` gibt die Ausstellungsentscheidung mit zurück,
+    sonst hätte der zwingend zweistufige Approval-Pfad ein signiertes Artefakt ohne
+    protokollierbare Entscheidung. Die Verfügbarkeit der `job_id` wird **vor** dem Gateway
+    erfragt, damit eine Wiederholung kein einmaliges Approval verbrennt, das dann keine
+    Arbeit bezahlt; die atomare Reservierung danach bleibt die eigentliche Autorität.
+    Scheitert die Ausführung, trägt die Ablehnung die Dispatch-Entscheidung mit sich
+    (`DispatchAttempted`) — die Kennung ist verbraucht und der Permit konsumiert, der
+    Versuch hat also stattgefunden. Zeitstempel sind auf das Fenster begrenzt, das
+    `audit.py` annimmt, und zwar dort, wo `now` hereinkommt: eine Ablehnung, die wegen
+    ihrer eigenen Uhr nicht aufzeichenbar wäre, ist keine auditierbare Ablehnung. Und die
+    bereinigte Ablehnung wird **außerhalb** des `except`-Blocks erhoben: `from None` setzt
+    nur `__suppress_context__`, der Originaltext bleibt ein Attribut entfernt liegen — eine
+    Nachricht zu säubern ist nicht dasselbe wie zu säubern.
+
     Ablehnungen tragen geschlossene Reason-Codes mit je einem festen Satz, damit der
     Ablehnungspfad kein Textkanal wird; jede verwendete Aktion liegt im geschlossenen
     Audit-Vokabular von `audit.py` (ein Test prüft das gegen dessen Menge). Fremde
@@ -249,6 +263,14 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
     vertrauenswürdigen serverseitigen Quelle beziehen, nicht die eine von der anderen. Das
     ist eine Verdrahtungs- und Deployment-Frage (Schritte 16 und 17), kein Vertragsdefekt,
     und bleibt bis dahin ausdrücklich offen.
+
+    **Offen bleibt die Reichweite des Ledgers.** Es ist eine Menge in einem Prozess. Ein
+    Neustart oder eine zweite Instanz mit derselben Kennung führt denselben unverfallenen
+    Handoff erneut aus; das Gateway hält kein eigenes Handoff-Ledger und mintet jedes Mal
+    einen frischen Permit. Dauerhafter gemeinsamer Zustand ist eine Persistenzentscheidung,
+    die unter *Bewusst nicht in v0.1* ausdrücklich draußen steht — der Anspruch lautet
+    deshalb „ein Dispatch pro Job-Kennung **pro Instanz**", und ein Test hält genau diese
+    Grenze offen fest, so wie `test_results.py` es für die Einmaligkeit der Annahme tut.
 
     **Offen bleibt außerdem die Prozessgrenze.** In einem Prozess gibt es keine
     Speichergrenze; der Orchestrator hält einen Endpunkt in die Ausführung hinein.
