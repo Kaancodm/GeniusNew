@@ -217,6 +217,25 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
 18. **`scripts/demo.sh`** — ein Befehl. Startet einen Job, gibt die Audit-Chain aus,
     verifiziert sie gegen den festgehaltenen Kopf und sagt deutlich, ob die Prüfung
     bestanden wurde. Die Ausgabe enthält nur, was Schritt 7 erlaubt.
+
+    **Status: steht** (`scripts/demo.sh`, `scripts/demo.py`). Ein Job geht durch alle
+    heute vorhandenen Schichten, die Kette wird gegen den Anker verifiziert, und das
+    Skript endet mit `PASS` oder `FAIL` und einem entsprechenden Exit-Code — eine Demo,
+    die nicht scheitern kann, beweist nichts.
+
+    Die zweite Hälfte ist der eigentliche Punkt: fünf Manipulationsversuche, die alle
+    abgelehnt werden müssen. Jeder davon war einmal ein echtes Loch — drei aus Review,
+    zwei aus eigenem Probing.
+
+    Die Auflage „nur, was Schritt 7 erlaubt" wird als Test geführt, nicht als Vorsatz:
+    `tests/test_demo.py` setzt Kanarienvögel in Root-Secret und Payload und schlägt fehl,
+    wenn einer davon in der Ausgabe auftaucht. Gedruckt werden Digests, keine Inhalte und
+    kein Schlüsselmaterial — auch kein gekürztes Präfix, denn acht Byte eines Schlüssels
+    sind acht Byte.
+
+    Offen bleibt der Anspruch aus dem Ziel: Gateway und Ergebnisprüfung sind hier noch
+    derselbe Prozess, und es gibt keinen HTTP-Eingang. Das sind Schritte 12 bis 14 und 16.
+    Die Demo zeigt den Pfad, den es heute gibt, nicht den aus der Zielbeschreibung.
 19. **CI führt den End-to-End-Test mit aus**, nicht nur die Unit-Tests.
 20. **README-Quickstart**, den ein Fremder ohne Rückfragen befolgen kann. Am besten von
     jemandem gegengelesen, der das Projekt nicht kennt.
