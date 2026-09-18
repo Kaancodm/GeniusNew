@@ -57,6 +57,17 @@ _TOOL_NOT_GRANTED = "TOOL_NOT_GRANTED"
 _WORKER_FAILED = "WORKER_FAILED"
 _OUTPUT_REJECTED = "OUTPUT_REJECTED"
 _PAYLOAD_MUTATED = "PAYLOAD_MUTATED"
+_ISOLATION_VIOLATED = "ISOLATION_VIOLATED"
+_RESOURCE_EXHAUSTED = "RESOURCE_EXHAUSTED"
+
+
+class _WorkerIsolationViolation(Exception):
+    """The isolated worker attempted an operation the sandbox forbids."""
+
+
+class _WorkerResourceExhausted(Exception):
+    """The isolated worker exceeded a wall-clock or process resource limit."""
+
 
 
 def _fail(message: str) -> None:
@@ -144,7 +155,11 @@ class WorkerRunner:
         # the check afterwards catches one that found another way.
         before = handoff_digest(handoff)
         try:
-            output = self._worker.run(dict(handoff.payload))
+            output = self._run_worker(dict(handoff.payload))
+        except _WorkerIsolationViolation:
+            return self._refuse(handoff, _ISOLATION_VIOLATED, now=now)
+        except _WorkerResourceExhausted:
+            return self._refuse(handoff, _RESOURCE_EXHAUSTED, now=now)
         except Exception:  # noqa: BLE001 - a worker failing is an outcome here
             # Deliberately not `str(exc)`: reason_code is a closed shape so that
             # a failure cannot carry text out of the execution domain.
@@ -158,6 +173,14 @@ class WorkerRunner:
                            authority=self._authority, now=now)
         except ContractError:
             return self._refuse(handoff, _OUTPUT_REJECTED, now=now)
+
+    def _run_worker(self, payload: Mapping[str, str]) -> Mapping[str, str]:
+        """Execute the untrusted work function.
+
+        Step 11 overrides this single seam to cross a process boundary while
+        keeping the signing authority in this parent-side runner.
+        """
+        return self._worker.run(payload)
 
     def _refuse(self, handoff: Handoff, reason_code: str, *, now: int) -> bytes:
         return produce(None, handoff=handoff, status="FAILED", reason_code=reason_code,
