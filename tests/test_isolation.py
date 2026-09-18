@@ -92,6 +92,17 @@ class ExplodingWorker(Worker):
         raise RuntimeError("EXCEPTION-TEXT-MUST-STAY-IN-THE-CHILD")
 
 
+class AuthorityProbeWorker(Worker):
+    tool = "summarize"
+
+    def run(self, payload):
+        import gc
+        from geniusnew.results import WorkerAuthority
+
+        present = any(isinstance(value, WorkerAuthority) for value in gc.get_objects())
+        return {"text": "authority-present" if present else "authority-absent"}
+
+
 class IsolationLimitsTest(unittest.TestCase):
     def test_limits_reject_values_outside_the_v01_envelope(self):
         cases = [
@@ -123,7 +134,7 @@ class IsolationLimitsTest(unittest.TestCase):
         self.assertEqual(IsolationLimits(max_file_bytes=4096).max_file_bytes, 4096)
         self.assertEqual(IsolationLimits(max_open_files=16).max_open_files, 16)
 
-    @unittest.skipUnless(hasattr(os, "fork"), "POSIX fork required")
+    @unittest.skipUnless(isolation_module._resource_supported(), "POSIX resource limits required")
     def test_runner_requires_a_limits_object(self):
         authority = WorkerAuthority(result_key=b"a-separate-result-key-of-32bytes!")
         with self.assertRaisesRegex(ContractError, "IsolationLimits"):
@@ -131,15 +142,39 @@ class IsolationLimitsTest(unittest.TestCase):
                 DeterministicSummarizer(), authority=authority, limits="not-limits"
             )
 
-    @unittest.skipUnless(hasattr(os, "fork"), "POSIX fork required")
-    def test_runner_fails_closed_when_fork_support_is_missing(self):
+    @unittest.skipUnless(isolation_module._resource_supported(), "POSIX resource limits required")
+    def test_runner_fails_closed_without_resource_limits(self):
         authority = WorkerAuthority(result_key=b"a-separate-result-key-of-32bytes!")
-        with patch.object(isolation_module.os, "fork", None):
-            with self.assertRaisesRegex(ContractError, "POSIX fork"):
+        with patch.object(isolation_module, "_resource_supported", return_value=False):
+            with self.assertRaisesRegex(ContractError, "POSIX resource limits"):
                 IsolatedWorkerRunner(DeterministicSummarizer(), authority=authority)
 
+    def test_local_worker_classes_are_not_accepted_for_exec_isolation(self):
+        class LocalWorker(Worker):
+            tool = "summarize"
 
-@unittest.skipUnless(hasattr(os, "fork"), "POSIX fork required")
+            def run(self, payload):
+                return {"text": "no"}
+
+        authority = WorkerAuthority(result_key=b"a-separate-result-key-of-32bytes!")
+        with self.assertRaisesRegex(ContractError, "importable"):
+            IsolatedWorkerRunner(LocalWorker(), authority=authority)
+
+    def test_worker_state_keys_must_be_strings(self):
+        worker = DeterministicSummarizer()
+        worker.__dict__[1] = "bad-key"
+        with self.assertRaisesRegex(ContractError, "state keys"):
+            isolation_module._worker_spec(worker)
+
+    def test_the_internal_request_is_bounded_before_starting_a_child(self):
+        worker = ReturningWorker({"text": "x" * 40000})
+        with self.assertRaisesRegex(ContractError, "request is too large"):
+            isolation_module._request(
+                worker, {"text": "payload"}, IsolationLimits()
+            )
+
+
+@unittest.skipUnless(isolation_module._resource_supported(), "POSIX resource limits required")
 class ProcessIsolationTest(unittest.TestCase):
     def setUp(self):
         self.integrity_key = b"phase-2-test-integrity-key-32bytes"
@@ -196,6 +231,13 @@ class ProcessIsolationTest(unittest.TestCase):
         ).execute(self.handoff, now=110)
         self.assertEqual(isolated, direct)
         self.assertTrue(self.taken(isolated).succeeded)
+
+    def test_signing_authority_object_is_not_present_in_the_fresh_interpreter(self):
+        taken = self.taken(
+            self.runner(AuthorityProbeWorker()).execute(self.handoff, now=110)
+        )
+        self.assertTrue(taken.succeeded)
+        self.assertEqual(taken.output, {"text": "authority-absent"})
 
     def test_network_creation_is_denied_and_recorded(self):
         taken = self.taken(self.runner(NetworkWorker()).execute(self.handoff, now=110))
