@@ -85,6 +85,19 @@ class GatewayTest(unittest.TestCase):
         taken = accept(wire, handoff=permit.handoff, authority=authority, now=120)
         self.assertTrue(taken.succeeded)
 
+    def test_dispatch_permit_is_single_use_even_across_runner_instances(self):
+        permit = self.admit()
+        authority = WorkerAuthority(result_key=b"a-separate-result-key-of-32bytes!")
+        first = WorkerRunner(DeterministicSummarizer(), authority=authority)
+        second = WorkerRunner(DeterministicSummarizer(), authority=authority)
+
+        wire = first.execute(permit, now=110)
+        self.assertTrue(
+            accept(wire, handoff=permit.handoff, authority=authority, now=120).succeeded
+        )
+        with self.assertRaisesRegex(ContractError, "already been consumed"):
+            second.execute(permit, now=111)
+
     def test_tampered_wrong_job_wrong_subject_and_expired_wires_fail_closed(self):
         cases = [
             lambda: self.gateway.admit(
@@ -216,6 +229,9 @@ class GatewayTest(unittest.TestCase):
         for handoff in (None, "handoff", 42, {}):
             with self.subTest(handoff=type(handoff)), self.assertRaises(ContractError):
                 replace(permit, handoff=handoff)
+        for use in (None, "use", 42, {}):
+            with self.subTest(use=type(use)), self.assertRaises(ContractError):
+                replace(permit, use=use)
         for digest in ("", "z" * 64, "A" * 64, "a" * 63, None, 42):
             with self.subTest(digest=digest), self.assertRaises(ContractError):
                 replace(permit, handoff_sha256=digest)
