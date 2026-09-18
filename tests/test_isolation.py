@@ -4,8 +4,9 @@ import time
 import unittest
 from unittest.mock import patch
 
-from geniusnew.contracts import ContractError, Grant, Policy, issue, validate
+from geniusnew.contracts import ContractError, Grant, Policy, canonical, issue, validate
 import geniusnew.isolation as isolation_module
+import geniusnew.isolation_child as isolation_child_module
 from geniusnew.isolation import IsolationLimits, IsolatedWorkerRunner
 from geniusnew.results import WorkerAuthority, accept
 from geniusnew.workers import DeterministicSummarizer, Worker, WorkerRunner
@@ -191,6 +192,101 @@ class IsolationLimitsTest(unittest.TestCase):
             isolation_module._request(
                 worker, {"text": "payload"}, IsolationLimits()
             )
+
+
+class IsolationChildContractTest(unittest.TestCase):
+    def request_value(self, **over):
+        value = {
+            "version": 1,
+            "worker": {
+                "module": "geniusnew.workers",
+                "qualname": "DeterministicSummarizer",
+                "state": {},
+                "tool": "summarize",
+            },
+            "payload": {"text": "hello"},
+            "limits": {
+                "wall_seconds": 2.0,
+                "cpu_seconds": 1,
+                "memory_bytes": 512 * 1024 * 1024,
+                "max_file_bytes": 1024 * 1024,
+                "max_open_files": 64,
+            },
+        }
+        value.update(over)
+        return value
+
+    def test_request_size_guard_rejects_an_otherwise_valid_oversized_request(self):
+        value = self.request_value(payload={"text": "x" * 40000})
+        wire = canonical(value)
+        self.assertGreater(len(wire), isolation_module._MAX_CHILD_REQUEST_BYTES)
+        with self.assertRaisesRegex(ContractError, "invalid isolation request"):
+            isolation_child_module._decode_request(wire)
+
+    def test_noncanonical_request_is_rejected_by_its_own_check(self):
+        import json
+
+        value = self.request_value()
+        wire = json.dumps(value, indent=1, sort_keys=True).encode("ascii")
+        self.assertNotEqual(wire, canonical(value))
+        with self.assertRaisesRegex(ContractError, "invalid isolation request"):
+            isolation_child_module._decode_request(wire)
+
+    def test_request_version_and_exact_top_level_keys_are_enforced(self):
+        with self.assertRaisesRegex(ContractError, "invalid isolation request"):
+            isolation_child_module._decode_request(
+                canonical(self.request_value(version=2))
+            )
+        extra = self.request_value()
+        extra["extra"] = "no"
+        with self.assertRaisesRegex(ContractError, "invalid isolation request"):
+            isolation_child_module._decode_request(canonical(extra))
+
+    def test_worker_container_must_actually_be_a_dict(self):
+        worker_as_list = ["module", "qualname", "state", "tool"]
+        with self.assertRaisesRegex(ContractError, "invalid isolation worker"):
+            isolation_child_module._decode_request(
+                canonical(self.request_value(worker=worker_as_list))
+            )
+
+    def test_worker_keys_are_exact(self):
+        worker = {
+            "module": "geniusnew.workers",
+            "qualname": "DeterministicSummarizer",
+            "tool": "summarize",
+        }
+        with self.assertRaisesRegex(ContractError, "invalid isolation worker"):
+            isolation_child_module._decode_request(
+                canonical(self.request_value(worker=worker))
+            )
+
+    def good_spec(self, **over):
+        spec = {
+            "module": "geniusnew.workers",
+            "qualname": "DeterministicSummarizer",
+            "state": {},
+            "tool": "summarize",
+        }
+        spec.update(over)
+        return spec
+
+    def test_worker_identity_fields_must_be_nonempty_strings(self):
+        with self.assertRaisesRegex(ContractError, "invalid isolation worker"):
+            isolation_child_module._resolve_worker(self.good_spec(module=42))
+
+    def test_worker_state_must_be_a_string_keyed_dict(self):
+        with self.assertRaisesRegex(ContractError, "invalid isolation worker"):
+            isolation_child_module._resolve_worker(self.good_spec(state={1: "bad"}))
+
+    def test_resolved_target_must_be_a_worker_class(self):
+        with self.assertRaisesRegex(ContractError, "invalid isolation worker"):
+            isolation_child_module._resolve_worker(
+                self.good_spec(module="builtins", qualname="str")
+            )
+
+    def test_tool_identity_cannot_change_across_exec(self):
+        with self.assertRaisesRegex(ContractError, "tool changed"):
+            isolation_child_module._resolve_worker(self.good_spec(tool="other"))
 
 
 @unittest.skipUnless(isolation_module._resource_supported(), "POSIX resource limits required")
