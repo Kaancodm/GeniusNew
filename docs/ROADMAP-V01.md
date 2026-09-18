@@ -118,6 +118,28 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
 
 10. **Worker-Schnittstelle** plus ein deterministischer Trivial-Worker als Referenz.
 
+    **Status: Schnittstelle steht** (`geniusnew/workers.py`). Die interessante Hälfte ist
+    die Grenze, nicht der Worker: `WorkerRunner` hält die Signaturautorität, prüft den
+    Grant, ruft die Arbeitsfunktion, validiert was zurückkommt und signiert. Ein `Worker`
+    sieht weder Schlüssel noch Handoff noch Identität — nur eine Kopie der Payload. Was
+    er erreichen kann, erreicht auch ein Angreifer, der ihn übernimmt.
+
+    Default-Deny gilt auch hier: ein Worker, dessen Tool nicht im Grant steht, läuft
+    nicht, und die Ablehnung wird als signiertes `FAILED` festgehalten statt verschwiegen.
+    Das Gateway aus Schritt 12 sollte vorher greifen — eine Grenze, die sich darauf
+    verlässt, ist keine.
+
+    Ein Fehlschlag ist ein Ergebnis, kein Absturz: wirft die Arbeitsfunktion oder liefert
+    sie die falsche Form, entsteht ein signiertes `FAILED`. Der Ausnahmetext erreicht das
+    Ergebnis **nie** — `reason_code` ist ein geschlossener Code, damit der Fehlerpfad kein
+    Textkanal aus der Ausführungsdomäne wird. `KeyboardInterrupt` und `SystemExit` werden
+    dagegen durchgereicht: ein Shutdown ist kein Werkzeugfehler.
+
+    Ein abgelaufener Handoff hat keine signierbare Antwort — `produce` verweigert die
+    Signatur nach `expires_at`, also gibt es auch kein `FAILED` als Rückfallebene. Der
+    Runner lehnt vorher ab, **bevor** die Arbeit läuft. Das ist der dritte der vier
+    TTL-Kontrollpunkte aus Schritt 15.
+
 11. **Isolationsgrenze auf Prozessebene** — kein Netz, kein Schreibzugriff außerhalb eines
     temporären Verzeichnisses, Zeitlimit, Ressourcenlimit. Nachweisbar durch Tests, die
     den Ausbruch versuchen.
