@@ -48,14 +48,23 @@ der folgenden Bedingungen zutrifft:
   stimmen nicht mit dem serverseitigen Grant und der Policy überein.
 - Der Aussteller ist unbekannt, die Policy enthält unbekannte Tools oder Profile,
   oder der Handoff liegt vor seiner Ausgabezeit beziehungsweise nach Ablaufzeit.
-- Der Zustand lautet `PENDING_APPROVAL`.
+- Für den direkten `validate()`-Pfad lautet der Zustand `PENDING_APPROVAL`.
+
+Approval-pflichtige Handoffs werden nicht umsigniert oder in-place auf
+`APPROVED` geändert. Das Gateway validiert denselben unveränderten Wire mit
+`validate_pending()`, konsumiert einen einmaligen Approval-Token gegen den daraus
+abgeleiteten Scope und mintet anschließend einen separaten `DispatchPermit`.
+`WorkerRunner` akzeptiert nur diesen Permit. Ein nackter `Handoff` mit
+`PENDING_APPROVAL` bleibt daher nicht dispatchfähig; die Approval-Entscheidung lebt
+außerhalb des signierten Handoff-Bodys und ist über den Permit/Receipt gebunden.
 
 Eine HMAC-Signatur ersetzt die serverseitige Policy-Bindung nicht: Auch ein mit
 dem korrekten Schlüssel signierter Handoff wird abgelehnt, sobald er von der
 aktuellen Policy abweicht.
 
-## Nicht Teil von v1
+## Weiterführende Grenzen
 
-V1 stellt nur die Contract-Grenze bereit. Ein Approval-Token mit Scope und
-Einmalverbrauch, Audit-Persistenz, Worker-Ausführung und Ergebnisvalidierung
-werden in späteren, getrennt geprüften Phasen ergänzt.
+Approval-Token mit Scope und Einmalverbrauch, Gateway-Permits, Worker-Ausführung,
+Prozessisolation und Ergebnisvalidierung sind inzwischen als getrennte Grenzen im
+Repository implementiert. Persistente Audit-/Deployment-Infrastruktur und stärkere
+asymmetrische Schlüsseltrennung bleiben spätere Phasen.
