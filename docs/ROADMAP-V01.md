@@ -189,6 +189,95 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
     geteilte veränderliche Autorität. Er trifft Entscheidungen, er bestätigt sie nicht
     selbst.
 
+    **Status: steht** (`geniusnew/orchestrator.py`). Der Schritt wurde zweimal unabhängig
+    gebaut; dieser Stand führt beide zusammen. Das Routing-Modell stammt aus
+    `feat/orchestrator`, der Zustand, die Entscheidungssätze und die Permit-Bindung aus
+    `feat/orchestrator-decisions`.
+
+    Er entscheidet dreierlei und hält jede Entscheidung fest: ob ein Auftrag zulässig ist,
+    welchen konfigurierten Worker die vertrauenswürdige Policy dafür benennt, und dass ein
+    Dispatch stattgefunden hat. Das signierte Ergebnis gibt er **unbewertet** zurück — er
+    hält keinen Ergebnisschlüssel und ruft `accept` nie auf, kann seinen eigenen Job also
+    nicht für gelungen erklären. Das ist Schritt 14, und §8 verlangt, dass es eine andere
+    Rolle bleibt.
+
+    Umgekehrt kann er seinen Handoff nicht selbst zulassen: einen `DispatchPermit` mintet
+    nur `gateway.py`, und `WorkerRunner.execute` nimmt nichts anderes an. Prüfbar ist für
+    ihn nur, dass der zurückgegebene Permit **genau den eingereichten Wire** bindet — sonst
+    liefe der Worker einen Vertrag, den dieser Orchestrator nie abgeschickt hat, während
+    der zurückgegebene Wire weiter den anderen beschriebe.
+
+    Die Zuordnung ist eine Tatsache des Grants: der Grant benennt die `worker_agent_id`,
+    also ist Routing ein Nachschlagen auf diese Kennung und nie eine Wahl zwischen
+    Kandidaten. Das Tool des konfigurierten Endpunkts muss trotzdem im Grant stehen — ein
+    Worker unter der richtigen Agent-Kennung, der ein anderes Tool implementiert, erreichte
+    sonst eine Fähigkeit, die die Policy nie erteilt hat. Beides wird **vor** dem Gateway
+    geprüft, damit ein fehlgeleiteter Auftrag kein einmaliges Approval verbrennt.
+
+    Er signiert mit einem **eigenen** Integritätsschlüssel statt in das Gateway zu greifen.
+    Handoff v1 ist HMAC, die Bytes sind heute dieselben; den Schlüssel als eigene Eingabe
+    zu nehmen ist das, was getrennte Schlüssel überhaupt möglich hält und Rotation nicht zu
+    einer gemeinsamen Entscheidung zweier Rollen macht.
+
+    Deterministisch: keine Uhr, keine Entropie — `now` ist ein Argument. Die Registry wird
+    bei der Konstruktion in eine unveränderliche Abbildung kopiert, ein Aufrufer kann
+    danach weder Worker hinzufügen noch das Routing ändern noch einen anderen Runner in den
+    Dispatch-Pfad schmuggeln. **Kein Failover**, denn ein zweiter Versuch nach einer
+    Ablehnung ist genau der Rückfall, der aus Default-Deny ein Default-Retry macht.
+
+    Der einzige Zustand ist das Job-Ledger. Eine `job_id` wird verbraucht, wenn ein Permit
+    vorliegt und die Arbeit gleich läuft — nicht vorher: ein vom Gateway abgelehnter
+    Auftrag verliert seine Kennung sonst endgültig, und gerade beim fehlenden
+    Approval-Token ist das Approval an einen Wire gebunden, der genau diese Kennung trägt.
+    Was gelaufen ist, bleibt verbraucht, auch wenn der Dispatch scheitert; sie wieder
+    freizugeben machte das Ledger zum Replay-Fenster statt zum Nachweis. Es ist beschränkt;
+    eine unbegrenzte Menge, die ein Aufrufer wachsen lassen kann, ist ein Speicher-DoS mit
+    Beleg.
+
+    Aus dem Review dazugekommen: `admit` gibt die Ausstellungsentscheidung mit zurück,
+    sonst hätte der zwingend zweistufige Approval-Pfad ein signiertes Artefakt ohne
+    protokollierbare Entscheidung. Die Verfügbarkeit der `job_id` wird **vor** dem Gateway
+    erfragt, damit eine Wiederholung kein einmaliges Approval verbrennt, das dann keine
+    Arbeit bezahlt; die atomare Reservierung danach bleibt die eigentliche Autorität.
+    Scheitert die Ausführung, trägt die Ablehnung die Dispatch-Entscheidung mit sich
+    (`DispatchAttempted`) — die Kennung ist verbraucht und der Permit konsumiert, der
+    Versuch hat also stattgefunden. Zeitstempel sind auf das Fenster begrenzt, das
+    `audit.py` annimmt, und zwar dort, wo `now` hereinkommt: eine Ablehnung, die wegen
+    ihrer eigenen Uhr nicht aufzeichenbar wäre, ist keine auditierbare Ablehnung. Und die
+    bereinigte Ablehnung wird **außerhalb** des `except`-Blocks erhoben: `from None` setzt
+    nur `__suppress_context__`, der Originaltext bleibt ein Attribut entfernt liegen — eine
+    Nachricht zu säubern ist nicht dasselbe wie zu säubern.
+
+    Ablehnungen tragen geschlossene Reason-Codes mit je einem festen Satz, damit der
+    Ablehnungspfad kein Textkanal wird; jede verwendete Aktion liegt im geschlossenen
+    Audit-Vokabular von `audit.py` (ein Test prüft das gegen dessen Menge). Fremde
+    Ablehnungen — die des Gateways, die der Worker-Grenze — werden **unverändert**
+    durchgereicht: die Entscheidung einer anderen Instanz als eigene zu protokollieren wäre
+    derselbe Fehler in die andere Richtung. `geniusnew/orchestrator.py` gehört zum
+    Refusal-Mutation-Guard der CI, der dafür `_deny` gelernt hat; ohne das wären alle
+    Admission-Ablehnungen für ihn unsichtbar gewesen, während das Modul in der Liste stand.
+
+    **Offen bleibt die Herkunft der Policy.** Das Gateway prüft den Wire unabhängig,
+    bekommt die Policy aber als Parameter — in dieser Verdrahtung vom Orchestrator.
+    Unabhängigkeit verlangt, dass beide Rollen dieselbe Policy aus derselben
+    vertrauenswürdigen serverseitigen Quelle beziehen, nicht die eine von der anderen. Das
+    ist eine Verdrahtungs- und Deployment-Frage (Schritte 16 und 17), kein Vertragsdefekt,
+    und bleibt bis dahin ausdrücklich offen.
+
+    **Offen bleibt die Reichweite des Ledgers.** Es ist eine Menge in einem Prozess. Ein
+    Neustart oder eine zweite Instanz mit derselben Kennung führt denselben unverfallenen
+    Handoff erneut aus; das Gateway hält kein eigenes Handoff-Ledger und mintet jedes Mal
+    einen frischen Permit. Dauerhafter gemeinsamer Zustand ist eine Persistenzentscheidung,
+    die unter *Bewusst nicht in v0.1* ausdrücklich draußen steht — der Anspruch lautet
+    deshalb „ein Dispatch pro Job-Kennung **pro Instanz**", und ein Test hält genau diese
+    Grenze offen fest, so wie `test_results.py` es für die Einmaligkeit der Annahme tut.
+
+    **Offen bleibt außerdem die Prozessgrenze.** In einem Prozess gibt es keine
+    Speichergrenze; der Orchestrator hält einen Endpunkt in die Ausführung hinein.
+    Nachweisbar ist, was an der API gilt: er hält keine fremde Autorität in seinem eigenen
+    Zustand, kann kein Permit minten und kein Ergebnis annehmen. Die Trennung nach §8 ist
+    in v0.1 eine logische Rollentrennung, keine Speichertrennung.
+
 14. **Ergebnisprüfung** — unabhängige Annahme: Signatur, Integrität, TTL. Weder Worker
     noch Orchestrator validieren ihr eigenes Ergebnis.
 
