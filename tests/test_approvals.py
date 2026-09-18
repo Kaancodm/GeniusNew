@@ -135,5 +135,96 @@ class ApprovalTest(unittest.TestCase):
         self.assertNotIn("b'g'", repr(grant))
 
 
+class UncoveredApprovalRefusalsTest(ApprovalTest):
+    """One test per refusal that `scripts/refusals.py` found nothing covering."""
+
+    def raw_scope(self, **over):
+        fields = dict(handoff_sha256='a' * 64, handoff_expires_at=160, job_id='job-demo',
+                      user_id='user-demo', worker_agent_id='worker-demo', risk_tier='high',
+                      policy_version='policy-v1', action='EXECUTE_HANDOFF')
+        fields.update(over)
+        return ApprovalScope(**fields)
+
+    def test_a_scope_field_may_not_be_empty(self):
+        for field in ('handoff_sha256', 'job_id', 'user_id', 'worker_agent_id',
+                      'risk_tier', 'policy_version', 'action'):
+            for value in ('', None, 42):
+                with self.subTest(field=field, value=value), self.assertRaises(ContractError):
+                    self.raw_scope(**{field: value})
+
+    def test_the_handoff_expiry_in_a_scope_must_be_positive(self):
+        for expires_at in (0, -1, -10 ** 6):
+            with self.subTest(expires_at=expires_at), self.assertRaises(ContractError):
+                self.raw_scope(handoff_expires_at=expires_at)
+
+    def test_the_scope_digest_must_be_a_digest(self):
+        for digest in ('z' * 64, 'A' * 64, 'abc', 'a' * 63, 'a' * 65):
+            with self.subTest(digest=digest[:8]), self.assertRaises(ContractError):
+                self.raw_scope(handoff_sha256=digest)
+
+    def test_a_scope_may_only_authorize_the_one_action(self):
+        for action in ('EXECUTE', 'execute_handoff', 'DELETE_EVERYTHING', 'ANY'):
+            with self.subTest(action=action), self.assertRaises(ContractError):
+                self.raw_scope(action=action)
+
+    def test_granting_needs_a_scope_object_at_all(self):
+        """Without the guard this reaches `scope.origin` and escapes as AttributeError."""
+        store = ApprovalStore()
+        for scope in (None, 'scope', 42, {}, self.scope().to_dict()):
+            with self.subTest(scope=type(scope)), self.assertRaises(ContractError):
+                store.grant(scope, now=101, ttl_seconds=60)
+
+    def test_an_expired_handoff_cannot_be_granted_an_approval(self):
+        scope = self.scope()
+        store = ApprovalStore()
+        for now in (scope.handoff_expires_at, scope.handoff_expires_at + 1):
+            with self.subTest(now=now), self.assertRaises(ContractError):
+                store.grant(scope, now=now, ttl_seconds=60)
+        self.assertTrue(store.grant(scope, now=scope.handoff_expires_at - 1,
+                                    ttl_seconds=60).token)
+
+    def test_a_repeated_token_is_refused_rather_than_overwriting_a_record(self):
+        """A token source that repeats itself must not silently replace a grant."""
+        fixed = b'the-same-token-bytes-every-time!!'
+        store = ApprovalStore(token_source=lambda: fixed)
+        store.grant(self.scope(), now=101, ttl_seconds=60)
+        with self.assertRaisesRegex(ContractError, 'collision'):
+            store.grant(self.scope(), now=101, ttl_seconds=60)
+
+    def test_consuming_fails_closed_on_a_malformed_token_or_scope(self):
+        scope = self.scope()
+        store = ApprovalStore()
+        grant = store.grant(scope, now=101, ttl_seconds=60)
+        for token in (None, 'token', 42, b'', b'too-short'):
+            with self.subTest(token=repr(token)[:20]), self.assertRaises(ContractError):
+                store.consume(token, scope, now=102)
+        for bad_scope in (None, 'scope', 42, {}, scope.to_dict()):
+            with self.subTest(scope=type(bad_scope)), self.assertRaises(ContractError):
+                store.consume(grant.token, bad_scope, now=102)
+        self.assertTrue(store.consume(grant.token, scope, now=102))
+
+    def test_a_token_cannot_be_consumed_against_a_different_scope(self):
+        """The binding that stops an approval for one handoff authorizing another."""
+        store = ApprovalStore()
+        grant = store.grant(self.scope(), now=101, ttl_seconds=60)
+        other_wire = issue({'text': 'A different job'}, subject='subject-demo',
+                           job_id='job-other', policy=self.policy,
+                           integrity_key=self.key, now=100)
+        other_scope = self.scope(wire=other_wire, job_id='job-other')
+        self.assertNotEqual(other_scope.handoff_sha256, self.scope().handoff_sha256)
+        with self.assertRaisesRegex(ContractError, 'scope'):
+            store.consume(grant.token, other_scope, now=102)
+        self.assertTrue(store.consume(grant.token, self.scope(), now=102))
+
+    def test_a_token_cannot_be_consumed_before_it_was_issued(self):
+        scope = self.scope()
+        store = ApprovalStore()
+        grant = store.grant(scope, now=110, ttl_seconds=60)
+        for now in (109, 0, -1):
+            with self.subTest(now=now), self.assertRaises(ContractError):
+                store.consume(grant.token, scope, now=now)
+        self.assertTrue(store.consume(grant.token, scope, now=110))
+
+
 if __name__ == '__main__':
     unittest.main()
