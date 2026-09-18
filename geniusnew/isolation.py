@@ -2,23 +2,23 @@
 
 Roadmap step 11 requires a process boundary with no network access, no writes
 outside a temporary directory, and explicit time/resource limits. The signing
-key stays in the parent process: only ``Worker.run(payload)`` crosses this
-boundary, and the parent validates and signs whatever comes back.
+key stays in the parent process: only a description of the worker plus its
+payload crosses an exec boundary, and the parent validates and signs whatever
+comes back.
 
-This is deliberately a v0.1 process sandbox, not a microVM. The boundary uses
-POSIX resource limits plus Python's audit-hook mechanism, so it constrains
-ordinary Python worker code and the escape attempts covered by the tests. It
-does not claim to contain hostile native code or a preloaded FFI capable of raw
-syscalls; that stronger boundary is outside the v0.1 scope.
+This is deliberately a v0.1 process sandbox, not a microVM. The boundary uses a
+fresh Python interpreter, POSIX resource limits and Python's audit-hook
+mechanism. It does not claim to contain hostile native code or raw syscalls; the
+stronger OS boundary belongs after v0.1.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import json
 import os
 import select
-import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -34,6 +34,7 @@ from .workers import (
 )
 
 _MAX_CHILD_MESSAGE_BYTES = 32 * 1024
+_MAX_CHILD_REQUEST_BYTES = 32 * 1024
 _WRITE_FLAGS = (
     getattr(os, "O_WRONLY", 0)
     | getattr(os, "O_RDWR", 0)
@@ -71,12 +72,7 @@ def _fail(message: str) -> None:
 
 @dataclass(frozen=True)
 class IsolationLimits:
-    """Bound one worker process.
-
-    Hard limits are intentionally small because v0.1 workers are deterministic
-    pure functions. Raising them later is a deployment decision, not something
-    untrusted input may request.
-    """
+    """Bound one worker process."""
 
     wall_seconds: float = 2.0
     cpu_seconds: int = 1
@@ -106,7 +102,15 @@ class _SandboxDenied(BaseException):
 
 
 class _RemoteWorkerFailed(Exception):
-    """The worker raised inside the child process."""
+    """The worker raised inside the fresh interpreter."""
+
+
+def _resource_supported() -> bool:
+    try:
+        import resource  # noqa: F401
+    except ImportError:
+        return False
+    return True
 
 
 def _path_is_inside(root: str, value: Any) -> bool:
@@ -130,12 +134,7 @@ def _open_is_write(mode: Any, flags: Any) -> bool:
 
 
 def _audit_hook(root: str, state: dict[str, bool]):
-    """Return the child-side audit hook.
-
-    Audit hooks cannot be removed through Python's public API. The state bit is
-    separate from the exception so a worker that catches ``BaseException``
-    cannot turn a forbidden attempt into a successful result.
-    """
+    """Return the child-side audit hook."""
 
     def deny() -> None:
         state["violated"] = True
@@ -154,8 +153,8 @@ def _audit_hook(root: str, state: dict[str, bool]):
             deny()
         if event == "open" and len(args) >= 3 and _open_is_write(args[1], args[2]):
             # Low-level os.open write calls are refused entirely because the
-            # audit event does not expose dir_fd; otherwise a worker could open
-            # an outside directory read-only and write relative to that fd.
+            # audit event does not expose dir_fd. Normal builtins.open writes
+            # are accepted only under the empty per-job sandbox root.
             if args[1] is None or not _path_is_inside(root, args[0]):
                 deny()
 
@@ -165,7 +164,7 @@ def _audit_hook(root: str, state: dict[str, bool]):
 def _set_resource_limits(limits: IsolationLimits) -> None:
     try:
         import resource
-    except ImportError as exc:  # pragma: no cover - exercised by support check
+    except ImportError as exc:  # pragma: no cover - parent refuses first
         raise ContractError("process isolation requires POSIX resource limits") from exc
 
     resource.setrlimit(resource.RLIMIT_CPU, (limits.cpu_seconds, limits.cpu_seconds))
@@ -175,96 +174,108 @@ def _set_resource_limits(limits: IsolationLimits) -> None:
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
 
-def _write_message(fd: int, message: dict[str, Any]) -> None:
+def _worker_spec(worker: Worker) -> dict[str, Any]:
+    cls = type(worker)
+    module = type.__getattribute__(cls, "__module__")
+    qualname = type.__getattribute__(cls, "__qualname__")
+    state = dict(object.__getattribute__(worker, "__dict__"))
+    tool = type.__getattribute__(cls, "tool")
+    if "<locals>" in qualname or not module or not qualname:
+        _fail("isolated worker class must be importable by module and qualified name")
+    if any(type(key) is not str for key in state):
+        _fail("isolated worker state keys must be strings")
     try:
-        data = canonical(message)
-    except ContractError:
-        data = canonical({"kind": "output_rejected"})
-    if len(data) > _MAX_CHILD_MESSAGE_BYTES:
-        data = canonical({"kind": "output_rejected"})
-    view = memoryview(data)
-    while view:
-        written = os.write(fd, view)
-        view = view[written:]
+        canonical(state)
+    except ContractError as exc:
+        raise ContractError("isolated worker state must be canonical JSON") from exc
+    return {
+        "module": module,
+        "qualname": qualname,
+        "state": state,
+        "tool": tool,
+    }
 
 
-def _child_main(worker: Worker, payload: Mapping[str, str], write_fd: int,
-                root: str, limits: IsolationLimits) -> None:
+def _python_path() -> str:
+    paths: list[str] = []
+    for value in sys.path:
+        if not isinstance(value, str):
+            continue
+        path = os.getcwd() if value == "" else os.path.abspath(value)
+        if path not in paths:
+            paths.append(path)
+    return os.pathsep.join(paths)
+
+
+def _request(worker: Worker, payload: Mapping[str, str],
+             limits: IsolationLimits) -> bytes:
+    value = {
+        "version": 1,
+        "worker": _worker_spec(worker),
+        "payload": dict(payload),
+        "limits": asdict(limits),
+    }
+    data = canonical(value)
+    if len(data) > _MAX_CHILD_REQUEST_BYTES:
+        _fail("isolated worker request is too large")
+    return data
+
+
+def _minimal_environment() -> dict[str, str]:
+    return {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": _python_path(),
+    }
+
+
+def _kill_process(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is None:
+        process.kill()
     try:
-        _set_resource_limits(limits)
-        os.chdir(root)
-        os.environ.clear()
-        os.environ.update({"HOME": root, "TMPDIR": root, "TEMP": root, "TMP": root})
-        tempfile.tempdir = root
-        state = {"violated": False}
-        sys.addaudithook(_audit_hook(root, state))
-
-        try:
-            output = worker.run(dict(payload))
-            if state["violated"]:
-                _write_message(write_fd, {"kind": "isolation_violated"})
-            else:
-                _write_message(write_fd, {"kind": "ok", "output": output})
-        except _SandboxDenied:
-            _write_message(write_fd, {"kind": "isolation_violated"})
-        except MemoryError:
-            _write_message(write_fd, {"kind": "resource_exhausted"})
-        except Exception:
-            _write_message(write_fd, {"kind": "worker_failed"})
-    except BaseException:
-        # Initialization and audit failures are fail-closed. No exception text
-        # crosses the process boundary.
-        try:
-            _write_message(write_fd, {"kind": "isolation_violated"})
-        except BaseException:
-            pass
-    finally:
-        try:
-            os.close(write_fd)
-        finally:
-            os._exit(0)
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
 
 
-def _kill_and_reap(pid: int) -> None:
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    try:
-        os.waitpid(pid, 0)
-    except ChildProcessError:
-        pass
-
-
-def _read_child(read_fd: int, pid: int, wall_seconds: float) -> tuple[bytes, int]:
+def _read_process(process: subprocess.Popen[bytes],
+                  wall_seconds: float) -> tuple[bytes, int]:
+    assert process.stdout is not None
+    fd = process.stdout.fileno()
     deadline = time.monotonic() + wall_seconds
     chunks: list[bytes] = []
     size = 0
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            _kill_and_reap(pid)
+            _kill_process(process)
             raise _WorkerResourceExhausted()
-        ready, _, _ = select.select((read_fd,), (), (), remaining)
+        ready, _, _ = select.select((fd,), (), (), remaining)
         if not ready:
-            _kill_and_reap(pid)
+            _kill_process(process)
             raise _WorkerResourceExhausted()
-        chunk = os.read(read_fd, 4096)
+        chunk = os.read(fd, 4096)
         if not chunk:
             break
         size += len(chunk)
         if size > _MAX_CHILD_MESSAGE_BYTES:
-            _kill_and_reap(pid)
+            _kill_process(process)
             raise _WorkerIsolationViolation()
         chunks.append(chunk)
-    _, status = os.waitpid(pid, 0)
+
+    remaining = max(0.01, deadline - time.monotonic())
+    try:
+        status = process.wait(timeout=remaining)
+    except subprocess.TimeoutExpired:
+        _kill_process(process)
+        raise _WorkerResourceExhausted() from None
     return b"".join(chunks), status
 
 
 def _decode_child_message(data: bytes, status: int) -> Any:
-    if os.WIFSIGNALED(status):
+    if status < 0:
         raise _WorkerResourceExhausted()
-    if not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
+    if status != 0:
         raise _RemoteWorkerFailed()
     try:
         value = json.loads(data.decode("ascii"))
@@ -289,42 +300,56 @@ def _decode_child_message(data: bytes, status: int) -> Any:
 
 def _run_isolated(worker: Worker, payload: Mapping[str, str],
                   limits: IsolationLimits) -> Any:
+    request = _request(worker, payload, limits)
     with tempfile.TemporaryDirectory(prefix="geniusnew-worker-") as root:
-        root = os.path.realpath(root)
-        read_fd, write_fd = os.pipe()
-        pid = os.fork()
-        if pid == 0:
-            os.close(read_fd)
-            _child_main(worker, payload, write_fd, root, limits)
-        os.close(write_fd)
+        process = subprocess.Popen(
+            [sys.executable, "-m", "geniusnew.isolation_child", os.path.realpath(root)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            env=_minimal_environment(),
+        )
+        assert process.stdin is not None
         try:
-            data, status = _read_child(read_fd, pid, float(limits.wall_seconds))
-        finally:
-            os.close(read_fd)
+            process.stdin.write(request)
+            process.stdin.close()
+        except (BrokenPipeError, OSError):
+            _kill_process(process)
+            raise _WorkerIsolationViolation() from None
+        data, status = _read_process(process, float(limits.wall_seconds))
         return _decode_child_message(data, status)
 
 
-class IsolatedWorkerRunner(WorkerRunner):
-    """Run only the work function in a constrained child process.
+def _write_message(fd: int, message: dict[str, Any]) -> None:
+    try:
+        data = canonical(message)
+    except ContractError:
+        data = canonical({"kind": "output_rejected"})
+    if len(data) > _MAX_CHILD_MESSAGE_BYTES:
+        data = canonical({"kind": "output_rejected"})
+    view = memoryview(data)
+    while view:
+        written = os.write(fd, view)
+        view = view[written:]
 
-    The ``WorkerAuthority`` remains in the parent process inherited from
-    ``WorkerRunner`` and never crosses into ``Worker.run``.
-    """
+
+class IsolatedWorkerRunner(WorkerRunner):
+    """Run only the work function in a constrained fresh interpreter."""
 
     def __init__(self, worker: Worker, *, authority: WorkerAuthority,
                  limits: IsolationLimits | None = None) -> None:
-        if not callable(getattr(os, "fork", None)):
-            _fail("process isolation requires POSIX fork support")
+        if not _resource_supported():
+            _fail("process isolation requires POSIX resource limits")
         if limits is None:
             limits = IsolationLimits()
         if not isinstance(limits, IsolationLimits):
             _fail("limits must be IsolationLimits")
-        try:
-            import resource  # noqa: F401
-        except ImportError as exc:
-            raise ContractError("process isolation requires POSIX resource limits") from exc
-        self._limits = limits
         super().__init__(worker, authority=authority)
+        # Capture only JSON data needed to reconstruct the worker; do not pass
+        # this runner or its signing authority across the exec boundary.
+        _worker_spec(worker)
+        self._limits = limits
 
     @property
     def limits(self) -> IsolationLimits:
