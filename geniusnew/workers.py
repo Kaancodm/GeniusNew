@@ -22,9 +22,10 @@ payload and nothing else.
 
 A handoff carries the tools its grant allows. The runner refuses to execute a
 worker whose tool is not among them, and records that refusal as a signed
-`FAILED` result rather than staying silent. A gateway should have caught it
-first (step 12), but a boundary that trusts the caller to have checked is not a
-boundary.
+`FAILED` result rather than staying silent. Step 12 now makes the upstream
+gateway mandatory as well: `execute` accepts only a gateway-minted
+`DispatchPermit`, never a raw or already validated `Handoff`. The local tool
+check remains defence in depth after that independent admission.
 
 ## Failure is an outcome, not a crash
 
