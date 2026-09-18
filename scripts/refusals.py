@@ -50,7 +50,8 @@ ROOT = Path(__file__).resolve().parent.parent
 # rather than by forgetting to add it.
 GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/audit.py", "geniusnew/audit_chain.py",
-           "geniusnew/results.py", "geniusnew/keys.py")
+           "geniusnew/results.py", "geniusnew/keys.py",
+           "geniusnew/workers.py")
 
 _REFUSAL_CALLS = {"_fail"}
 _REFUSAL_RAISES = {"ContractError"}
