@@ -24,7 +24,7 @@ digest it is bound to tells you nobody could have swapped it.
 ## The second half is the point
 
 Any pipeline can print success. The refusals are what the contracts are for, so
-the demo performs seven attacks and requires every one to be refused. Five were
+the demo performs eight attacks and requires every one to be refused. Five were
 real holes at some point — three found by review, two by adversarial probing of
 this repository's own modules. The other two are what the gateway buys: dispatch
 without its permit, and a permit used twice.
@@ -39,7 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from geniusnew.approvals import ApprovalStore  # noqa: E402
 from geniusnew.audit import AuditAuthority, event_from_handoff  # noqa: E402
-from geniusnew.audit_chain import AuditAnchor, AuditChain, verify  # noqa: E402
+from geniusnew.audit_chain import AuditAnchor, AuditChain, sign_head, verify  # noqa: E402
 from geniusnew.contracts import ContractError, Grant, Policy, issue  # noqa: E402
 from geniusnew.gateway import Gateway  # noqa: E402
 from geniusnew.keys import derive_keys  # noqa: E402
@@ -150,8 +150,20 @@ def main(root_secret: bytes, request_text: str) -> int:
         ("Accept a result after its handoff expired",
          lambda: accept(result_wire, handoff=handoff, authority=worker_authority,
                         now=handoff.expires_at)),
-        ("Truncate the audit chain by one entry",
+        # Two truncations, because they are caught by different things and only
+        # the second one needs the anchor. Handing the original head to a short
+        # chain is refused by the count inside that signed head — it would still
+        # be refused with anchor enforcement deleted entirely.
+        ("Truncate the chain, keep the old head",
          lambda: verify(chain.records[:-1], head, authority=audit, anchor=anchor)),
+        # This is the attack the anchor exists for: shorten the log and sign a
+        # fresh, entirely valid head over it. Nothing inside the chain can tell.
+        ("Truncate the chain and re-sign the head",
+         lambda: verify(chain.records[:-1],
+                        sign_head(count=len(chain.records) - 1,
+                                  head_hash=chain.records[-2].record_hash,
+                                  authority=audit),
+                        authority=audit, anchor=anchor)),
         ("Sign results with the handoff key",
          lambda: WorkerAuthority(result_key=keys.integrity_key,
                                  integrity_key=keys.integrity_key)),
@@ -174,13 +186,28 @@ def main(root_secret: bytes, request_text: str) -> int:
             refused += 1
             line(f"    [ok] {name:44s} {refusal}")
 
+    # The job itself has to have succeeded. Checking only the refusals and the
+    # chain would print PASS for a signed FAILED result — a worker that raised
+    # still produces a valid, verifiable, correctly refused-attack run. One lone
+    # surrogate in the request is enough to trigger it.
+    job_ok = result.succeeded and result.reason_code == "WORK_COMPLETED"
+    chain_ok = verified == len(chain.records)
+    attacks_ok = refused == len(attacks)
+
     line()
     line("=" * 78)
-    if refused == len(attacks) and verified == len(chain.records):
-        line(f"PASS — chain verified against the anchored head, "
+    if job_ok and chain_ok and attacks_ok:
+        line(f"PASS — job succeeded, chain verified against the anchored head, "
              f"{refused}/{len(attacks)} attacks refused.")
         return 0
-    line(f"FAIL — {len(attacks) - refused} attack(s) not refused.")
+    reasons = []
+    if not job_ok:
+        reasons.append(f"job ended {result.status}/{result.reason_code}")
+    if not chain_ok:
+        reasons.append(f"chain verified {verified} of {len(chain.records)} entries")
+    if not attacks_ok:
+        reasons.append(f"{len(attacks) - refused} attack(s) not refused")
+    line(f"FAIL — {'; '.join(reasons)}.")
     return 1
 
 

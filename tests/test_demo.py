@@ -67,9 +67,9 @@ class DemoTest(unittest.TestCase):
     def test_every_attack_is_refused(self):
         """The half that matters. A pipeline printing success proves nothing."""
         _, output = run()
-        self.assertEqual(output.count("[ok]"), 7, output)
+        self.assertEqual(output.count("[ok]"), 8, output)
         self.assertNotIn("[!!]", output)
-        self.assertIn("7/7 attacks refused", output)
+        self.assertIn("8/8 attacks refused", output)
 
     def test_each_attack_is_refused_by_the_check_it_targets(self):
         """Refused is not enough — it has to be refused by the right check.
@@ -84,7 +84,8 @@ class DemoTest(unittest.TestCase):
         expected = {
             "Replay the result against a different job": "job_id does not match",
             "Accept a result after its handoff expired": "handoff expired before its result",
-            "Truncate the audit chain by one entry": "signed head claims",
+            "Truncate the chain, keep the old head": "signed head claims",
+            "Truncate the chain and re-sign the head": "anchor committed",
             "Sign results with the handoff key": "must not be the handoff integrity key",
             "Swap the payload after validation": "payload no longer matches",
             "Dispatch without a gateway permit": "requires a gateway-minted",
@@ -101,6 +102,36 @@ class DemoTest(unittest.TestCase):
         """The payload-swap attack must put the payload back, or it poisons the rest."""
         _, second = run_uncached()
         self.assertNotIn("payload no longer matches", second.split("Reuse the permit")[1])
+
+    def test_a_failed_job_cannot_print_pass(self):
+        """The chain and the attacks can all be fine while the job failed.
+
+        A worker that raises still yields a valid signed FAILED result, a
+        verifiable chain and eight correctly refused attacks. Checking only
+        those printed PASS. One lone surrogate in the request is enough: the
+        summarizer raises while encoding it.
+        """
+        code, output = run_uncached(request_text="\ud800")
+        self.assertIn("status FAILED", output)
+        self.assertIn("FAIL", output)
+        self.assertNotIn("PASS", output)
+        self.assertEqual(code, 1)
+
+    def test_the_anchor_attack_is_the_one_the_anchor_is_for(self):
+        """Truncating and re-signing is refused by the anchor, not by the head.
+
+        Handing the original head to a shortened chain is refused by the count
+        inside that head — it would still be refused with the anchor deleted, so
+        as evidence for the anchor it proves nothing. The re-signed variant is
+        the one that needs it.
+        """
+        _, output = run()
+        import re
+        refusals = dict(re.findall(r"\[ok\] (.+?)\s{2,}(.+)", output))
+        self.assertIn("signed head claims",
+                      refusals["Truncate the chain, keep the old head"])
+        self.assertIn("anchor committed",
+                      refusals["Truncate the chain and re-sign the head"])
 
     def test_the_root_secret_never_reaches_the_output(self):
         """Not even a truncated prefix: eight bytes of a key is eight real bytes.
