@@ -140,6 +140,9 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
     Runner lehnt vorher ab, **bevor** die Arbeit läuft. Das ist der dritte der vier
     TTL-Kontrollpunkte aus Schritt 15.
 
+    `geniusnew/workers.py` gehört außerdem zum Refusal-Mutation-Guard der CI; jede
+    sicherheitsrelevante Ablehnung muss durch einen Test bemerkt werden, wenn sie entfällt.
+
 11. **Isolationsgrenze auf Prozessebene** — kein Netz, kein Schreibzugriff außerhalb eines
     temporären Verzeichnisses, Zeitlimit, Ressourcenlimit. Nachweisbar durch Tests, die
     den Ausbruch versuchen.
