@@ -51,7 +51,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from .contracts import ContractError, Handoff
-from .gateway import DispatchPermit, handoff_from_permit
+from .gateway import DispatchPermit, consume_handoff_from_permit
 from .results import WorkerAuthority, handoff_digest, produce
 
 _COMPLETED = "WORK_COMPLETED"
@@ -140,7 +140,7 @@ class WorkerRunner:
         worker boundary accepts only a capability minted by the independent
         gateway after revalidation and any required approval consumption.
         """
-        handoff = handoff_from_permit(permit)
+        handoff = consume_handoff_from_permit(permit)
         if type(now) is not int:
             _fail("now must be an integer")
         if now < permit.admitted_at:
