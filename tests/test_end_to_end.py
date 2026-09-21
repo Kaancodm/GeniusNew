@@ -237,7 +237,7 @@ class EndToEndTest(Fixture, unittest.TestCase):
             self.service.verifier.accept(dispatched.result_wire, **arguments)
         self.assertEqual(caught.exception.reason_code, 'RESULT_ALREADY_ACCEPTED')
 
-    def test_two_requests_are_two_jobs_and_six_entries(self):
+    def test_two_requests_are_two_jobs_and_eight_entries(self):
         first = self.post()[1]
         second = self.post()[1]
         self.assertNotEqual(first['job_id'], second['job_id'])
