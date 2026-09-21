@@ -56,7 +56,7 @@ from .http_entry import HttpEntry, PrincipalRegistry
 from .isolation import IsolatedWorkerRunner
 from .keys import ServiceKeys, derive_keys
 from .orchestrator import Denied, DispatchAttempted, Orchestrator, WorkerEndpoint
-from .results import WorkerAuthority
+from .results import WorkerAuthority, handoff_digest
 from .verifier import Rejected, ResultVerifier
 from .workers import Worker, WorkerRunner
 
@@ -285,14 +285,7 @@ def _submitter(*, orchestrator: Orchestrator, gateway: Gateway,
 
 
 def _trace_id(handoff) -> str:
-    return f"{_TRACE_PREFIX}{handoff_digest_for_audit(handoff)[:16]}"
-
-
-def handoff_digest_for_audit(handoff) -> str:
-    # Keep the trace derivation identical to the audit/result artifact binding
-    # without reaching into another component for authority.
-    import hashlib
-    return hashlib.sha256(handoff.to_bytes()).hexdigest()
+    return f"{_TRACE_PREFIX}{handoff_digest(handoff)[:16]}"
 
 
 def _append_event(*, chain: AuditChain, audit: AuditAuthority, handoff,
