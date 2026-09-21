@@ -1,4 +1,5 @@
 import os
+import subprocess
 import tempfile
 import time
 import unittest
@@ -406,6 +407,62 @@ class ProcessIsolationTest(unittest.TestCase):
         ).execute(self.permit_for(self.handoff), now=110)
         self.assertEqual(isolated, direct)
         self.assertTrue(self.taken(isolated).succeeded)
+
+    def test_child_pipes_are_closed_after_success_failure_and_timeout(self):
+        cases = [
+            (DeterministicSummarizer(), IsolationLimits(), "WORK_COMPLETED"),
+            (ExplodingWorker(), IsolationLimits(), "WORKER_FAILED"),
+            (SlowWorker(), IsolationLimits(wall_seconds=0.1), "RESOURCE_EXHAUSTED"),
+        ]
+        real_popen = subprocess.Popen
+        for worker, limits, reason in cases:
+            with self.subTest(reason=reason):
+                processes = []
+
+                def spawn(*args, **kwargs):
+                    process = real_popen(*args, **kwargs)
+                    processes.append(process)  # Retain it: GC is not cleanup.
+                    return process
+
+                try:
+                    with patch.object(isolation_module.subprocess, "Popen", side_effect=spawn):
+                        wire = self.runner(worker, limits).execute(self.permit_for(), now=110)
+                    self.assertEqual(self.taken(wire).reason_code, reason)
+                    self.assertEqual(len(processes), 1)
+                    process = processes[0]
+                    self.assertIsNotNone(process.poll())
+                    self.assertTrue(process.stdin.closed)
+                    self.assertTrue(process.stdout.closed)
+                finally:
+                    for process in processes:
+                        isolation_module._kill_process(process)
+                        process.stdin.close()
+                        process.stdout.close()
+
+    def test_reader_failure_reaps_child_and_closes_pipes(self):
+        real_popen = subprocess.Popen
+        processes = []
+
+        def spawn(*args, **kwargs):
+            process = real_popen(*args, **kwargs)
+            processes.append(process)
+            return process
+
+        try:
+            with patch.object(isolation_module.subprocess, "Popen", side_effect=spawn), \
+                    patch.object(isolation_module, "_read_process", side_effect=OSError("read failed")):
+                wire = self.runner(SlowWorker()).execute(self.permit_for(), now=110)
+            self.assertEqual(self.taken(wire).reason_code, "WORKER_FAILED")
+            self.assertEqual(len(processes), 1)
+            process = processes[0]
+            self.assertTrue(process.stdin.closed)
+            self.assertTrue(process.stdout.closed)
+            self.assertIsNotNone(process.poll())
+        finally:
+            for process in processes:
+                isolation_module._kill_process(process)
+                process.stdin.close()
+                process.stdout.close()
 
     def test_signing_authority_object_is_not_present_in_the_fresh_interpreter(self):
         taken = self.taken(
