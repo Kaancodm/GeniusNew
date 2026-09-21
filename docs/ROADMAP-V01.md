@@ -207,6 +207,46 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
 16. **HTTP-Eingang** — API-Key wird serverseitig auf einen Principal abgebildet.
     Identität, Tier und Rechte kommen **nie** aus dem Request.
 
+    **Status: steht** (`geniusnew/http_entry.py`). Die Regel ist als Verbot formuliert,
+    und so ist sie auch umgesetzt: der Request-Body ist eine **geschlossene Form** mit
+    genau einem Feld, der Payload. Ein mitgeschicktes `tier`, `subject`, `user_id`,
+    `tools` oder `job_id` wird **abgelehnt, nicht stillschweigend verworfen** — ein Feld,
+    das hier durchkäme, wäre in jeder späteren Schicht vertrauenswürdig, denn die prüfen
+    gegen den Policy-Grant, den diese Entscheidung ausgewählt hat. Stilles Verwerfen sagt
+    dem Angreifer nichts und dem ehrlichen Aufrufer auch nichts.
+
+    Ein `Principal` trägt **nur** das Subject. Tier, Tools und User-ID stehen im Grant;
+    sie hier mitzuführen schüfe eine zweite Wahrheitsquelle über Autorisierung, und das
+    Erste, was einer zweiten Wahrheitsquelle passiert, ist Widerspruch.
+
+    Schlüssel liegen nie im Klartext: die Registry hält SHA-256-Digests und löst per
+    Dictionary-Lookup auf. Kein Vergleichs-Loop, dessen Dauer verrät, wie viel von einem
+    Schlüssel stimmte; nach der Konstruktion kein Klartext im Speicher; ein Dump des
+    Objekts offenbart kein Credential. Ein unbekannter und ein fehlender Schlüssel ergeben
+    **dieselbe** Antwort — ein Test sammelt fünf Varianten ein und verlangt genau eine
+    Antwort, damit kein Orakel entsteht.
+
+    Die Job-Kennung wird **hier** erzeugt. Wer sie selbst wählen darf, wählt, mit welcher
+    Kennung er kollidiert: der Orchestrator verbraucht jede genau einmal, ein Aufrufer
+    könnte also fremde Jobs verdrängen oder einen Namen wiederholen.
+
+    Die Socket-Hälfte ist bewusst die dünne: alles, was entscheidet, ist ohne Server
+    testbar. Sie verrät außerdem die Interpreter-Version nicht (der Default-Header nennt
+    Python samt Nummer) und protokolliert die Request-Zeile nicht — angreifergewählter
+    Text in einem Log, das ein Operator liest, gehört nicht dorthin; Protokollierung
+    gehört in die Audit-Chain, wo geschlossen ist, was vorkommen darf.
+
+    `scripts/refusals.py` kennt jetzt auch **zurückgegebene** Ablehnungen: eine Grenze,
+    die einem Fremden antwortet, kann ihn nicht anschreien. Ohne das wären Pfad, Methode
+    und unbekannter Schlüssel für die Prüfung unsichtbar gewesen. Sie fand daraufhin
+    sechs ungetestete Ablehnungen und eine **unerreichbare** — ein Kollisionscheck über
+    Schlüssel-Digests, den eine Mapping-Eingabe nie auslösen kann; er ist entfernt statt
+    nachträglich mit einem Test geschmückt.
+
+    **Nicht enthalten:** Rate-Limiting, TLS, Sessions, jede Authentifizierung über den
+    Schlüssel hinaus. Das sind Deployment-Fragen, und sie hier zu behaupten wäre genau
+    die Art Aussage, die `SECURITY.md` verhindern soll.
+
 17. **Verdrahtung** plus ein End-to-End-Test, der den gesamten Pfad geht, die
     Ergebnissignatur prüft und die Audit-Chain gegen den festgehaltenen Kopf verifiziert.
 

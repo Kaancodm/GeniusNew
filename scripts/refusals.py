@@ -52,10 +52,16 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/audit.py", "geniusnew/audit_chain.py",
            "geniusnew/results.py", "geniusnew/keys.py",
            "geniusnew/workers.py", "geniusnew/isolation.py",
-           "geniusnew/isolation_child.py", "geniusnew/gateway.py")
+           "geniusnew/isolation_child.py", "geniusnew/gateway.py",
+           "geniusnew/http_entry.py")
 
 _REFUSAL_CALLS = {"_fail"}
 _REFUSAL_RAISES = {"ContractError"}
+# A boundary that answers a stranger cannot raise at it: `http_entry.py` refuses
+# by returning a response. Without this the entrance's refusals — the wrong
+# path, the wrong method, an unknown key — would all be invisible to this check
+# while the module sat in the guarded list looking covered.
+_REFUSAL_RETURNS = {"_refusal"}
 
 
 @dataclass(frozen=True)
@@ -79,10 +85,12 @@ def _is_refusal_body(node: ast.If) -> str | None:
             call = statement.value
         elif isinstance(statement, ast.Raise) and isinstance(statement.exc, ast.Call):
             call = statement.exc
+        elif isinstance(statement, ast.Return) and isinstance(statement.value, ast.Call):
+            call = statement.value
         if call is None:
             continue
         name = call.func.id if isinstance(call.func, ast.Name) else None
-        if name in _REFUSAL_CALLS or name in _REFUSAL_RAISES:
+        if name in _REFUSAL_CALLS or name in _REFUSAL_RAISES or name in _REFUSAL_RETURNS:
             if call.args and isinstance(call.args[0], ast.Constant):
                 return str(call.args[0].value)
             return "(no message)"

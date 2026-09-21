@@ -1,0 +1,372 @@
+"""The request boundary: an API key becomes a principal, and nothing else does.
+
+`docs/ROADMAP-V01.md` step 16 states the rule as a prohibition rather than a
+feature: identity, tier and rights come **never** from the request. A client
+sends a key and a payload. Everything about who it is comes from a server-side
+table, and everything about what it may do comes from the policy grant keyed on
+that subject.
+
+## Why this is the smallest file with the most say
+
+Every other boundary in this repository checks something about bytes that were
+already authorized. This one decides *whose* authorization applies at all, and
+it is the only place a stranger can reach. A field read from the request here —
+a `tier`, a `user_id`, a `subject`, even a convenient `job_id` — silently
+becomes trusted at every layer after it, because those layers check against the
+policy grant this decision selected.
+
+So the request body is a closed shape containing one thing: the payload. Not
+ignored-if-present, refused: a client that sends `{"text": ..., "tier": "admin"}`
+gets a refusal rather than a quiet demotion, because silently dropping a field
+tells an attacker nothing and tells an honest caller nothing either.
+
+## Keys are never held in the clear
+
+The registry stores SHA-256 digests and resolves by dictionary lookup on the
+digest of what was presented. There is no comparison loop to leak timing, no
+plaintext key in memory after construction, and a dump of this object discloses
+no credential. The digest is unsalted on purpose: this is a lookup table for
+high-entropy machine keys, not a password store, and salting would force the
+comparison loop back.
+
+## The job id is minted here
+
+A client that chooses its own job id chooses which job id to collide with. The
+orchestrator burns each id exactly once, so a caller supplying them could deny
+service to a job it does not own, or replay a name. The entrance mints one from
+`secrets`; the generator is a seam only so tests can be deterministic.
+
+## What this is not
+
+There is no rate limiting, no authentication beyond the key, no TLS termination,
+and no session. Those belong to a deployment, and pretending otherwise inside
+this file would be the kind of claim `SECURITY.md` exists to prevent. What is
+here is the mapping and the refusals around it.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import secrets
+from dataclasses import dataclass
+from typing import Any, Callable, Mapping
+
+from .contracts import ContractError
+
+_MAX_BODY_BYTES = 16 * 1024
+_MAX_KEY_BYTES = 256
+_MIN_KEY_BYTES = 16
+_CONTENT_TYPE = "application/json"
+_PATH = "/jobs"
+_METHOD = "POST"
+_AUTH_SCHEME = "Bearer "
+
+# Closed, like every other refusal vocabulary here, so that a refusal cannot
+# carry text out of the boundary it refused at. A reason a client is told is a
+# reason an attacker is told, so these say what is wrong with the *request*,
+# never what is known about the key.
+REASONS = frozenset({
+    "NOT_FOUND",
+    "METHOD_NOT_ALLOWED",
+    "UNSUPPORTED_MEDIA_TYPE",
+    "PAYLOAD_TOO_LARGE",
+    "MALFORMED_REQUEST",
+    "UNAUTHENTICATED",
+    "REJECTED",
+    "ACCEPTED",
+})
+
+
+def _fail(message: str) -> None:
+    raise ContractError(message)
+
+
+@dataclass(frozen=True)
+class Principal:
+    """Who the caller is. Deliberately only that.
+
+    No tier, no tools, no user id: those live in the policy grant keyed on
+    `subject`. Carrying them here would create a second source of truth about
+    authorization, and the first thing that happens to a second source of truth
+    is that it disagrees.
+    """
+
+    subject: str
+
+    def __post_init__(self) -> None:
+        if type(self.subject) is not str or not self.subject:
+            _fail("subject must be a non-empty string")
+        if len(self.subject.encode("utf-8", "surrogatepass")) > 160:
+            _fail("subject must be at most 160 bytes")
+
+
+class PrincipalRegistry:
+    """API key digests to principals. The keys themselves are not kept."""
+
+    def __init__(self, principals: Mapping[str, str]) -> None:
+        if not isinstance(principals, Mapping) or not principals:
+            _fail("principals must be a non-empty mapping of key digest to subject")
+        table: dict[str, Principal] = {}
+        for digest, subject in principals.items():
+            if type(digest) is not str or len(digest) != 64:
+                _fail("principal keys must be SHA-256 digests as 64 hex characters")
+            try:
+                bytes.fromhex(digest)
+            except ValueError as exc:
+                raise ContractError(
+                    "principal keys must be SHA-256 digests as 64 hex characters") from exc
+            table[digest.lower()] = Principal(subject)
+        self._table = table
+
+    @classmethod
+    def from_api_keys(cls, api_keys: Mapping[bytes, str]) -> "PrincipalRegistry":
+        """Build from plaintext keys, hashing them here so callers need not.
+
+        The keys are not retained: what this object holds afterwards is the
+        table below, which discloses nothing if it is dumped or logged.
+        """
+        if not isinstance(api_keys, Mapping) or not api_keys:
+            _fail("api_keys must be a non-empty mapping of key to subject")
+        # No "two keys collided" check: a Mapping cannot hold one key twice,
+        # and two different keys sharing a SHA-256 digest is not a case to
+        # handle. The refusal guard flagged it as unreachable, which is exactly
+        # what it is for.
+        return cls({cls.digest(key): subject for key, subject in api_keys.items()})
+
+    @staticmethod
+    def digest(api_key: Any) -> str:
+        if type(api_key) is not bytes:
+            _fail("api key must be bytes")
+        if not _MIN_KEY_BYTES <= len(api_key) <= _MAX_KEY_BYTES:
+            _fail(f"api key must be between {_MIN_KEY_BYTES} and {_MAX_KEY_BYTES} bytes")
+        return hashlib.sha256(api_key).hexdigest()
+
+    def resolve(self, api_key: Any) -> Principal | None:
+        """The presented key's principal, or None. No exception either way.
+
+        A lookup, not a comparison: there is no loop over candidates whose
+        duration could say how much of a key was right. An unknown key and a
+        malformed one return the same nothing, so the caller cannot learn which
+        of the two it sent.
+        """
+        try:
+            digest = self.digest(api_key)
+        except ContractError:
+            return None
+        return self._table.get(digest)
+
+    def __len__(self) -> int:
+        return len(self._table)
+
+
+@dataclass(frozen=True)
+class Response:
+    status: int
+    reason: str
+    body: dict[str, Any]
+
+    def __post_init__(self) -> None:
+        if type(self.status) is not int or not 100 <= self.status <= 599:
+            _fail("status must be an HTTP status code")
+        if self.reason not in REASONS:
+            _fail("reason is not an entrance reason code")
+
+    def to_bytes(self) -> bytes:
+        return json.dumps(self.body, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _refusal(status: int, reason: str) -> Response:
+    return Response(status=status, reason=reason, body={"error": reason})
+
+
+class HttpEntry:
+    """Maps one authenticated request onto one job, and refuses everything else.
+
+    `submit` is called with a server-side subject and a server-minted job id. It
+    is the only way out of this object, and it is given nothing the request
+    could have influenced except the payload itself.
+    """
+
+    def __init__(self, *, registry: PrincipalRegistry,
+                 submit: Callable[..., Mapping[str, Any]],
+                 job_ids: Callable[[], str] | None = None,
+                 max_body_bytes: int = _MAX_BODY_BYTES) -> None:
+        if not isinstance(registry, PrincipalRegistry):
+            _fail("registry must be a PrincipalRegistry")
+        if not callable(submit):
+            _fail("submit must be callable")
+        if job_ids is not None and not callable(job_ids):
+            _fail("job_ids must be callable")
+        if type(max_body_bytes) is not int or not 0 < max_body_bytes <= _MAX_BODY_BYTES:
+            _fail(f"max_body_bytes must be between 1 and {_MAX_BODY_BYTES}")
+        self._registry = registry
+        self._submit = submit
+        self._job_ids = job_ids or (lambda: f"job-{secrets.token_hex(16)}")
+        self._max_body_bytes = max_body_bytes
+
+    def handle(self, *, method: Any, path: Any, headers: Any, body: Any) -> Response:
+        """One request in, one response out. No exception reaches a client."""
+        if type(method) is not str or type(path) is not str:
+            return _refusal(400, "MALFORMED_REQUEST")
+        if not isinstance(headers, Mapping):
+            return _refusal(400, "MALFORMED_REQUEST")
+        if path != _PATH:
+            return _refusal(404, "NOT_FOUND")
+        if method != _METHOD:
+            return _refusal(405, "METHOD_NOT_ALLOWED")
+        if type(body) is not bytes:
+            return _refusal(400, "MALFORMED_REQUEST")
+        # Size before parsing: a megabyte of nested JSON costs whatever it costs
+        # to parse, and the entrance is the one place an unauthenticated caller
+        # can make that choice.
+        if len(body) > self._max_body_bytes:
+            return _refusal(413, "PAYLOAD_TOO_LARGE")
+
+        lowered = {str(name).lower(): value for name, value in headers.items()}
+        content_type = lowered.get("content-type")
+        if type(content_type) is not str or content_type.split(";")[0].strip() != _CONTENT_TYPE:
+            return _refusal(415, "UNSUPPORTED_MEDIA_TYPE")
+
+        # Authenticated before the body is parsed: an unauthenticated caller
+        # should not be able to spend this process's time on its JSON.
+        principal = self._principal(lowered.get("authorization"))
+        if principal is None:
+            return _refusal(401, "UNAUTHENTICATED")
+
+        payload = self._payload(body)
+        if payload is None:
+            return _refusal(400, "MALFORMED_REQUEST")
+
+        return self._dispatch(principal, payload)
+
+    def _principal(self, authorization: Any) -> Principal | None:
+        if type(authorization) is not str or not authorization.startswith(_AUTH_SCHEME):
+            return None
+        presented = authorization[len(_AUTH_SCHEME):]
+        if not presented or len(presented) > _MAX_KEY_BYTES:
+            return None
+        try:
+            return self._registry.resolve(presented.encode("utf-8"))
+        except UnicodeEncodeError:
+            return None
+
+    def _payload(self, body: bytes) -> dict[str, str] | None:
+        """Exactly one field, refused rather than trimmed.
+
+        Dropping an unexpected `tier` silently would let a caller believe it was
+        honoured. Refusing says what happened without saying anything about what
+        a privileged request would have looked like.
+        """
+        try:
+            value = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError, RecursionError):
+            return None
+        if not isinstance(value, dict) or set(value) != {"text"}:
+            return None
+        text = value["text"]
+        if type(text) is not str or not text:
+            return None
+        return {"text": text}
+
+    def _dispatch(self, principal: Principal, payload: dict[str, str]) -> Response:
+        job_id = self._job_ids()
+        if type(job_id) is not str or not job_id:
+            return _refusal(500, "REJECTED")
+        try:
+            outcome = self._submit(subject=principal.subject, job_id=job_id,
+                                   payload=payload)
+        except ContractError:
+            # The refusal's own sentence stays inside. A client learns that its
+            # job was refused, not which check refused it: those messages name
+            # policy fields, and naming them to a stranger is a map.
+            return _refusal(409, "REJECTED")
+        if not isinstance(outcome, Mapping):
+            return _refusal(500, "REJECTED")
+        body = {"job_id": job_id, **{key: value for key, value in outcome.items()}}
+        return Response(status=202, reason="ACCEPTED", body=body)
+
+
+# --- the socket in front of it ---------------------------------------------
+#
+# Deliberately the thin half. Everything that decides anything is above; this
+# turns a socket into those arguments and back, so the security of the entrance
+# does not depend on running a server to test it.
+
+
+def make_handler(entry: HttpEntry):
+    """A `BaseHTTPRequestHandler` class bound to one entrance."""
+    from http.server import BaseHTTPRequestHandler
+
+    if not isinstance(entry, HttpEntry):
+        _fail("entry must be an HttpEntry")
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def version_string(self) -> str:
+            # Not "BaseHTTP/0.6 Python/3.11.2". A stranger learns the version of
+            # the interpreter to target from a header nobody needed.
+            return "geniusnew"
+
+        def log_message(self, format: str, *args: Any) -> None:
+            # The default logs the request line, which is attacker-chosen text
+            # going somewhere an operator reads. Logging belongs to the audit
+            # chain, where what may appear is a closed contract.
+            return
+
+        def _respond(self, response: Response) -> None:
+            payload = response.to_bytes()
+            self.send_response(response.status)
+            self.send_header("Content-Type", _CONTENT_TYPE)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def _read_body(self) -> bytes | None:
+            raw = self.headers.get("Content-Length")
+            if raw is None:
+                return b""
+            try:
+                length = int(raw)
+            except (TypeError, ValueError):
+                return None
+            if length < 0 or length > _MAX_BODY_BYTES:
+                return None
+            return self.rfile.read(length)
+
+        def _serve(self) -> None:
+            body = self._read_body()
+            if body is None:
+                # Covers both a Content-Length that is not a number and one
+                # larger than anything this entrance will read. Reading it to
+                # find out would be doing the work the limit exists to refuse.
+                self._respond(_refusal(413, "PAYLOAD_TOO_LARGE"))
+                return
+            self._respond(entry.handle(method=self.command, path=self.path,
+                                       headers=dict(self.headers.items()), body=body))
+
+        do_POST = _serve
+        do_GET = _serve
+        do_PUT = _serve
+        do_PATCH = _serve
+        do_DELETE = _serve
+        do_HEAD = _serve
+
+    return Handler
+
+
+def serve(entry: HttpEntry, *, host: str = "127.0.0.1", port: int = 0):
+    """A threading server bound to `entry`, not started. The caller runs it.
+
+    Binds to loopback by default: an entrance that listens on every interface
+    the moment someone imports it is a decision, and it should be taken out
+    loud.
+    """
+    from http.server import ThreadingHTTPServer
+
+    if type(host) is not str or not host:
+        _fail("host must be a non-empty string")
+    if type(port) is not int or not 0 <= port <= 65535:
+        _fail("port must be between 0 and 65535")
+    return ThreadingHTTPServer((host, port), make_handler(entry))
