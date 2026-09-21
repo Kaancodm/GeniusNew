@@ -192,6 +192,63 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
 14. **Ergebnisprüfung** — unabhängige Annahme: Signatur, Integrität, TTL. Weder Worker
     noch Orchestrator validieren ihr eigenes Ergebnis.
 
+    **Status: steht** (`geniusnew/verifier.py`). Die Instanz nimmt **Wires entgegen, keine
+    Objekte**: ein übergebenes `Handoff` ist die Schlussfolgerung, die jemand anders über
+    diese Bytes gezogen hat, also parst und revalidiert sie den Handoff-Wire selbst gegen
+    vertrauenswürdige Policy und serverseitige Identität — dieselbe Grenze wie beim
+    Gateway, nur am anderen Ende des Pfads. Was sie danach prüft, ist `results.accept`,
+    aufgerufen mit einem Handoff, den sie selbst abgeleitet hat.
+
+    Neu ist, was kein Vertrag leisten kann: **Einmaligkeit**. `results.py` hält diese Lücke
+    ausdrücklich offen — ein Vertrag hält keinen Zustand, also nimmt `accept` dasselbe
+    Ergebnis so oft an, wie es gefragt wird (ein Test belegt genau das). Hier hat ein
+    zugelassener Handoff genau ein angenommenes Ergebnis, so wie `approvals.py` es für
+    Tokens tut.
+
+    Das Ledger verbraucht die Kennung **erst nach vollständiger Prüfung**. Beim Eintritt zu
+    verbrauchen hieße: wer diese Instanz erreicht, verbrennt mit einem gefälschten Ergebnis
+    die eine Annahme des Jobs und sperrt das echte dauerhaft aus — ein Denial of Service,
+    gebaut aus der Anti-Replay-Regel. Ein Test führt das vor.
+
+    Ein signiertes `FAILED` ist ein echtes Ergebnis und wird als solches angenommen.
+    Annahme betrifft das Artefakt, nicht den Ausgang; Fehlschläge als ungültig abzulehnen
+    hieße, ein Worker könnte seine eigenen Fehler unsichtbar machen.
+
+    Der vierte TTL-Kontrollpunkt aus Schritt 15 greift hier eine Schicht früher als
+    erwartet: ein abgelaufener Handoff scheitert schon an der Revalidierung, bevor das
+    Ergebnis überhaupt geparst wird. Die entsprechende Prüfung in `accept` bleibt als
+    Verteidigung für Aufrufer, die ein `Handoff` anders in die Hand bekommen.
+
+    Die Trennlinie ist bewusst scharf: alles, was den Job oder seine Artefakte betrifft,
+    ist ein `Rejected` mit geschlossenem Code und damit als Audit-Eintrag festhaltbar;
+    alles, was den **Aufruf** betrifft — eine Uhr, die kein Integer ist, eine Policy, die
+    keine ist —, bleibt ein einfacher `ContractError`. Wer seine eigenen Argumente falsch
+    setzt, fällt kein Urteil über ein Ergebnis und darf auch nicht so protokolliert werden.
+
+    **Offen bleibt die Reichweite des Ledgers** — dieselbe Grenze wie beim Job-Ledger des
+    Orchestrators. Es ist eine Menge in einem Prozess; ein Neustart oder eine zweite
+    Instanz mit derselben Kennung nimmt dasselbe Ergebnis erneut an. Der Anspruch lautet
+    deshalb „eine Annahme pro Handoff **pro Instanz**", und ein Test hält das fest.
+
+    **Offen bleibt die Symmetrie.** Das Ergebnis-HMAC ist symmetrisch — wer prüfen kann,
+    kann signieren. Die Unabhängigkeit ist hier eine getrennte Instanz mit eigener
+    API-Grenze, keine kryptografische; ein Test hält diese Grenze offen fest, statt sie
+    wegzubehaupten. Eine asymmetrische Ergebnissignatur ist die Abhängigkeitsentscheidung
+    aus Schritt 8 und änderte nur den Konstruktor dieser Datei.
+
+    **Offen bleibt die Approval-Evidenz.** Ein approval-pflichtiger Wire trägt dauerhaft
+    `PENDING_APPROVAL` — das Konsumieren schreibt ihn nicht um —, also kann diese Instanz
+    einen genehmigten Job nicht von einem ungenehmigten unterscheiden. Sie **verlangt**
+    deshalb den Receipt-Hash des Gateways und protokolliert ihn, ohne ihn verifizieren zu
+    können: der Store, der das könnte, gehört dem Gateway. Ohne Receipt wird abgelehnt —
+    das lässt die Evidenz mitreisen. Das Verifizieren zu nennen wäre, UNKNOWN als PASS zu
+    lesen. Die Auflösung gehört zu Schritt 17.
+
+    `geniusnew/verifier.py` gehört zum Refusal-Mutation-Guard; `scripts/refusals.py` kennt
+    dafür jetzt auch den modul-eigenen Ablehnungstyp `Rejected`. Ohne das wäre ausgerechnet
+    die Einmaligkeitsregel für die Prüfung unsichtbar gewesen, während das Modul in der
+    Liste stand.
+
     Die Schritte 12 bis 14 sind bewusst getrennt. `CONSTITUTION-V1-DRAFT.md` §8 verlangt,
     dass Orchestrierung, Policy-/Gateway-Prüfung, Ausführung, Ergebnisprüfung und
     Audit/Forensik logisch getrennt bleiben und keine Instanz ihre eigene

@@ -52,10 +52,15 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/audit.py", "geniusnew/audit_chain.py",
            "geniusnew/results.py", "geniusnew/keys.py",
            "geniusnew/workers.py", "geniusnew/isolation.py",
-           "geniusnew/isolation_child.py", "geniusnew/gateway.py")
+           "geniusnew/isolation_child.py", "geniusnew/gateway.py",
+           "geniusnew/verifier.py")
 
 _REFUSAL_CALLS = {"_fail"}
-_REFUSAL_RAISES = {"ContractError"}
+# A module's own refusal type counts too. `verifier.py` raises `Rejected` (a
+# `ContractError` carrying the code an audit entry records); leaving it out
+# would have hidden the one-time-acceptance rule from this check while the
+# module sat in the guarded list looking covered.
+_REFUSAL_RAISES = {"ContractError", "Rejected"}
 
 
 @dataclass(frozen=True)
