@@ -385,8 +385,78 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
 16. **HTTP-Eingang** — API-Key wird serverseitig auf einen Principal abgebildet.
     Identität, Tier und Rechte kommen **nie** aus dem Request.
 
+    **Status: steht** (`geniusnew/http_entry.py`). Die Regel ist als Verbot formuliert,
+    und so ist sie auch umgesetzt: der Request-Body ist eine **geschlossene Form** mit
+    genau einem Feld, der Payload. Ein mitgeschicktes `tier`, `subject`, `user_id`,
+    `tools` oder `job_id` wird **abgelehnt, nicht stillschweigend verworfen** — ein Feld,
+    das hier durchkäme, wäre in jeder späteren Schicht vertrauenswürdig, denn die prüfen
+    gegen den Policy-Grant, den diese Entscheidung ausgewählt hat. Stilles Verwerfen sagt
+    dem Angreifer nichts und dem ehrlichen Aufrufer auch nichts.
+
+    Ein `Principal` trägt **nur** das Subject. Tier, Tools und User-ID stehen im Grant;
+    sie hier mitzuführen schüfe eine zweite Wahrheitsquelle über Autorisierung, und das
+    Erste, was einer zweiten Wahrheitsquelle passiert, ist Widerspruch.
+
+    Schlüssel liegen nie im Klartext: die Registry hält SHA-256-Digests und löst per
+    Dictionary-Lookup auf. Kein Vergleichs-Loop, dessen Dauer verrät, wie viel von einem
+    Schlüssel stimmte; nach der Konstruktion kein Klartext im Speicher; ein Dump des
+    Objekts offenbart kein Credential. Ein unbekannter und ein fehlender Schlüssel ergeben
+    **dieselbe** Antwort — ein Test sammelt fünf Varianten ein und verlangt genau eine
+    Antwort, damit kein Orakel entsteht.
+
+    Die Job-Kennung wird **hier** erzeugt. Wer sie selbst wählen darf, wählt, mit welcher
+    Kennung er kollidiert: der Orchestrator verbraucht jede genau einmal, ein Aufrufer
+    könnte also fremde Jobs verdrängen oder einen Namen wiederholen.
+
+    Die Socket-Hälfte ist bewusst die dünne: alles, was entscheidet, ist ohne Server
+    testbar. Sie verrät außerdem die Interpreter-Version nicht (der Default-Header nennt
+    Python samt Nummer) und protokolliert die Request-Zeile nicht — angreifergewählter
+    Text in einem Log, das ein Operator liest, gehört nicht dorthin; Protokollierung
+    gehört in die Audit-Chain, wo geschlossen ist, was vorkommen darf.
+
+    `scripts/refusals.py` kennt jetzt auch **zurückgegebene** Ablehnungen: eine Grenze,
+    die einem Fremden antwortet, kann ihn nicht anschreien. Ohne das wären Pfad, Methode
+    und unbekannter Schlüssel für die Prüfung unsichtbar gewesen. Sie fand daraufhin
+    sechs ungetestete Ablehnungen und eine **unerreichbare** — ein Kollisionscheck über
+    Schlüssel-Digests, den eine Mapping-Eingabe nie auslösen kann; er ist entfernt statt
+    nachträglich mit einem Test geschmückt.
+
+    **Nicht enthalten:** Rate-Limiting, TLS, Sessions, jede Authentifizierung über den
+    Schlüssel hinaus. Das sind Deployment-Fragen, und sie hier zu behaupten wäre genau
+    die Art Aussage, die `SECURITY.md` verhindern soll.
+
 17. **Verdrahtung** plus ein End-to-End-Test, der den gesamten Pfad geht, die
     Ergebnissignatur prüft und die Audit-Chain gegen den festgehaltenen Kopf verifiziert.
+
+    **Status: steht** (`geniusnew/wiring.py`, `tests/test_end_to_end.py`). Ein Request geht
+    über einen echten Socket hinein, der Eingang macht aus dem API-Key ein Subject, der
+    Orchestrator lässt zu und routet, das Gateway prüft den Wire unabhängig nach und mintet
+    den einzigen Permit, den die Worker-Grenze annimmt, der Worker läuft dahinter, die
+    Ergebnisprüfung nimmt an, ohne beauftragt zu haben, und die Audit-Rolle hält fest, was
+    jede Instanz entschieden hat. Danach verifiziert die Kette gegen einen Kopf, den der
+    Anker hält.
+
+    **Die Verdrahtung hat sofort einen echten Defekt gefunden.** `Dispatch` ließ den
+    Approval-Receipt des Gateways fallen, und die Ergebnisprüfung verlangt ihn für einen
+    approval-pflichtigen Job — die beiden Komponenten waren also **gar nicht
+    zusammensteckbar**. Beide hatten vollständige Testsuiten, beide hatten für ihre eigene
+    Hälfte recht. Nichts außer dem Zusammenstecken hätte das gesagt. Genau dafür ist dieser
+    Schritt da.
+
+    Was eine Kompositionswurzel den Teilen schuldet, steht im Modul-Docstring und ist hier
+    dreierlei: Schlüssel werden **einmal** abgeleitet und nach Rolle vergeben, niemand
+    greift in eine andere Komponente; die **Policy kommt von hier**, nicht von einer
+    Komponente — damit ist die offene Stelle aus Schritt 13 wenigstens in der Herkunft
+    behoben, wenn auch noch nicht in der Prozessgrenze; und die **Uhr ist echt**. Alle
+    Module nehmen `now` als Argument und lesen keine Uhr, was sie testbar macht — irgendwer
+    muss aber wirklich auf eine sehen, und die TTL-Kontrollpunkte sind nur so ehrlich wie
+    dieser eine Aufruf.
+
+    **Offen bleibt der Approval-Pfad über HTTP.** Ein Approval-Token ist eine Capability,
+    die ein Client vorzeigen müsste, und der Eingang hat kein Feld dafür. Das Gateway würde
+    ohnehin ablehnen; die Verdrahtung sagt es vorher und benennt damit die Lücke, statt sie
+    wie ein Policy-Fehler aussehen zu lassen. Approval-pflichtige Arbeit ist bis dahin nur
+    durch direkten Aufruf des Orchestrators erreichbar.
 
 ### Teil 3 — nachweisbar machen
 
@@ -395,6 +465,33 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
 18. **`scripts/demo.sh`** — ein Befehl. Startet einen Job, gibt die Audit-Chain aus,
     verifiziert sie gegen den festgehaltenen Kopf und sagt deutlich, ob die Prüfung
     bestanden wurde. Die Ausgabe enthält nur, was Schritt 7 erlaubt.
+
+    **Status: steht** (`scripts/demo.sh`, `scripts/demo.py`). Ein Job geht durch alle
+    heute vorhandenen Schichten, die Kette wird gegen den Anker verifiziert, und das
+    Skript endet mit `PASS` oder `FAIL` und einem entsprechenden Exit-Code — eine Demo,
+    die nicht scheitern kann, beweist nichts.
+
+    Die zweite Hälfte ist der eigentliche Punkt: zwölf Manipulationsversuche, die alle
+    abgelehnt werden müssen. Sieben davon waren einmal ein echtes Loch — aus Review, aus
+    eigenem Probing, und eines aus dem Zusammenstecken zweier fertiger Komponenten.
+
+    Die Auflage „nur, was Schritt 7 erlaubt" wird als Test geführt, nicht als Vorsatz:
+    `tests/test_demo.py` setzt Kanarienvögel in Root-Secret und Payload und schlägt fehl,
+    wenn einer davon in der Ausgabe auftaucht. Gedruckt werden Digests, keine Inhalte und
+    kein Schlüsselmaterial — auch kein gekürztes Präfix, denn acht Byte eines Schlüssels
+    sind acht Byte.
+
+    **Seit Schritt 17 zeigt sie den echten Pfad.** Der Job geht **über HTTP** hinein, die
+    Identität wird aus dem Schlüssel serverseitig bestimmt, Gateway und Ergebnisprüfung
+    sind eigene Instanzen, und die Kette nennt zwei verschiedene Komponenten als Akteure.
+    Damit steht die Zielbeschreibung von v0.1 nicht mehr als Absicht da, sondern als
+    Ausgabe eines Befehls — bis auf die Prozessgrenze zwischen den Instanzen, die eine
+    Deployment-Frage bleibt.
+
+    Aus fünf Angriffen sind zwölf geworden: vier davon gehen über den Socket, weil der
+    Eingang das Einzige ist, was ein Fremder erreicht — ein nicht registrierter Schlüssel,
+    ein `tier` im Body, eine selbstgewählte Job-Kennung, eine Tür, die es nicht gibt. Die
+    übrigen acht halten die Objekte, die ein Insider hätte.
 19. **CI führt den End-to-End-Test mit aus**, nicht nur die Unit-Tests.
 20. **README-Quickstart**, den ein Fremder ohne Rückfragen befolgen kann. Am besten von
     jemandem gegengelesen, der das Projekt nicht kennt.
