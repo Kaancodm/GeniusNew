@@ -53,6 +53,7 @@ from .audit_chain import AuditAnchor, AuditChain
 from .contracts import ContractError, Policy, validate, validate_pending
 from .gateway import Gateway
 from .http_entry import HttpEntry, PrincipalRegistry
+from .isolation import IsolatedWorkerRunner
 from .keys import ServiceKeys, derive_keys
 from .orchestrator import Orchestrator, WorkerEndpoint
 from .results import WorkerAuthority
@@ -110,8 +111,10 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
                       approval_store=ApprovalStore())
     worker_authority = WorkerAuthority(result_key=keys.result_key,
                                        integrity_key=keys.integrity_key)
+    # The production/default path must cross the process sandbox from step 11.
+    # A custom runner_factory remains a test seam, never the security default.
     make_runner = runner_factory or (
-        lambda worker: WorkerRunner(worker, authority=worker_authority))
+        lambda worker: IsolatedWorkerRunner(worker, authority=worker_authority))
 
     endpoints = []
     for worker in tuple(workers):
@@ -140,9 +143,9 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
 
     entry = HttpEntry(
         registry=PrincipalRegistry.from_api_keys(api_keys),
-        submit=_submitter(orchestrator=orchestrator, verifier=verifier,
-                          audit=audit, chain=chain, policy=policy, keys=keys,
-                          now=now),
+        submit=_submitter(orchestrator=orchestrator, gateway=gateway,
+                          verifier=verifier, audit=audit, chain=chain,
+                          policy=policy, keys=keys, now=now),
         job_ids=job_ids,
     )
     return Service(
@@ -152,9 +155,10 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
     )
 
 
-def _submitter(*, orchestrator: Orchestrator, verifier: ResultVerifier,
-               audit: AuditAuthority, chain: AuditChain, policy: Policy,
-               keys: ServiceKeys, now: Callable[[], int]):
+def _submitter(*, orchestrator: Orchestrator, gateway: Gateway,
+               verifier: ResultVerifier, audit: AuditAuthority,
+               chain: AuditChain, policy: Policy, keys: ServiceKeys,
+               now: Callable[[], int]):
     """Turn one authenticated request into one audited, verified job.
 
     The clock is read at each step rather than once: that is the difference
@@ -178,9 +182,10 @@ def _submitter(*, orchestrator: Orchestrator, verifier: ResultVerifier,
             dispatched.result_wire, handoff_wire=dispatched.handoff_wire,
             subject=subject, job_id=job_id, policy=policy, now=now(),
             approval_record_hash=dispatched.approval_record_hash)
-        _record(orchestrator=orchestrator, verifier=verifier, audit=audit,
-                chain=chain, policy=policy, keys=keys, dispatched=dispatched,
-                acceptance=acceptance, subject=subject, job_id=job_id)
+        _record(orchestrator=orchestrator, gateway=gateway,
+                verifier=verifier, audit=audit, chain=chain, policy=policy,
+                keys=keys, dispatched=dispatched, acceptance=acceptance,
+                subject=subject, job_id=job_id)
         return {
             "status": acceptance.status,
             "reason_code": acceptance.result.reason_code,
@@ -192,10 +197,10 @@ def _submitter(*, orchestrator: Orchestrator, verifier: ResultVerifier,
     return submit
 
 
-def _record(*, orchestrator: Orchestrator, verifier: ResultVerifier,
-            audit: AuditAuthority, chain: AuditChain, policy: Policy,
-            keys: ServiceKeys, dispatched, acceptance, subject: str,
-            job_id: str) -> None:
+def _record(*, orchestrator: Orchestrator, gateway: Gateway,
+            verifier: ResultVerifier, audit: AuditAuthority,
+            chain: AuditChain, policy: Policy, keys: ServiceKeys,
+            dispatched, acceptance, subject: str, job_id: str) -> None:
     """Write what each instance decided into the chain, as its own actor.
 
     The audit role revalidates the wire rather than taking the handoff object
@@ -207,12 +212,23 @@ def _record(*, orchestrator: Orchestrator, verifier: ResultVerifier,
                           subject=subject, job_id=job_id,
                           now=acceptance.occurred_at)
     trace_id = f"{_TRACE_PREFIX}{dispatched.handoff_sha256[:16]}"
-    entries = [
-        (audit.actor("orchestrator", orchestrator.orchestrator_id),
-         decision.action, decision.decision, decision.reason_code,
-         decision.occurred_at)
-        for decision in dispatched.decisions
-    ]
+    entries = []
+    for decision in dispatched.decisions:
+        entries.append((
+            audit.actor("orchestrator", orchestrator.orchestrator_id),
+            decision.action, decision.decision, decision.reason_code,
+            decision.occurred_at,
+        ))
+        if decision.action == "HANDOFF_ISSUED":
+            # A Dispatch can only exist after Gateway.admit returned the permit
+            # for this exact wire. dispatch() passes the same `now` to that
+            # gateway call, so the successful admission is recorded at the
+            # issuance/dispatch instant rather than inferred from the verifier.
+            entries.append((
+                audit.actor("gateway", gateway.gateway_id),
+                "HANDOFF_ADMITTED", "ALLOWED", "POLICY_SATISFIED",
+                decision.occurred_at,
+            ))
     entries.append((audit.actor("monitor", verifier.verifier_id),
                     acceptance.action, acceptance.decision, acceptance.reason_code,
                     acceptance.occurred_at))
