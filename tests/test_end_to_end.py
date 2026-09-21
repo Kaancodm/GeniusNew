@@ -20,6 +20,7 @@ import urllib.request
 from geniusnew.audit_chain import sign_head, verify
 from geniusnew.contracts import ContractError, Grant, Policy
 from geniusnew.http_entry import serve
+from geniusnew.isolation import IsolatedWorkerRunner
 from geniusnew.results import WorkerAuthority, accept
 from geniusnew.verifier import Rejected
 from geniusnew.wiring import build
@@ -123,15 +124,22 @@ class EndToEndTest(Fixture, unittest.TestCase):
     def test_the_chain_records_each_instance_and_verifies_against_the_anchor(self):
         self.post()
         records = self.service.chain.records
-        self.assertEqual([record.event.action for record in records],
-                         ['HANDOFF_ISSUED', 'EXECUTION_DISPATCHED', 'RESULT_ACCEPTED'])
-        self.assertEqual([record.event.actor.component for record in records],
-                         ['orchestrator', 'orchestrator', 'monitor'])
+        self.assertEqual(
+            [record.event.action for record in records],
+            ['HANDOFF_ISSUED', 'HANDOFF_ADMITTED',
+             'EXECUTION_DISPATCHED', 'RESULT_ACCEPTED'])
+        self.assertEqual(
+            [record.event.actor.component for record in records],
+            ['orchestrator', 'gateway', 'orchestrator', 'monitor'])
         head = self.service.head()
         self.assertEqual(
             verify(records, head, authority=self.service.audit,
                    anchor=self.service.anchor),
             len(records))
+
+    def test_build_uses_process_isolation_by_default(self):
+        endpoint = self.service.orchestrator._workers['worker-demo']
+        self.assertIsInstance(endpoint.runner, IsolatedWorkerRunner)
 
     def test_a_truncated_chain_is_refused_even_re_signed(self):
         """The anchor's reason for existing, on the real chain this time."""
@@ -200,7 +208,7 @@ class EndToEndTest(Fixture, unittest.TestCase):
         self.assertEqual(first['output'], second['output'])
         self.assertNotEqual(first['handoff_sha256'], second['handoff_sha256'])
         self.assertNotEqual(first['result_sha256'], second['result_sha256'])
-        self.assertEqual(len(self.service.chain.records), 6)
+        self.assertEqual(len(self.service.chain.records), 8)
 
     # --- what the path refuses ----------------------------------------------
 
