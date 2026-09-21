@@ -143,6 +143,31 @@ class AuthorityProbeWorker(Worker):
         return {"text": "authority-present" if present else "authority-absent"}
 
 
+class CallerFrameProbeWorker(Worker):
+    tool = "summarize"
+
+    def run(self, payload):
+        import inspect
+        from geniusnew.results import WorkerAuthority
+        from geniusnew.workers import WorkerRunner
+
+        frame = inspect.currentframe()
+        present = False
+        try:
+            while frame is not None:
+                for value in frame.f_locals.values():
+                    if isinstance(value, (WorkerAuthority, WorkerRunner)):
+                        present = True
+                        break
+                if present:
+                    break
+                frame = frame.f_back
+        finally:
+            del frame
+        return {"text": "caller-authority-present" if present
+                else "caller-authority-absent"}
+
+
 class IsolationLimitsTest(unittest.TestCase):
     def test_limits_reject_values_outside_the_v01_envelope(self):
         cases = [
@@ -388,6 +413,22 @@ class ProcessIsolationTest(unittest.TestCase):
         )
         self.assertTrue(taken.succeeded)
         self.assertEqual(taken.output, {"text": "authority-absent"})
+
+    def test_worker_cannot_walk_parent_caller_frames_to_the_signing_authority(self):
+        isolated = self.taken(
+            self.runner(CallerFrameProbeWorker()).execute(
+                self.permit_for(self.handoff), now=110)
+        )
+        self.assertTrue(isolated.succeeded)
+        self.assertEqual(isolated.output, {"text": "caller-authority-absent"})
+
+        # This is the exploit the composition root must not use: in-process
+        # execution exposes a WorkerRunner in the caller chain to worker code.
+        direct_wire = WorkerRunner(
+            CallerFrameProbeWorker(), authority=self.authority
+        ).execute(self.permit_for(self.handoff), now=110)
+        direct = self.taken(direct_wire)
+        self.assertEqual(direct.output, {"text": "caller-authority-present"})
 
     def test_network_creation_is_denied_and_recorded(self):
         taken = self.taken(self.runner(NetworkWorker()).execute(self.permit_for(self.handoff), now=110))
