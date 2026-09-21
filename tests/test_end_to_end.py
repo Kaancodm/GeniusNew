@@ -38,6 +38,13 @@ REQUEST = 'Zero trust means never trust, always verify.'
 DEFAULT = object()
 
 
+class UngrantedWorker(Worker):
+    tool = 'translate'
+
+    def run(self, payload):
+        return {'text': 'ok'}
+
+
 class SlowRunner(WorkerRunner):
     """A runner whose work function appears to take `takes` seconds.
 
@@ -290,15 +297,9 @@ class EndToEndTest(Fixture, unittest.TestCase):
                                   payload={'text': REQUEST})
 
     def test_the_wiring_refuses_a_worker_no_grant_names(self):
-        class Ungranted(Worker):
-            tool = 'translate'
-
-            def run(self, payload):
-                return {'text': 'ok'}
-
         with self.assertRaisesRegex(ContractError, 'no grant in this policy'):
             build(root_secret=ROOT_SECRET, policy=self.policy_for(),
-                  api_keys={API_KEY: 'subject-demo'}, workers=(Ungranted(),))
+                  api_keys={API_KEY: 'subject-demo'}, workers=(UngrantedWorker(),))
 
     def test_build_refuses_what_it_cannot_rely_on(self):
         for policy in (None, 'policy', 42, {}):
