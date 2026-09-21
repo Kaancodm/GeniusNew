@@ -48,6 +48,7 @@ a worker that never ran.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Mapping
 
 from .contracts import ContractError, Handoff
@@ -157,6 +158,7 @@ class WorkerRunner:
         # copy keeps a misbehaving worker from invalidating its own result, and
         # the check afterwards catches one that found another way.
         before = handoff_digest(handoff)
+        started = self._monotonic()
         try:
             output = self._run_worker(dict(handoff.payload))
         except _WorkerIsolationViolation:
@@ -169,6 +171,20 @@ class WorkerRunner:
             return self._refuse(handoff, _WORKER_FAILED, now=now)
         if handoff_digest(handoff) != before:
             return self._refuse(handoff, _PAYLOAD_MUTATED, now=now)
+        # Roadmap step 15, and the one control point that was missing: `now` is
+        # the dispatch clock and never advances, so a worker that ran past
+        # `expires_at` produced a result nothing here could tell from a prompt
+        # one. Measured, a summarizer sleeping 1.5s under a one-second TTL got
+        # its result signed and accepted. Elapsed time is measured across the
+        # work function and compared against the deadline in real seconds — no
+        # rounding, because rounding up refuses valid short jobs and rounding
+        # down lets a job overrun.
+        #
+        # The signed artifact is untouched: `produced_at` stays the dispatch
+        # clock, so the same job still produces the same bytes. Only the
+        # decision to sign at all depends on how long the work took.
+        if now + (self._monotonic() - started) >= handoff.expires_at:
+            _fail("handoff expired while the worker was running")
 
         try:
             return produce(dict(output) if isinstance(output, Mapping) else output,
@@ -176,6 +192,16 @@ class WorkerRunner:
                            authority=self._authority, now=now)
         except ContractError:
             return self._refuse(handoff, _OUTPUT_REJECTED, now=now)
+
+    def _monotonic(self) -> float:
+        """Elapsed-time source, as a seam.
+
+        A test that proved this by sleeping would be honest and expensive:
+        `scripts/refusals.py` runs the whole suite once per refusal, so one
+        second of sleeping costs three minutes of CI. Overriding this is how
+        the tests make a worker take an hour without taking an hour.
+        """
+        return time.monotonic()
 
     def _run_worker(self, payload: Mapping[str, str]) -> Mapping[str, str]:
         """Execute the untrusted work function.
