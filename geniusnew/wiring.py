@@ -51,12 +51,13 @@ from .approvals import ApprovalStore
 from .audit import AuditAuthority, event_from_handoff
 from .audit_chain import AuditAnchor, AuditChain
 from .contracts import ContractError, Policy, validate, validate_pending
-from .gateway import Gateway
+from .gateway import ADMISSION_REASON_CODE, Gateway, GatewayRejected
 from .http_entry import HttpEntry, PrincipalRegistry
+from .isolation import IsolatedWorkerRunner
 from .keys import ServiceKeys, derive_keys
-from .orchestrator import Orchestrator, WorkerEndpoint
+from .orchestrator import Denied, DispatchAttempted, Orchestrator, WorkerEndpoint
 from .results import WorkerAuthority
-from .verifier import ResultVerifier
+from .verifier import Rejected, ResultVerifier
 from .workers import Worker, WorkerRunner
 
 _TRACE_PREFIX = "trace-"
@@ -110,8 +111,12 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
                       approval_store=ApprovalStore())
     worker_authority = WorkerAuthority(result_key=keys.result_key,
                                        integrity_key=keys.integrity_key)
+    # The production/default path is fail-closed isolated execution. Tests may
+    # inject a runner_factory deliberately, but a host without the required
+    # POSIX isolation primitives must fail here rather than silently fall back
+    # to same-process worker execution.
     make_runner = runner_factory or (
-        lambda worker: WorkerRunner(worker, authority=worker_authority))
+        lambda worker: IsolatedWorkerRunner(worker, authority=worker_authority))
 
     endpoints = []
     for worker in tuple(workers):
@@ -140,9 +145,9 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
 
     entry = HttpEntry(
         registry=PrincipalRegistry.from_api_keys(api_keys),
-        submit=_submitter(orchestrator=orchestrator, verifier=verifier,
-                          audit=audit, chain=chain, policy=policy, keys=keys,
-                          now=now),
+        submit=_submitter(orchestrator=orchestrator, gateway=gateway,
+                          verifier=verifier, audit=audit, chain=chain,
+                          policy=policy, keys=keys, now=now),
         job_ids=job_ids,
     )
     return Service(
@@ -152,35 +157,122 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
     )
 
 
-def _submitter(*, orchestrator: Orchestrator, verifier: ResultVerifier,
-               audit: AuditAuthority, chain: AuditChain, policy: Policy,
-               keys: ServiceKeys, now: Callable[[], int]):
+def _submitter(*, orchestrator: Orchestrator, gateway: Gateway,
+               verifier: ResultVerifier, audit: AuditAuthority,
+               chain: AuditChain, policy: Policy, keys: ServiceKeys,
+               now: Callable[[], int]):
     """Turn one authenticated request into one audited, verified job.
 
-    The clock is read at each step rather than once: that is the difference
-    between a TTL and a note about when the request arrived, and step 15's
-    third control point exists because a single frozen `now` cannot see a
-    deadline pass.
+    Evidence is appended as each security-relevant decision happens. That is
+    intentionally incremental: a later refusal must not erase the fact that an
+    earlier component issued, admitted, or dispatched the job.
     """
 
     def submit(*, subject: str, job_id: str, payload: Mapping[str, str]) -> dict[str, Any]:
         # An approval token is a capability a client would have to present, and
-        # the entrance has no field for one. The gateway would refuse anyway,
-        # further in and with a message about tokens; saying it here keeps the
-        # gap named rather than looking like a policy failure. Approval-bound
-        # work is reachable only by calling the orchestrator directly until the
-        # entrance grows a place to carry the token.
+        # the entrance has no field for one. Keep that gap explicit until the
+        # HTTP contract grows a safe place to carry it.
         if policy.grant_for(subject).requires_approval:
             _fail("approval-bound jobs cannot be submitted through the entrance")
-        dispatched = orchestrator.submit(
-            payload, subject=subject, job_id=job_id, policy=policy, now=now())
-        acceptance = verifier.accept(
-            dispatched.result_wire, handoff_wire=dispatched.handoff_wire,
-            subject=subject, job_id=job_id, policy=policy, now=now(),
-            approval_record_hash=dispatched.approval_record_hash)
-        _record(orchestrator=orchestrator, verifier=verifier, audit=audit,
-                chain=chain, policy=policy, keys=keys, dispatched=dispatched,
-                acceptance=acceptance, subject=subject, job_id=job_id)
+
+        admitted_at = now()
+        # Route before issuing so an impossible route produces no signed
+        # authorization artifact.
+        orchestrator.route(subject=subject, policy=policy, now=admitted_at)
+        admission = orchestrator.admit(
+            payload, subject=subject, job_id=job_id, policy=policy,
+            now=admitted_at)
+        handoff = _revalidate(
+            policy=policy, keys=keys, wire=admission.wire,
+            subject=subject, job_id=job_id, now=admitted_at)
+        trace_id = _trace_id(handoff)
+        _append_event(
+            chain=chain, audit=audit, handoff=handoff, trace_id=trace_id,
+            component="orchestrator", instance_id=orchestrator.orchestrator_id,
+            action=admission.decision.action,
+            decision=admission.decision.decision,
+            reason_code=admission.decision.reason_code,
+            occurred_at=admission.decision.occurred_at)
+
+        dispatch_at = now()
+        try:
+            dispatched = orchestrator.dispatch(
+                admission.wire, subject=subject, job_id=job_id, policy=policy,
+                now=dispatch_at)
+        except GatewayRejected as refusal:
+            _append_event(
+                chain=chain, audit=audit, handoff=handoff, trace_id=trace_id,
+                component="gateway", instance_id=refusal.gateway_id,
+                action="HANDOFF_REJECTED", decision="DENIED",
+                reason_code=refusal.reason_code,
+                occurred_at=refusal.occurred_at)
+            raise
+        except Denied as refusal:
+            _append_event(
+                chain=chain, audit=audit, handoff=handoff, trace_id=trace_id,
+                component="orchestrator", instance_id=orchestrator.orchestrator_id,
+                action=refusal.decision.action,
+                decision=refusal.decision.decision,
+                reason_code=refusal.decision.reason_code,
+                occurred_at=refusal.decision.occurred_at)
+            raise
+        except DispatchAttempted as refusal:
+            # A DispatchAttempted means gateway admission succeeded and the
+            # orchestrator committed to execution before the worker boundary
+            # refused or failed. Preserve every one of those decisions.
+            _append_event(
+                chain=chain, audit=audit, handoff=handoff, trace_id=trace_id,
+                component="gateway", instance_id=gateway.gateway_id,
+                action="HANDOFF_ADMITTED", decision="ALLOWED",
+                reason_code=ADMISSION_REASON_CODE, occurred_at=dispatch_at)
+            _append_event(
+                chain=chain, audit=audit, handoff=handoff, trace_id=trace_id,
+                component="orchestrator", instance_id=orchestrator.orchestrator_id,
+                action=refusal.decision.action,
+                decision=refusal.decision.decision,
+                reason_code=refusal.decision.reason_code,
+                occurred_at=refusal.decision.occurred_at)
+            _append_event(
+                chain=chain, audit=audit, handoff=handoff, trace_id=trace_id,
+                component="worker", instance_id=handoff.worker_agent_id,
+                action="HANDOFF_REJECTED", decision="DENIED",
+                reason_code="EXECUTION_REFUSED", occurred_at=dispatch_at)
+            raise
+
+        _append_event(
+            chain=chain, audit=audit, handoff=handoff, trace_id=trace_id,
+            component="gateway", instance_id=gateway.gateway_id,
+            action="HANDOFF_ADMITTED", decision="ALLOWED",
+            reason_code=ADMISSION_REASON_CODE, occurred_at=dispatch_at)
+        for decision in dispatched.decisions:
+            _append_event(
+                chain=chain, audit=audit, handoff=handoff, trace_id=trace_id,
+                component="orchestrator", instance_id=orchestrator.orchestrator_id,
+                action=decision.action, decision=decision.decision,
+                reason_code=decision.reason_code,
+                occurred_at=decision.occurred_at)
+
+        verify_at = now()
+        try:
+            acceptance = verifier.accept(
+                dispatched.result_wire, handoff_wire=dispatched.handoff_wire,
+                subject=subject, job_id=job_id, policy=policy, now=verify_at,
+                approval_record_hash=dispatched.approval_record_hash)
+        except Rejected as refusal:
+            _append_event(
+                chain=chain, audit=audit, handoff=handoff, trace_id=trace_id,
+                component="monitor", instance_id=verifier.verifier_id,
+                action="RESULT_REJECTED", decision="DENIED",
+                reason_code=refusal.reason_code,
+                occurred_at=refusal.occurred_at)
+            raise
+
+        _append_event(
+            chain=chain, audit=audit, handoff=handoff, trace_id=trace_id,
+            component="monitor", instance_id=verifier.verifier_id,
+            action=acceptance.action, decision=acceptance.decision,
+            reason_code=acceptance.reason_code,
+            occurred_at=acceptance.occurred_at)
         return {
             "status": acceptance.status,
             "reason_code": acceptance.result.reason_code,
@@ -192,34 +284,26 @@ def _submitter(*, orchestrator: Orchestrator, verifier: ResultVerifier,
     return submit
 
 
-def _record(*, orchestrator: Orchestrator, verifier: ResultVerifier,
-            audit: AuditAuthority, chain: AuditChain, policy: Policy,
-            keys: ServiceKeys, dispatched, acceptance, subject: str,
-            job_id: str) -> None:
-    """Write what each instance decided into the chain, as its own actor.
+def _trace_id(handoff) -> str:
+    return f"{_TRACE_PREFIX}{handoff_digest_for_audit(handoff)[:16]}"
 
-    The audit role revalidates the wire rather than taking the handoff object
-    from the component whose decision it is recording. In one process that is a
-    formality; it is also the only version of this that survives the components
-    being split apart, which is the point of writing it this way now.
-    """
-    handoff = _revalidate(policy=policy, keys=keys, wire=dispatched.handoff_wire,
-                          subject=subject, job_id=job_id,
-                          now=acceptance.occurred_at)
-    trace_id = f"{_TRACE_PREFIX}{dispatched.handoff_sha256[:16]}"
-    entries = [
-        (audit.actor("orchestrator", orchestrator.orchestrator_id),
-         decision.action, decision.decision, decision.reason_code,
-         decision.occurred_at)
-        for decision in dispatched.decisions
-    ]
-    entries.append((audit.actor("monitor", verifier.verifier_id),
-                    acceptance.action, acceptance.decision, acceptance.reason_code,
-                    acceptance.occurred_at))
-    for actor, action, decision, reason_code, occurred_at in entries:
-        chain.append(event_from_handoff(
-            handoff, trace_id=trace_id, actor=actor, action=action,
-            decision=decision, reason_code=reason_code, occurred_at=occurred_at))
+
+def handoff_digest_for_audit(handoff) -> str:
+    # Keep the trace derivation identical to the audit/result artifact binding
+    # without reaching into another component for authority.
+    import hashlib
+    return hashlib.sha256(handoff.to_bytes()).hexdigest()
+
+
+def _append_event(*, chain: AuditChain, audit: AuditAuthority, handoff,
+                  trace_id: str, component: str, instance_id: str,
+                  action: str, decision: str, reason_code: str,
+                  occurred_at: int) -> None:
+    chain.append(event_from_handoff(
+        handoff, trace_id=trace_id,
+        actor=audit.actor(component, instance_id), action=action,
+        decision=decision, reason_code=reason_code,
+        occurred_at=occurred_at))
 
 
 def _revalidate(*, policy: Policy, keys: ServiceKeys, wire: bytes, subject: str,
