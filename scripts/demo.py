@@ -137,7 +137,7 @@ def main(root_secret: bytes, request_text: str, api_key: bytes = API_KEY) -> int
         thread.join(5)
 
     job_ok = body["status"] == "SUCCEEDED" and body["reason_code"] == "WORK_COMPLETED"
-    chain_ok = verified == len(records) == 3
+    chain_ok = verified == len(records) == 4
     attacks_ok = refused == len(attacks)
 
     line()
