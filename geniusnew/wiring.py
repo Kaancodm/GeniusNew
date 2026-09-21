@@ -304,10 +304,10 @@ def _revalidate(*, policy: Policy, keys: ServiceKeys, wire: bytes, subject: str,
     """Parse the wire again for the audit role, pending approval included.
 
     `validate` refuses a handoff that still reads PENDING_APPROVAL, which every
-    approval-bound wire does for ever. Audit has to be able to record those jobs
-    too, so it uses the pending path when the grant says so — and records the
-    gateway's receipt hash as the evidence it is, rather than inferring approval
-    from the fact that a result exists.
+    approval-bound wire does for ever. Audit has to be able to derive the same
+    handoff identity for those jobs too, so it uses the pending path when the
+    grant says so. The gateway receipt remains separate evidence carried to the
+    verifier; approval over the HTTP entrance is still explicitly out of scope.
     """
     grant = policy.grant_for(subject)
     revalidate = validate_pending if grant.requires_approval else validate
