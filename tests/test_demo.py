@@ -64,7 +64,7 @@ class DemoTest(unittest.TestCase):
         code, output = run()
         self.assertEqual(code, 0, output)
         self.assertIn("PASS", output)
-        self.assertIn("VERIFIED against the anchored head: 3 entries", output)
+        self.assertIn("VERIFIED against the anchored head: 4 entries", output)
 
     def test_every_attack_is_refused(self):
         """The half that matters. A pipeline printing success proves nothing."""
@@ -191,10 +191,11 @@ class DemoTest(unittest.TestCase):
         self.assertIn("identity came from the key, server-side", output)
         self.assertIn("[ok] Submit with a key that is not registered", output)
 
-    def test_the_chain_names_two_different_components(self):
-        """An orchestrator confirming its own acceptance would be one name."""
+    def test_the_chain_names_all_security_roles_on_the_success_path(self):
+        """Issuance, gateway admission and result acceptance name their actors."""
         _, output = run()
         self.assertIn("orchestrator HANDOFF_ISSUED", output)
+        self.assertIn("gateway      HANDOFF_ADMITTED", output)
         self.assertIn("orchestrator EXECUTION_DISPATCHED", output)
         self.assertIn("monitor      RESULT_ACCEPTED", output)
 
