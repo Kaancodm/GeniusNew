@@ -4,7 +4,7 @@ import unittest
 
 from geniusnew.approvals import ApprovalStore, create_scope
 from geniusnew.contracts import ContractError, Grant, Policy, issue, validate
-from geniusnew.gateway import DispatchPermit, Gateway, handoff_from_permit
+from geniusnew.gateway import DispatchPermit, Gateway, GatewayRejected, handoff_from_permit
 from geniusnew.results import WorkerAuthority, accept
 from geniusnew.workers import DeterministicSummarizer, WorkerRunner
 
@@ -136,6 +136,29 @@ class GatewayTest(unittest.TestCase):
                 handoff, subject="subject-demo", job_id="job-demo",
                 policy=self.policy, now=101,
             )
+
+    def test_gateway_rejections_have_closed_audit_reason_codes(self):
+        with self.assertRaises(GatewayRejected) as caught:
+            self.gateway.admit(
+                self.wire, subject="subject-other", job_id="job-demo",
+                policy=self.policy, now=101,
+            )
+        self.assertEqual(caught.exception.reason_code, "SUBJECT_NOT_AUTHORIZED")
+        self.assertEqual(caught.exception.gateway_id, "gateway-test")
+        self.assertEqual(caught.exception.occurred_at, 101)
+
+        for reason_code in ("", "SOMETHING_ELSE", None, 42, []):
+            with self.subTest(reason_code=reason_code), self.assertRaises(ContractError):
+                GatewayRejected(
+                    "fixed", gateway_id="gateway-test",
+                    reason_code=reason_code, occurred_at=101,
+                )
+        for occurred_at in (None, "101", 101.0, True, object()):
+            with self.subTest(occurred_at=occurred_at), self.assertRaises(ContractError):
+                GatewayRejected(
+                    "fixed", gateway_id="gateway-test",
+                    reason_code="HANDOFF_NOT_VALID", occurred_at=occurred_at,
+                )
 
     def test_approval_required_handoff_needs_and_consumes_one_token(self):
         policy = self.policy_for(requires_approval=True)
