@@ -45,6 +45,10 @@ from geniusnew.workers import DeterministicSummarizer, Worker, WorkerRunner
 ROOT_SECRET = b'a-ttl-test-root-secret-of-32-bytes!!'
 T = 1_700_000_000
 
+# Zero-entropy and self-describing. Its job is to be unmistakable if a worker's
+# exception text ever reaches a refusal raised on its behalf.
+CANARY = 'TTL-CANARY-MUST-NOT-REACH-A-REFUSAL'
+
 
 class SlowRunner(WorkerRunner):
     """A runner whose work function appears to take `takes` seconds."""
@@ -171,6 +175,53 @@ class TTLControlPointTest(Fixture, unittest.TestCase):
                             takes=1.5)
         with self.assertRaisesRegex(ContractError, 'expired while the worker was running'):
             runner.execute(permit, now=T)
+
+    def test_a_worker_that_fails_late_gets_no_signed_failure_either(self):
+        """Past the deadline there is no signable answer, success or failure.
+
+        The first version of this check sat after the failure paths had already
+        returned, so a worker that raised *and* overran still produced a signed
+        FAILED for a dead authorization. That is the same lie as a signed
+        SUCCEEDED, told in the other direction.
+        """
+        class Exploding(Worker):
+            tool = 'summarize'
+
+            def run(self, payload):
+                raise RuntimeError(CANARY)
+
+        _, _, permit = self.admit(ttl=1)
+        runner = SlowRunner(Exploding(), authority=self.authority, takes=2.0)
+        with self.assertRaisesRegex(ContractError, 'expired while the worker was running'):
+            runner.execute(permit, now=T)
+
+    def test_the_late_refusal_carries_no_trace_of_the_worker_exception(self):
+        """Raised outside the handler, so nothing rides out on __context__.
+
+        `from None` would not be enough — it only sets __suppress_context__ and
+        leaves the text one attribute away.
+        """
+        import traceback
+
+        class Exploding(Worker):
+            tool = 'summarize'
+
+            def run(self, payload):
+                raise RuntimeError(CANARY)
+
+        _, _, permit = self.admit(ttl=1)
+        runner = SlowRunner(Exploding(), authority=self.authority, takes=2.0)
+        with self.assertRaises(ContractError) as caught:
+            runner.execute(permit, now=T)
+        seen, exception = set(), caught.exception
+        while exception is not None and id(exception) not in seen:
+            seen.add(id(exception))
+            with self.subTest(link=type(exception).__name__):
+                self.assertNotIn(CANARY, str(exception))
+            exception = exception.__cause__ or exception.__context__
+        formatted = ''.join(traceback.format_exception(
+            type(caught.exception), caught.exception, caught.exception.__traceback__))
+        self.assertNotIn(CANARY, formatted)
 
     def test_the_work_still_runs_and_signs_when_it_finishes_in_time(self):
         _, _, permit = self.admit(ttl=60)

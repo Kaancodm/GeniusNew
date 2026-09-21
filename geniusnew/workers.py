@@ -159,18 +159,21 @@ class WorkerRunner:
         # the check afterwards catches one that found another way.
         before = handoff_digest(handoff)
         started = self._monotonic()
+        failure = None
         try:
             output = self._run_worker(dict(handoff.payload))
         except _WorkerIsolationViolation:
-            return self._refuse(handoff, _ISOLATION_VIOLATED, now=now)
+            failure = _ISOLATION_VIOLATED
         except _WorkerResourceExhausted:
-            return self._refuse(handoff, _RESOURCE_EXHAUSTED, now=now)
+            failure = _RESOURCE_EXHAUSTED
         except Exception:  # noqa: BLE001 - a worker failing is an outcome here
             # Deliberately not `str(exc)`: reason_code is a closed shape so that
-            # a failure cannot carry text out of the execution domain.
-            return self._refuse(handoff, _WORKER_FAILED, now=now)
-        if handoff_digest(handoff) != before:
-            return self._refuse(handoff, _PAYLOAD_MUTATED, now=now)
+            # a failure cannot carry text out of the execution domain. Recorded
+            # rather than signed here, so the deadline below is checked first —
+            # and, because the refusal is then raised outside the handler, the
+            # worker's exception cannot ride out on `__context__` either.
+            failure = _WORKER_FAILED
+
         # Roadmap step 15, and the one control point that was missing: `now` is
         # the dispatch clock and never advances, so a worker that ran past
         # `expires_at` produced a result nothing here could tell from a prompt
@@ -180,11 +183,19 @@ class WorkerRunner:
         # rounding, because rounding up refuses valid short jobs and rounding
         # down lets a job overrun.
         #
+        # Checked before any outcome is signed, success or failure alike: past
+        # `expires_at` there is no signable answer at all, and a signed FAILED
+        # for a dead authorization is the same lie as a signed SUCCEEDED.
+        #
         # The signed artifact is untouched: `produced_at` stays the dispatch
         # clock, so the same job still produces the same bytes. Only the
         # decision to sign at all depends on how long the work took.
         if now + (self._monotonic() - started) >= handoff.expires_at:
             _fail("handoff expired while the worker was running")
+        if failure is not None:
+            return self._refuse(handoff, failure, now=now)
+        if handoff_digest(handoff) != before:
+            return self._refuse(handoff, _PAYLOAD_MUTATED, now=now)
 
         try:
             return produce(dict(output) if isinstance(output, Mapping) else output,
