@@ -27,6 +27,15 @@ _GATEWAY_ID = re.compile(r"\A[a-z0-9][a-z0-9-]{0,62}\Z")
 _DIGEST = re.compile(r"\A[0-9a-f]{64}\Z")
 _PERMIT_PROVENANCE = object()
 
+ADMISSION_REASON_CODE = "POLICY_SATISFIED"
+REJECTIONS = frozenset({
+    "SUBJECT_NOT_AUTHORIZED",
+    "HANDOFF_NOT_VALID",
+    "APPROVAL_REQUIRED",
+    "APPROVAL_UNEXPECTED",
+    "APPROVAL_NOT_VALID",
+})
+
 
 class _PermitUse:
     """Atomic one-shot state bound to the exact fields of one permit."""
@@ -123,6 +132,22 @@ def consume_handoff_from_permit(permit: Any) -> Handoff:
     return handoff
 
 
+class GatewayRejected(ContractError):
+    """A recordable gateway refusal with a closed, non-sensitive reason code."""
+
+    def __init__(self, message: str, *, gateway_id: str, reason_code: str,
+                 occurred_at: int) -> None:
+        _gateway_id(gateway_id)
+        if type(reason_code) is not str or reason_code not in REJECTIONS:
+            _fail("reason_code is not a gateway rejection code")
+        if type(occurred_at) is not int:
+            _fail("occurred_at must be an integer")
+        super().__init__(message)
+        self.gateway_id = gateway_id
+        self.reason_code = reason_code
+        self.occurred_at = occurred_at
+
+
 class Gateway:
     """Independent validation and approval consumption before dispatch."""
 
@@ -148,28 +173,59 @@ class Gateway:
         """
         if not isinstance(policy, Policy):
             _fail("policy is invalid")
-        grant = policy.grant_for(subject)
+        try:
+            grant = policy.grant_for(subject)
+        except ContractError as refusal:
+            raise GatewayRejected(
+                str(refusal), gateway_id=self._gateway_id,
+                reason_code="SUBJECT_NOT_AUTHORIZED", occurred_at=now,
+            ) from None
 
         if grant.requires_approval:
             if approval_token is None:
-                _fail("approval token is required")
-            handoff = validate_pending(
-                wire, subject=subject, job_id=job_id, policy=policy,
-                integrity_key=self._integrity_key, now=now,
-            )
-            scope = create_scope(
-                wire, subject=subject, job_id=job_id, policy=policy,
-                integrity_key=self._integrity_key, now=now,
-            )
-            receipt = self._approvals.consume(approval_token, scope, now=now)
+                raise GatewayRejected(
+                    "approval token is required", gateway_id=self._gateway_id,
+                    reason_code="APPROVAL_REQUIRED", occurred_at=now,
+                )
+            try:
+                handoff = validate_pending(
+                    wire, subject=subject, job_id=job_id, policy=policy,
+                    integrity_key=self._integrity_key, now=now,
+                )
+            except ContractError as refusal:
+                raise GatewayRejected(
+                    str(refusal), gateway_id=self._gateway_id,
+                    reason_code="HANDOFF_NOT_VALID", occurred_at=now,
+                ) from None
+            try:
+                scope = create_scope(
+                    wire, subject=subject, job_id=job_id, policy=policy,
+                    integrity_key=self._integrity_key, now=now,
+                )
+                receipt = self._approvals.consume(approval_token, scope, now=now)
+            except ContractError as refusal:
+                raise GatewayRejected(
+                    str(refusal), gateway_id=self._gateway_id,
+                    reason_code="APPROVAL_NOT_VALID", occurred_at=now,
+                ) from None
             approval_record_hash: str | None = receipt.record_hash
         else:
             if approval_token is not None:
-                _fail("approval token is not allowed when policy does not require approval")
-            handoff = validate(
-                wire, subject=subject, job_id=job_id, policy=policy,
-                integrity_key=self._integrity_key, now=now,
-            )
+                raise GatewayRejected(
+                    "approval token is not allowed when policy does not require approval",
+                    gateway_id=self._gateway_id,
+                    reason_code="APPROVAL_UNEXPECTED", occurred_at=now,
+                )
+            try:
+                handoff = validate(
+                    wire, subject=subject, job_id=job_id, policy=policy,
+                    integrity_key=self._integrity_key, now=now,
+                )
+            except ContractError as refusal:
+                raise GatewayRejected(
+                    str(refusal), gateway_id=self._gateway_id,
+                    reason_code="HANDOFF_NOT_VALID", occurred_at=now,
+                ) from None
             approval_record_hash = None
 
         digest = handoff_digest(handoff)
