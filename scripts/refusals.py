@@ -166,7 +166,11 @@ def check(paths: list[str]) -> int:
         survivors = []
         for index, (path, refusal) in enumerate(refusals, start=1):
             target = workspace / refusal.path
-            original = path.read_text()
+            # Read from the frozen copy, not the live file. A run takes minutes;
+            # reading the original each time meant an edit made while it ran
+            # shifted the line numbers under it and the run died with "could
+            # not locate the refusal" after ten minutes of work.
+            original = target.read_text()
             target.write_text(_disable(original, refusal))
             survived = _suite_passes(workspace)
             target.write_text(original)
