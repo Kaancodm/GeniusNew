@@ -20,6 +20,7 @@ import urllib.request
 from geniusnew.audit_chain import sign_head, verify
 from geniusnew.contracts import ContractError, Grant, Policy
 from geniusnew.http_entry import serve
+from geniusnew.isolation import IsolatedWorkerRunner
 from geniusnew.results import WorkerAuthority, accept
 from geniusnew.verifier import Rejected
 from geniusnew.wiring import build
@@ -124,14 +125,45 @@ class EndToEndTest(Fixture, unittest.TestCase):
         self.post()
         records = self.service.chain.records
         self.assertEqual([record.event.action for record in records],
-                         ['HANDOFF_ISSUED', 'EXECUTION_DISPATCHED', 'RESULT_ACCEPTED'])
+                         ['HANDOFF_ISSUED', 'HANDOFF_ADMITTED',
+                          'EXECUTION_DISPATCHED', 'RESULT_ACCEPTED'])
         self.assertEqual([record.event.actor.component for record in records],
-                         ['orchestrator', 'orchestrator', 'monitor'])
+                         ['orchestrator', 'gateway', 'orchestrator', 'monitor'])
         head = self.service.head()
         self.assertEqual(
             verify(records, head, authority=self.service.audit,
                    anchor=self.service.anchor),
             len(records))
+
+    def test_default_composition_uses_process_isolation(self):
+        runners = [endpoint.runner
+                   for endpoint in self.service.orchestrator._workers.values()]
+        self.assertTrue(runners)
+        self.assertTrue(all(isinstance(runner, IsolatedWorkerRunner)
+                            for runner in runners))
+
+    def test_gateway_refusal_is_audited_after_handoff_issue(self):
+        ticks = iter((self.clock[0], self.clock[0] + 1))
+        service = build(
+            root_secret=ROOT_SECRET, policy=self.policy_for(ttl=1),
+            api_keys={API_KEY: 'subject-demo'},
+            workers=(DeterministicSummarizer(),), clock=lambda: next(ticks))
+        server = serve(service.entry)
+        thread = threading.Thread(target=server.serve_forever,
+                                  kwargs={'poll_interval': 0.01}, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        host, port = server.server_address
+        status, body = self.post(url=f'http://{host}:{port}/jobs')
+        self.assertEqual((status, body), (409, {'error': 'REJECTED'}))
+        records = service.chain.records
+        self.assertEqual([record.event.action for record in records],
+                         ['HANDOFF_ISSUED', 'HANDOFF_REJECTED'])
+        self.assertEqual([record.event.actor.component for record in records],
+                         ['orchestrator', 'gateway'])
+        self.assertEqual(records[-1].event.reason_code, 'HANDOFF_NOT_VALID')
 
     def test_a_truncated_chain_is_refused_even_re_signed(self):
         """The anchor's reason for existing, on the real chain this time."""
@@ -200,7 +232,7 @@ class EndToEndTest(Fixture, unittest.TestCase):
         self.assertEqual(first['output'], second['output'])
         self.assertNotEqual(first['handoff_sha256'], second['handoff_sha256'])
         self.assertNotEqual(first['result_sha256'], second['result_sha256'])
-        self.assertEqual(len(self.service.chain.records), 6)
+        self.assertEqual(len(self.service.chain.records), 8)
 
     # --- what the path refuses ----------------------------------------------
 
@@ -237,7 +269,14 @@ class EndToEndTest(Fixture, unittest.TestCase):
         host, port = server.server_address
         status, body = self.post(url=f'http://{host}:{port}/jobs')
         self.assertEqual((status, body), (409, {'error': 'REJECTED'}))
-        self.assertEqual(service.chain.records, ())
+        records = service.chain.records
+        self.assertEqual([record.event.action for record in records],
+                         ['HANDOFF_ISSUED', 'HANDOFF_ADMITTED',
+                          'EXECUTION_DISPATCHED', 'HANDOFF_REJECTED'])
+        self.assertEqual([record.event.actor.component for record in records],
+                         ['orchestrator', 'gateway', 'orchestrator', 'worker'])
+        self.assertNotIn('RESULT_ACCEPTED',
+                         [record.event.action for record in records])
 
     def test_an_approval_bound_job_is_refused_with_the_gap_named(self):
         """The entrance has no field for an approval token, and says so."""
