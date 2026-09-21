@@ -350,6 +350,38 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
     Schritt 11 ersetzt das nicht. Eigener End-to-End-Test für Ablauf **während** der
     Ausführung.
 
+    **Status: steht** (`tests/test_ttl.py`, plus eine Ergänzung in `geniusnew/workers.py`).
+    Die vier Punkte sind: Admission (das Gateway revalidiert den Wire), vor dem Dispatch
+    (die Worker-Grenze lehnt ab, **bevor** die Arbeitsfunktion läuft), Revalidierung im
+    Worker (nach der Arbeit, gegen die tatsächlich verstrichene Zeit) und Annahme. Jeder
+    Test prüft die **Meldung**, nicht nur dass irgendetwas abgelehnt wurde — mehrere dieser
+    Eingaben würden von einem späteren Punkt ohnehin abgelehnt, „ein ContractError kam"
+    überlebte also das Löschen des früheren.
+
+    **Der dritte Punkt fehlte.** `now` ist die Dispatch-Uhr und rückt nie vor, also war
+    eine Ausführung, die die Deadline überschritt, von einer prompten nicht zu
+    unterscheiden. Gemessen, bevor etwas geändert wurde: ein Worker, der 1,5 Sekunden
+    schläft, bekam unter einer TTL von **einer** Sekunde sein Ergebnis signiert *und*
+    angenommen. Jetzt wird die verstrichene Zeit über die Arbeitsfunktion gemessen und in
+    echten Sekunden gegen die Deadline gehalten — ohne Rundung, denn Aufrunden lehnt
+    gültige kurze Jobs ab und Abrunden lässt einen Job überziehen.
+
+    Das signierte Artefakt bleibt davon unberührt: `produced_at` ist weiterhin die
+    Dispatch-Uhr, derselbe Job erzeugt dieselben Bytes. Nur die Entscheidung, überhaupt zu
+    signieren, hängt an der Dauer. Ein Test hält das fest, weil `scripts/demo.sh` genau
+    diese Digests ausgibt, damit ein Leser zwei Läufe vergleichen kann.
+
+    Dass ein Ressourcen-Zeitlimit das nicht ersetzt, ist keine Meinung, sondern Arithmetik:
+    ein Wall-Limit darf bis 30 Sekunden gehen, eine Handoff-TTL bei einer Sekunde liegen.
+    Die beiden beantworten verschiedene Fragen — was ein Worker verbrauchen darf, und wie
+    lange die Erlaubnis dazu gilt.
+
+    **Kein Test hier schläft.** `scripts/refusals.py` führt die gesamte Suite einmal pro
+    Ablehnung aus, derzeit 175-mal; eine Sekunde Schlaf kostet drei Minuten CI. Die
+    Zeitquelle des Runners ist deshalb eine überschreibbare Naht (`_monotonic`), und die
+    Tests lassen einen Worker eine Stunde dauern, ohne eine Stunde zu dauern. In der
+    Produktion ist es `time.monotonic`; gefunden wurde die Lücke mit einem echten Worker.
+
 16. **HTTP-Eingang** — API-Key wird serverseitig auf einen Principal abgebildet.
     Identität, Tier und Rechte kommen **nie** aus dem Request.
 
