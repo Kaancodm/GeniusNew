@@ -243,6 +243,12 @@ class Dispatch:
     handoff_wire: bytes
     result_wire: bytes
     decisions: tuple[Decision, ...]
+    # Carried, not used here. An approval-bound wire keeps `PENDING_APPROVAL`
+    # for ever, so the result verifier cannot tell an approved job from an
+    # unapproved one and refuses without the gateway's receipt. Dropping it
+    # here made those two components impossible to wire together — found by
+    # wiring them, which is what step 17 is for.
+    approval_record_hash: str | None = None
 
 
 class Orchestrator:
@@ -371,6 +377,7 @@ class Orchestrator:
             handoff_wire=permit.handoff.to_bytes(),
             result_wire=result_wire,
             decisions=(decided,),
+            approval_record_hash=permit.approval_record_hash,
         )
 
     def submit(self, request: Any, *, subject: str, job_id: str, policy: Policy,
@@ -391,6 +398,7 @@ class Orchestrator:
             handoff_wire=dispatched.handoff_wire,
             result_wire=dispatched.result_wire,
             decisions=(admission.decision,) + dispatched.decisions,
+            approval_record_hash=dispatched.approval_record_hash,
         )
 
     def _trusted(self, policy: Any, *, now: int) -> Policy:

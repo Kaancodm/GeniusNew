@@ -339,6 +339,25 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         self.assertIsInstance(dispatched.result_wire, bytes)
         self.assertEqual(self.orchestrator._jobs, {'job-demo'})
 
+    def test_the_gateway_receipt_travels_with_the_dispatch(self):
+        """The result verifier refuses an approval-bound job without it.
+
+        An approval-bound wire keeps PENDING_APPROVAL for ever, so the verifier
+        cannot tell an approved job from an unapproved one and requires the
+        gateway's receipt hash. Dropping it here made the two impossible to wire
+        together — found by wiring them.
+        """
+        policy = self.policy_for(requires_approval=True)
+        wire = self.wire(policy=policy)
+        scope = create_scope(wire, subject='subject-demo', job_id='job-demo',
+                             policy=policy, integrity_key=self.key, now=101)
+        granted = self.store.grant(scope, now=101, ttl_seconds=30)
+        dispatched = self.dispatch(wire, policy=policy, now=102,
+                                   approval_token=granted.token)
+        self.assertRegex(dispatched.approval_record_hash, r'\A[0-9a-f]{64}\Z')
+        # And a job that needed no approval carries no receipt to claim one.
+        self.assertIsNone(self.submit(job_id='job-plain').approval_record_hash)
+
     def test_the_approval_is_consumed_by_the_gateway_and_only_once(self):
         policy = self.policy_for(requires_approval=True)
         wire = self.wire(policy=policy)
