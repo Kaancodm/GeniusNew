@@ -377,6 +377,46 @@ class HttpSocketTest(Fixture, unittest.TestCase):
         self.assertNotIn('Python', joined)
         self.assertNotIn('BaseHTTP', joined)
 
+    def test_a_chunked_body_is_refused_and_the_connection_is_not_reused(self):
+        """An unread body is where the next request gets parsed from.
+
+        Nothing here reads a chunked body, so leaving the connection open
+        would have whatever the client sent next parsed as a request line. The
+        refusal closes it instead.
+        """
+        import http.client
+
+        host, port = self.server.server_address
+        connection = http.client.HTTPConnection(host, port, timeout=10)
+        connection.putrequest('POST', '/jobs', skip_accept_encoding=True)
+        connection.putheader('Content-Type', 'application/json')
+        connection.putheader('Authorization', 'Bearer ' + API_KEY.decode())
+        connection.putheader('Transfer-Encoding', 'chunked')
+        connection.endheaders()
+        connection.send(b'10\r\n{"text": "xxxxx"}\r\n0\r\n\r\n')
+        response = connection.getresponse()
+        body = response.read()
+        self.assertEqual(response.status, 413)
+        self.assertEqual(json.loads(body), {'error': 'PAYLOAD_TOO_LARGE'})
+        self.assertEqual(response.getheader('Connection'), 'close')
+        self.assertEqual(self.submit.calls, [])
+        connection.close()
+
+    def test_a_head_request_gets_headers_and_no_body(self):
+        """Announcing a length and then writing it anyway desynchronises."""
+        import http.client
+
+        host, port = self.server.server_address
+        connection = http.client.HTTPConnection(host, port, timeout=10)
+        connection.request('HEAD', '/jobs', headers={
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + API_KEY.decode()})
+        response = connection.getresponse()
+        self.assertEqual(response.status, 405)
+        self.assertEqual(response.read(), b'')
+        self.assertNotEqual(response.getheader('Content-Length'), '0')
+        connection.close()
+
     def test_an_oversized_content_length_is_refused_without_reading_it(self):
         status, body, _ = self.request(b'x' * 100)  # not JSON, but small
         self.assertEqual(status, 400)

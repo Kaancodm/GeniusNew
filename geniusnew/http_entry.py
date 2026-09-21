@@ -303,6 +303,10 @@ def make_handler(entry: HttpEntry):
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
+        # Without this a client that declares a body and then sends nothing
+        # holds a thread for as long as it likes, and ThreadingHTTPServer gives
+        # it a fresh one per connection.
+        timeout = 10
 
         def version_string(self) -> str:
             # Not "BaseHTTP/0.6 Python/3.11.2". A stranger learns the version of
@@ -320,10 +324,21 @@ def make_handler(entry: HttpEntry):
             self.send_response(response.status)
             self.send_header("Content-Type", _CONTENT_TYPE)
             self.send_header("Content-Length", str(len(payload)))
+            if self.close_connection:
+                # Said out loud rather than just dropping the socket: a client
+                # that does not know the connection is finished will send its
+                # next request into a closing one and call the result a network
+                # error, which is the wrong thing to debug.
+                self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(payload)
 
         def _read_body(self) -> bytes | None:
+            # Chunked bodies are not read here, and a body left unread on a
+            # keep-alive connection is where the next request gets parsed from
+            # attacker-controlled bytes. Refused, and the connection closed.
+            if self.headers.get("Transfer-Encoding") is not None:
+                return None
             raw = self.headers.get("Content-Length")
             if raw is None:
                 return b""
@@ -338,20 +353,35 @@ def make_handler(entry: HttpEntry):
         def _serve(self) -> None:
             body = self._read_body()
             if body is None:
-                # Covers both a Content-Length that is not a number and one
-                # larger than anything this entrance will read. Reading it to
-                # find out would be doing the work the limit exists to refuse.
+                # Covers a Content-Length that is not a number, one larger than
+                # anything this entrance will read, and a chunked body. Reading
+                # it to find out would be doing the work the limit exists to
+                # refuse — and because those bytes stay unread, this connection
+                # cannot be reused: whatever is left in it would be parsed as
+                # the next request.
+                self.close_connection = True
                 self._respond(_refusal(413, "PAYLOAD_TOO_LARGE"))
                 return
             self._respond(entry.handle(method=self.command, path=self.path,
                                        headers=dict(self.headers.items()), body=body))
+
+        def do_HEAD(self) -> None:
+            # Status and headers, never a body. Announcing a Content-Length and
+            # then writing the bytes anyway desynchronises a keep-alive client,
+            # which is the same class of bug as leaving a body unread.
+            response = entry.handle(method=self.command, path=self.path,
+                                    headers=dict(self.headers.items()), body=b"")
+            payload = response.to_bytes()
+            self.send_response(response.status)
+            self.send_header("Content-Type", _CONTENT_TYPE)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
 
         do_POST = _serve
         do_GET = _serve
         do_PUT = _serve
         do_PATCH = _serve
         do_DELETE = _serve
-        do_HEAD = _serve
 
     return Handler
 
