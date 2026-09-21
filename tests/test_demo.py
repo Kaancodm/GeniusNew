@@ -64,7 +64,7 @@ class DemoTest(unittest.TestCase):
         code, output = run()
         self.assertEqual(code, 0, output)
         self.assertIn("PASS", output)
-        self.assertIn("VERIFIED against the anchored head: 3 entries", output)
+        self.assertIn("VERIFIED against the anchored head: 4 entries", output)
 
     def test_every_attack_is_refused(self):
         """The half that matters. A pipeline printing success proves nothing."""
@@ -195,6 +195,7 @@ class DemoTest(unittest.TestCase):
         """An orchestrator confirming its own acceptance would be one name."""
         _, output = run()
         self.assertIn("orchestrator HANDOFF_ISSUED", output)
+        self.assertIn("gateway      HANDOFF_ADMITTED", output)
         self.assertIn("orchestrator EXECUTION_DISPATCHED", output)
         self.assertIn("monitor      RESULT_ACCEPTED", output)
 
