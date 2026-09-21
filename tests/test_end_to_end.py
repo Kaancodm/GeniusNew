@@ -60,6 +60,16 @@ class SlowRunner(WorkerRunner):
         return value
 
 
+class MalformedResultRunner(WorkerRunner):
+    """Test seam: a compromised execution boundary returns an invalid wire."""
+
+    def execute(self, permit, *, now):
+        # Consume the gateway capability first so this is an execution attempt,
+        # then return bytes the independent verifier must refuse.
+        super().execute(permit, now=now)
+        return b'{}'
+
+
 class Fixture:
     def setUp(self):
         self.clock = [1_700_000_000]
@@ -284,6 +294,37 @@ class EndToEndTest(Fixture, unittest.TestCase):
                          ['orchestrator', 'gateway', 'orchestrator', 'worker'])
         self.assertNotIn('RESULT_ACCEPTED',
                          [record.event.action for record in records])
+
+    def test_verifier_rejection_is_audited_after_dispatch(self):
+        keys = self.service.keys
+
+        def factory(worker):
+            return MalformedResultRunner(worker, authority=WorkerAuthority(
+                result_key=keys.result_key,
+                integrity_key=keys.integrity_key))
+
+        service = build(
+            root_secret=ROOT_SECRET, policy=self.policy_for(),
+            api_keys={API_KEY: 'subject-demo'},
+            workers=(DeterministicSummarizer(),), clock=lambda: self.clock[0],
+            runner_factory=factory)
+        server = serve(service.entry)
+        thread = threading.Thread(target=server.serve_forever,
+                                  kwargs={'poll_interval': 0.01}, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        host, port = server.server_address
+        status, body = self.post(url=f'http://{host}:{port}/jobs')
+        self.assertEqual((status, body), (409, {'error': 'REJECTED'}))
+        records = service.chain.records
+        self.assertEqual([record.event.action for record in records],
+                         ['HANDOFF_ISSUED', 'HANDOFF_ADMITTED',
+                          'EXECUTION_DISPATCHED', 'RESULT_REJECTED'])
+        self.assertEqual([record.event.actor.component for record in records],
+                         ['orchestrator', 'gateway', 'orchestrator', 'monitor'])
+        self.assertEqual(records[-1].event.reason_code, 'RESULT_NOT_VALID')
 
     def test_an_approval_bound_job_is_refused_with_the_gap_named(self):
         """The entrance has no field for an approval token, and says so."""
