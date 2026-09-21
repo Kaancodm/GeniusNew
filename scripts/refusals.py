@@ -53,14 +53,20 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/results.py", "geniusnew/keys.py",
            "geniusnew/workers.py", "geniusnew/isolation.py",
            "geniusnew/isolation_child.py", "geniusnew/gateway.py",
-           "geniusnew/orchestrator.py")
+           "geniusnew/orchestrator.py", "geniusnew/verifier.py",
+           "geniusnew/http_entry.py", "geniusnew/wiring.py")
 
-# `_deny` is `orchestrator.py`'s refusal helper: it raises a `ContractError`
-# subclass carrying the decision that gets audited. Leaving it out would have
-# made every admission refusal invisible to this check while the module sat in
-# the guarded list looking covered.
+# Each module's own way of refusing counts. `_deny` is `orchestrator.py`'s
+# helper, `Rejected` is `verifier.py`'s exception type, and `http_entry.py`
+# *returns* its refusals — a boundary that answers a stranger cannot raise at
+# one. Leaving any of them out would have hidden that module's decisions from
+# this check while it sat in the guarded list looking covered.
+#
+# Three additions in three modules is a pattern: whatever a module refuses
+# with belongs here the same day the module joins GUARDED.
 _REFUSAL_CALLS = {"_fail", "_deny"}
-_REFUSAL_RAISES = {"ContractError"}
+_REFUSAL_RAISES = {"ContractError", "Rejected"}
+_REFUSAL_RETURNS = {"_refusal"}
 
 
 @dataclass(frozen=True)
@@ -84,10 +90,12 @@ def _is_refusal_body(node: ast.If) -> str | None:
             call = statement.value
         elif isinstance(statement, ast.Raise) and isinstance(statement.exc, ast.Call):
             call = statement.exc
+        elif isinstance(statement, ast.Return) and isinstance(statement.value, ast.Call):
+            call = statement.value
         if call is None:
             continue
         name = call.func.id if isinstance(call.func, ast.Name) else None
-        if name in _REFUSAL_CALLS or name in _REFUSAL_RAISES:
+        if name in _REFUSAL_CALLS or name in _REFUSAL_RAISES or name in _REFUSAL_RETURNS:
             if call.args and isinstance(call.args[0], ast.Constant):
                 return str(call.args[0].value)
             return "(no message)"
@@ -166,7 +174,11 @@ def check(paths: list[str]) -> int:
         survivors = []
         for index, (path, refusal) in enumerate(refusals, start=1):
             target = workspace / refusal.path
-            original = path.read_text()
+            # Read from the frozen copy, not the live file. A run takes minutes;
+            # reading the original each time meant an edit made while it ran
+            # shifted the line numbers under it and the run died with "could
+            # not locate the refusal" after ten minutes of work.
+            original = target.read_text()
             target.write_text(_disable(original, refusal))
             survived = _suite_passes(workspace)
             target.write_text(original)
