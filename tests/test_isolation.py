@@ -182,7 +182,6 @@ class IsolationLimitsTest(unittest.TestCase):
                 DeterministicSummarizer(), authority=authority, limits="not-limits"
             )
 
-    @unittest.skipUnless(isolation_module._resource_supported(), "POSIX resource limits required")
     def test_runner_fails_closed_without_resource_limits(self):
         authority = WorkerAuthority(result_key=b"a-separate-result-key-of-32bytes!")
         with patch.object(isolation_module, "_resource_supported", return_value=False):
@@ -196,9 +195,8 @@ class IsolationLimitsTest(unittest.TestCase):
             def run(self, payload):
                 return {"text": "no"}
 
-        authority = WorkerAuthority(result_key=b"a-separate-result-key-of-32bytes!")
         with self.assertRaisesRegex(ContractError, "importable"):
-            IsolatedWorkerRunner(LocalWorker(), authority=authority)
+            isolation_module._worker_spec(LocalWorker())
 
     def test_worker_state_keys_must_be_strings(self):
         worker = DeterministicSummarizer()
@@ -381,6 +379,22 @@ class ProcessIsolationTest(unittest.TestCase):
         ).execute(self.permit_for(self.handoff), now=110)
         self.assertEqual(isolated, direct)
         self.assertTrue(self.taken(isolated).succeeded)
+
+    def test_child_pipes_are_closed_after_a_completed_run(self):
+        started = []
+        original_popen = isolation_module.subprocess.Popen
+
+        def track_popen(*args, **kwargs):
+            process = original_popen(*args, **kwargs)
+            started.append(process)
+            return process
+
+        with patch.object(isolation_module.subprocess, "Popen", side_effect=track_popen):
+            self.runner(DeterministicSummarizer()).execute(self.permit_for(self.handoff), now=110)
+
+        self.assertEqual(len(started), 1)
+        self.assertTrue(started[0].stdin.closed)
+        self.assertTrue(started[0].stdout.closed)
 
     def test_signing_authority_object_is_not_present_in_the_fresh_interpreter(self):
         taken = self.taken(

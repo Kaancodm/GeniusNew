@@ -14,6 +14,7 @@ stronger OS boundary belongs after v0.1.
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 import json
 import os
@@ -334,13 +335,22 @@ def _run_isolated(worker: Worker, payload: Mapping[str, str],
         )
         assert process.stdin is not None
         try:
-            process.stdin.write(request)
-            process.stdin.close()
-        except (BrokenPipeError, OSError):
-            _kill_process(process)
-            raise _WorkerIsolationViolation() from None
-        data, status = _read_process(process, float(limits.wall_seconds))
-        return _decode_child_message(data, status)
+            try:
+                process.stdin.write(request)
+                process.stdin.close()
+            except (BrokenPipeError, OSError):
+                raise _WorkerIsolationViolation() from None
+            data, status = _read_process(process, float(limits.wall_seconds))
+            return _decode_child_message(data, status)
+        finally:
+            if process.poll() is None:
+                _kill_process(process)
+            if process.stdin is not None:
+                with suppress(OSError):
+                    process.stdin.close()
+            if process.stdout is not None:
+                with suppress(OSError):
+                    process.stdout.close()
 
 
 def _write_message(fd: int, message: dict[str, Any]) -> None:
