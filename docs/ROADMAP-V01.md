@@ -594,3 +594,8 @@ Migrationszyklus gekostet und strukturell nichts verbessert. Das Projekt heißt 
 
 Was nach v0.1 kommt, ist in `docs/MIGRATION-MATRIX.md` unter `REBUILD` klassifiziert und
 an einen exakten Quell-SHA gebunden. Diese Roadmap greift dem nicht vor.
+
+Ein Werkzeug liegt bereit, das erst nach v0.1 laufen soll: `scripts/autoresearch.py` mit
+den Anweisungen in `docs/AUTORESEARCH.md`. Ein Agent ändert genau eine Datei, das Skript
+misst die Laufzeit der Suite und behält eine Änderung nur, wenn Tests, Refusal-Guard und
+Demo mindestens so stark bleiben. Es berührt keinen Produktcode.
