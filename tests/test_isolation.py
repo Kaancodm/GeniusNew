@@ -208,7 +208,6 @@ class IsolationLimitsTest(unittest.TestCase):
                 DeterministicSummarizer(), authority=authority, limits="not-limits"
             )
 
-    @unittest.skipUnless(isolation_module._resource_supported(), "POSIX resource limits required")
     def test_runner_fails_closed_without_resource_limits(self):
         authority = WorkerAuthority(result_key=b"a-separate-result-key-of-32bytes!")
         with patch.object(isolation_module, "_resource_supported", return_value=False):
@@ -222,9 +221,8 @@ class IsolationLimitsTest(unittest.TestCase):
             def run(self, payload):
                 return {"text": "no"}
 
-        authority = WorkerAuthority(result_key=b"a-separate-result-key-of-32bytes!")
         with self.assertRaisesRegex(ContractError, "importable"):
-            IsolatedWorkerRunner(LocalWorker(), authority=authority)
+            isolation_module._worker_spec(LocalWorker())
 
     def test_worker_state_keys_must_be_strings(self):
         worker = DeterministicSummarizer()
