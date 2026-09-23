@@ -12,11 +12,13 @@ said so: both had full test suites and both were right about their own half.
 """
 
 import json
+import os
 import threading
 import unittest
 import urllib.error
 import urllib.request
 
+from geniusnew.anchor_process import AnchorProcess
 from geniusnew.audit_chain import sign_head, verify
 from geniusnew.contracts import ContractError, Grant, Policy
 from geniusnew.http_entry import serve
@@ -74,6 +76,7 @@ class Fixture:
     def setUp(self):
         self.clock = [1_700_000_000]
         self.service = self.service_for()
+        self.addCleanup(self.service.close)
         self.server = serve(self.service.entry)
         self.thread = threading.Thread(
             target=self.server.serve_forever, kwargs={'poll_interval': 0.01},
@@ -158,6 +161,10 @@ class EndToEndTest(Fixture, unittest.TestCase):
         self.assertTrue(runners)
         self.assertTrue(all(isinstance(runner, IsolatedWorkerRunner)
                             for runner in runners))
+
+    def test_default_composition_anchors_in_its_own_process(self):
+        self.assertIsInstance(self.service.anchor, AnchorProcess)
+        self.assertNotEqual(self.service.anchor.pid, os.getpid())
 
     def test_gateway_refusal_is_audited_after_handoff_issue(self):
         ticks = iter((self.clock[0], self.clock[0] + 1))
@@ -380,6 +387,10 @@ class EndToEndTest(Fixture, unittest.TestCase):
                   api_keys={API_KEY: 'subject-demo'},
                   workers=(DeterministicSummarizer(),),
                   runner_factory=lambda worker: 'not-a-runner')
+        with self.assertRaisesRegex(ContractError, 'anchor must be an AuditAnchor'):
+            build(root_secret=ROOT_SECRET, policy=self.policy_for(),
+                  api_keys={API_KEY: 'subject-demo'},
+                  workers=(DeterministicSummarizer(),), anchor='not-an-anchor')
 
     def _slow_runner(self, *, takes):
         keys = self.service.keys

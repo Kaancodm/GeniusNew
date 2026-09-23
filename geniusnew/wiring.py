@@ -47,6 +47,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping
 
+from .anchor_process import AnchorProcess
 from .approvals import ApprovalStore
 from .audit import AuditAuthority, event_from_handoff
 from .audit_chain import AuditAnchor, AuditChain
@@ -88,18 +89,31 @@ class Service:
     keys: ServiceKeys
 
     def head(self):
-        """The signed chain head, committed to the anchor. Cheap to ask for."""
+        """The signed chain head, committed to the anchor."""
         head = self.chain.head(self.audit)
         self.anchor.commit(head, self.chain.records, authority=self.audit)
         return head
+
+    def close(self) -> None:
+        """End the anchor process, if this service started one."""
+        if isinstance(self.anchor, AnchorProcess):
+            self.anchor.close()
 
 
 def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
           workers: Iterable[Worker], clock: Callable[[], int] | None = None,
           gateway_id: str = "gateway-1", verifier_id: str = "verifier-1",
           job_ids: Callable[[], str] | None = None,
-          runner_factory: Callable[..., WorkerRunner] | None = None) -> Service:
-    """Assemble one service. The only function that knows all the parts."""
+          runner_factory: Callable[..., WorkerRunner] | None = None,
+          anchor: AuditAnchor | None = None) -> Service:
+    """Assemble one service. The only function that knows all the parts.
+
+    The default anchor is an `AnchorProcess`. Passing an in-process
+    `AuditAnchor` is a test seam, the same way `runner_factory` is: it puts the
+    anchor back inside the writer's memory.
+    """
+    if anchor is not None and not isinstance(anchor, AuditAnchor):
+        _fail("anchor must be an AuditAnchor")
     if not isinstance(policy, Policy):
         _fail("policy is invalid")
     keys = derive_keys(root_secret)
@@ -144,7 +158,6 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
                               result_key=keys.result_key)
     audit = AuditAuthority(audit_key=keys.audit_key)
     chain = AuditChain()
-    anchor = AuditAnchor()
 
     entry = HttpEntry(
         registry=PrincipalRegistry.from_api_keys(api_keys),
@@ -153,6 +166,9 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
                           policy=policy, keys=keys, now=now),
         job_ids=job_ids,
     )
+    # Started last, so a refusal above cannot leave a process behind.
+    if anchor is None:
+        anchor = AnchorProcess(audit_key=keys.audit_key)
     return Service(
         entry=entry, orchestrator=orchestrator, gateway=gateway,
         verifier=verifier, audit=audit, chain=chain, anchor=anchor,

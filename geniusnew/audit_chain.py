@@ -194,8 +194,8 @@ class AuditAnchor:
     still hashes to the anchored hash.
 
     Keeping it in the same process as the chain defeats its purpose. It is
-    modelled here so the boundary is explicit and testable; where it actually
-    lives is a deployment decision that `docs/ROADMAP-V01.md` leaves past v0.1.
+    modelled here so the boundary is explicit and testable; the wired service
+    runs it in a process of its own through `anchor_process.AnchorProcess`.
     """
 
     def __init__(self) -> None:

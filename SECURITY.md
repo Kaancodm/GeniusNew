@@ -42,12 +42,12 @@ Dokumentation steht.
 
 | Grenze | Folge | Beleg |
 | --- | --- | --- |
-| Alle Instanzen laufen in **einem Prozess** | §8-Trennung ist logisch, keine Speichertrennung | `docs/ROADMAP-V01.md` Schritte 13 und 17 |
+| Alle Instanzen außer Worker und Audit-Anker laufen in **einem Prozess** | §8-Trennung ist für sie logisch, keine Speichertrennung | `docs/ROADMAP-V01.md` Schritte 13 und 17 |
 | Job-Ledger des Orchestrators ist **prozesslokal** | Neustart oder zweite Instanz mit gleicher Kennung dispatcht denselben unverfallenen Handoff erneut | `tests/test_orchestrator.py::test_the_ledger_is_process_local_and_this_is_the_boundary` (offen gehalten) |
 | Annahme-Ledger der Ergebnisprüfung ist **prozesslokal** | Neustart nimmt dasselbe Ergebnis erneut an | `tests/test_verifier.py::test_the_ledger_is_process_local_and_this_is_the_boundary` (offen gehalten) |
 | Beide Ledger sind auf **100 000** Einträge begrenzt und laufen nie ab | Danach lehnt die Instanz alles ab (fail closed), bis sie neu startet | `_MAX_JOBS` in `geniusnew/orchestrator.py`, `_MAX_ACCEPTED` in `geniusnew/verifier.py` |
-| Handoff-, Ergebnis- und Kopfsignatur sind **HMAC** (symmetrisch) | Wer prüfen kann, kann signieren; Unabhängigkeit ist organisatorisch, nicht kryptografisch | `tests/test_verifier.py::test_the_symmetric_key_means_this_instance_could_also_sign` (offen gehalten) |
-| Der **Audit-Anker** liegt im selben Prozess wie die Kette | Schützt gegen Kürzen durch Dritte, nicht gegen den Schreiber selbst | Roadmap Schritt 8, offen |
+| Handoff-, Ergebnis- und Kopfsignatur sind **HMAC** (symmetrisch) | Wer prüfen kann, kann signieren; Unabhängigkeit ist organisatorisch, nicht kryptografisch. Entschieden: bleibt für v0.1 | `tests/test_verifier.py::test_the_symmetric_key_means_this_instance_could_also_sign` (offen gehalten) |
+| Der **Audit-Anker** läuft in eigenem Prozess, wird aber vom Dienst gestartet und hält nur Speicher | Der Schreiber kann ihn nicht zurücksetzen, aber beenden; ein Neustart vergisst alle Festlegungen | `tests/test_anchor_process.py::test_a_restarted_anchor_remembers_nothing_and_this_is_the_boundary` (offen gehalten) |
 | **Approval-pflichtige Jobs** sind über HTTP nicht erreichbar | Nur per direktem Orchestrator-Aufruf | `tests/test_end_to_end.py::test_an_approval_bound_job_is_refused_with_the_gap_named` (offen gehalten) |
 | Worker-Isolation ist eine **Prozessgrenze**, keine microVM | Kein Schutz gegen bereits geladenen nativen Code oder rohe Syscalls; ohne POSIX-Limits (Windows) keine Ausführung | `docs/ISOLATION-V01.md`, `tests/test_isolation.py` |
 | HTTP-Eingang ohne **TLS, Rate-Limiting, Sessions** | Deployment-Aufgabe; der Eingang lauscht in der Demo nur auf `127.0.0.1` | `geniusnew/http_entry.py` |

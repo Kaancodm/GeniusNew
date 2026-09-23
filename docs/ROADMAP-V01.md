@@ -78,16 +78,17 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    festgehaltener, signierter Kettenkopf dazu. Tests gegen Änderung, Einfügung **und
    Löschung des letzten Eintrags**.
 
-   **Status: nicht abgeschlossen.** Mechanismus, Autoritätstrennung und Tests stehen
+   **Status bis zum eigenen Anker-Prozess** (der aktuelle Stand folgt unten).
+   Mechanismus, Autoritätstrennung und Tests stehen
    (`geniusnew/audit_chain.py`): Position, signierter Kopf mit eigenem Audit-Schlüssel,
    und ein Anker, gegen den eine gekürzte und neu signierte Kette scheitert. Der Anker
    bindet sich an eine *Kette*, nicht an eine Länge: ein Vorrücken muss belegen, dass der
    Eintrag an der bereits festgehaltenen Position weiterhin auf den festgehaltenen Hash
    führt. Ein bloß monotoner Zähler war hier nachweislich zu wenig — er akzeptiert jede
    längere Kette, auch eine ohne gemeinsame Geschichte.
-   Offen bleibt die *Externalität* des Ankers. Er liegt derzeit im selben Prozess wie die
-   Kette, und damit im Vertrauensbereich dessen, der schreibt — das modelliert die Grenze,
-   es ist sie nicht. Wo der Anker tatsächlich liegt, ist eine Deployment-Entscheidung, und
+   Offen war die *Externalität* des Ankers. Er lag im selben Prozess wie die Kette, und
+   damit im Vertrauensbereich dessen, der schreibt — das modelliert die Grenze, es ist sie
+   nicht. Wo der Anker tatsächlich liegt, ist eine Deployment-Entscheidung, und
    sie hängt an Schritten 12 bis 14: erst wenn Gateway und Ergebnisprüfung als getrennte
    Instanzen existieren, gibt es überhaupt einen Ort außerhalb des Schreibers. Der Schritt
    gilt als erledigt, wenn der Anker dort liegt.
@@ -96,6 +97,26 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    prüfen kann, kann auch signieren. Eine Trennung in privaten Signatur- und öffentlichen
    Prüfschlüssel braucht ein Primitiv außerhalb der Standardbibliothek und ist deshalb
    eine Abhängigkeitsentscheidung, keine Codeänderung.
+
+   **Status: Anker in eigenem Prozess** (`geniusnew/anchor_process.py`). Die
+   Verdrahtung legt den Kopf standardmäßig bei einem Kindprozess fest. Der Schreiber
+   hält nur zwei Pipes und kann über sie genau zwei Dinge fragen: „lege diesen Kopf über
+   diese Records fest“ und „was ist festgelegt“. Eine Nachricht zum Zurücksetzen gibt es
+   nicht. Der Kindprozess führt den unveränderten `AuditAnchor` aus und baut die Records
+   mit einer eigenen `AuditAuthority` neu auf; neue Kettenlogik kommt nicht hinzu. Die
+   Demo belegt die Grenze mit einem dreizehnten Angriff: Der Schreiber setzt den Anker in
+   seinem eigenen Speicher zurück und reicht die gekürzte, neu signierte Kette ein.
+   Gegen den bisherigen In-Prozess-Anker gelingt das, gegen den Prozess nicht; beide
+   Richtungen hält ein Test fest.
+
+   Offen bleibt der **Lebenszyklus**: Der Dienst startet den Anker und kann ihn damit
+   auch beenden, und die Festlegungen liegen nur im Speicher — ein Neustart ist ein
+   Zurücksetzen. Das zu schließen heißt, den Anker unter einem anderen Betriebssystem-
+   Nutzer zu betreiben und zu persistieren; beides ist Deployment bzw. Persistenz und
+   damit außerhalb von v0.1. Ein Test hält die Grenze offen.
+
+   **Entscheidung zu HMAC:** bleibt für v0.1. Die Grenze steht in `SECURITY.md` und ist
+   per Test offen gehalten; asymmetrische Signaturen kommen nach v0.1.
 
 9. **Ergebnisvertrag** — das Ergebnis wird vom Worker signiert und bei der Annahme
    geprüft, symmetrisch zum eingehenden Handoff. Ohne diesen Schritt bleibt „das Ergebnis
@@ -489,10 +510,11 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
     Ausgabe eines Befehls — bis auf die Prozessgrenze zwischen den Instanzen, die eine
     Deployment-Frage bleibt.
 
-    Aus fünf Angriffen sind zwölf geworden: vier davon gehen über den Socket, weil der
+    Aus fünf Angriffen sind dreizehn geworden: vier davon gehen über den Socket, weil der
     Eingang das Einzige ist, was ein Fremder erreicht — ein nicht registrierter Schlüssel,
     ein `tier` im Body, eine selbstgewählte Job-Kennung, eine Tür, die es nicht gibt. Die
-    übrigen acht halten die Objekte, die ein Insider hätte.
+    übrigen neun halten die Objekte, die ein Insider hätte; der neunte ist der Schreiber
+    selbst, der den Anker zurückzusetzen versucht (Schritt 8).
 
 19. **CI führt den End-to-End-Test mit aus**, nicht nur die Unit-Tests.
 

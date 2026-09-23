@@ -65,13 +65,14 @@ class DemoTest(unittest.TestCase):
         self.assertEqual(code, 0, output)
         self.assertIn("PASS", output)
         self.assertIn("VERIFIED against the anchored head: 4 entries", output)
+        self.assertIn("anchor runs in its own process: True", output)
 
     def test_every_attack_is_refused(self):
         """The half that matters. A pipeline printing success proves nothing."""
         _, output = run()
-        self.assertEqual(output.count("[ok]"), 12, output)
+        self.assertEqual(output.count("[ok]"), 13, output)
         self.assertNotIn("[!!]", output)
-        self.assertIn("12/12 attacks refused", output)
+        self.assertIn("13/13 attacks refused", output)
 
     def test_each_attack_is_refused_by_the_check_it_targets(self):
         """Refused is not enough — it has to be refused by the right check.
@@ -96,6 +97,7 @@ class DemoTest(unittest.TestCase):
             "Dispatch without a gateway permit": "requires a gateway-minted",
             "Truncate the chain, keep the old head": "signed head claims",
             "Truncate the chain and re-sign the head": "anchor committed",
+            "Rewind the anchor from inside the writer": "anchor committed",
         }
         import re
         refusals = dict(re.findall(r"\[ok\] (.+?)\s{2,}(.+)", output))
