@@ -483,7 +483,8 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
 
     **Seit Schritt 17 zeigt sie den echten Pfad.** Der Job geht **über HTTP** hinein, die
     Identität wird aus dem Schlüssel serverseitig bestimmt, Gateway und Ergebnisprüfung
-    sind eigene Instanzen, und die Kette nennt zwei verschiedene Komponenten als Akteure.
+    sind eigene Instanzen, und die Kette nennt drei verschiedene Komponenten als Akteure
+    (`orchestrator`, `gateway`, `monitor`).
     Damit steht die Zielbeschreibung von v0.1 nicht mehr als Absicht da, sondern als
     Ausgabe eines Befehls — bis auf die Prozessgrenze zwischen den Instanzen, die eine
     Deployment-Frage bleibt.
@@ -492,9 +493,28 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
     Eingang das Einzige ist, was ein Fremder erreicht — ein nicht registrierter Schlüssel,
     ein `tier` im Body, eine selbstgewählte Job-Kennung, eine Tür, die es nicht gibt. Die
     übrigen acht halten die Objekte, die ein Insider hätte.
+
 19. **CI führt den End-to-End-Test mit aus**, nicht nur die Unit-Tests.
+
+    **Status: steht** (`.github/workflows/verify.yml`). Der Workflow ruft
+    `unittest discover -s tests` auf und nimmt damit `tests/test_end_to_end.py` (Socket bis
+    zur gegen den Anker verifizierten Kette) und `tests/test_demo.py` mit, das
+    `scripts/demo.sh` als Unterprozess startet und Exit-Code 0 plus `PASS` verlangt. Keiner
+    dieser Tests hat ein `skip`; fällt der Pfad, wird die CI rot. Danach läuft der
+    Refusal-Mutation-Guard über dieselbe Suite, also muss auch jede Ablehnung auf dem
+    End-to-End-Pfad von einem Test bemerkt werden.
+
+    Grenze: die Isolation verlangt POSIX-Ressourcenlimits. Die CI läuft auf
+    `ubuntu-latest`; unter Windows verweigert der isolierte Runner die Ausführung
+    (fail closed), die Demo endet dort also nicht mit `PASS`.
+
 20. **README-Quickstart**, den ein Fremder ohne Rückfragen befolgen kann. Am besten von
     jemandem gegengelesen, der das Projekt nicht kennt.
+
+    **Status: geschrieben, nicht gegengelesen.** Der Quickstart steht in `README.md`. Der
+    zweite Halbsatz dieses Schritts ist nicht erfüllt, solange niemand ohne
+    Projektkenntnis ihn befolgt hat; bis dahin gilt der Schritt als offen.
+
 21. **Tag `v0.1`** auf einem grünen, verifizierten Commit.
 
 ## Arbeitsregeln
