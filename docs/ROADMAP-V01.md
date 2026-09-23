@@ -285,6 +285,14 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
     ist eine Verdrahtungs- und Deployment-Frage (Schritte 16 und 17), kein Vertragsdefekt,
     und bleibt bis dahin ausdrücklich offen.
 
+    **Entscheidung für v0.1: logische Trennung reicht.** Seit Schritt 17 kommt die Policy
+    für beide Rollen aus der Kompositionswurzel, nicht die eine von der anderen. Gateway
+    und Orchestrator bleiben aber Objekte in einem Prozess. Für die Zielbeschreibung von
+    v0.1 gilt „eine vom Orchestrator unabhängige Instanz prüft die Policy“ damit als
+    erfüllt im Sinne von §8: getrennte Rollen mit eigener API-Grenze, eigener
+    Revalidierung des Wires und eigenem Audit-Akteur. Eine Prozesstrennung wie beim
+    Worker und beim Audit-Anker kommt nach v0.1.
+
     **Offen bleibt die Reichweite des Ledgers.** Es ist eine Menge in einem Prozess. Ein
     Neustart oder eine zweite Instanz mit derselben Kennung führt denselben unverfallenen
     Handoff erneut aus; das Gateway hält kein eigenes Handoff-Ledger und mintet jedes Mal
