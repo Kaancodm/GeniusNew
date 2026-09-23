@@ -432,5 +432,80 @@ class HttpSocketTest(Fixture, unittest.TestCase):
         self.assertEqual(caught.exception.code, 413)
 
 
+TOKEN = 'ab' * 32
+
+
+class ApprovalRouteTest(Fixture, unittest.TestCase):
+    """`POST /jobs/<id>/approve`: a token in a header, a body of exactly `{}`."""
+
+    def setUp(self):
+        super().setUp()
+        self.complete = Recorder()
+        self.entry = self.entry_for(complete=self.complete)
+
+    def approve(self, *, token=TOKEN, body=b'{}', path='/jobs/job-7/approve', key=API_KEY):
+        headers = {'Content-Type': 'application/json'}
+        if key is not None:
+            headers['Authorization'] = 'Bearer ' + key.decode()
+        if token is not None:
+            headers['X-Approval-Token'] = token
+        return self.post(body, path=path, headers=headers)
+
+    def test_the_token_and_the_server_side_subject_are_all_that_go_through(self):
+        response = self.approve()
+        self.assertEqual((response.status, response.reason), (202, 'ACCEPTED'))
+        self.assertEqual(response.body['job_id'], 'job-7')
+        self.assertEqual(self.complete.calls, [{
+            'subject': 'subject-demo', 'job_id': 'job-7',
+            'approval_token': bytes.fromhex(TOKEN)}])
+        self.assertEqual(self.submit.calls, [])
+
+    def test_without_a_completion_the_route_does_not_exist(self):
+        response = self.post(b'{}', entry=self.entry_for(), path='/jobs/job-7/approve',
+                             headers={'Content-Type': 'application/json',
+                                      'Authorization': 'Bearer ' + API_KEY.decode(),
+                                      'X-Approval-Token': TOKEN})
+        self.assertEqual(response.status, 404)
+
+    def test_a_token_that_is_not_64_lowercase_hex_is_malformed(self):
+        for token in (None, TOKEN.upper(), TOKEN[:-2], 'zz' * 32, TOKEN + '00', 7):
+            with self.subTest(token=token):
+                self.assertEqual(self.approve(token=token).status, 400)
+        self.assertEqual(self.complete.calls, [])
+
+    def test_the_body_must_be_exactly_an_empty_object(self):
+        for body in (b'', b'{"text":"x"}', b'[]', b'\xff', b'{"approval_token":"x"}'):
+            with self.subTest(body=body):
+                self.assertEqual(self.approve(body=body).status, 400)
+        self.assertEqual(self.complete.calls, [])
+
+    def test_only_the_exact_route_shape_is_routed(self):
+        for path in ('/jobs/job 7/approve', '/jobs//approve', '/jobs/job-7/approve/x',
+                     '/jobs/' + 'a' * 65 + '/approve', '/jobs/job-7/approve?x=1'):
+            with self.subTest(path=path):
+                self.assertEqual(self.approve(path=path).status, 404)
+        self.assertEqual(self.complete.calls, [])
+
+    def test_an_unauthenticated_approval_reaches_nothing(self):
+        self.assertEqual(self.approve(key=b'THIS-KEY-IS-NOT-REGISTERED').status, 401)
+        self.assertEqual(self.approve(key=None).status, 401)
+        self.assertEqual(self.complete.calls, [])
+
+    def test_a_refusal_behind_it_says_rejected_and_nothing_else(self):
+        self.entry = self.entry_for(complete=Recorder(raises=ContractError(
+            'approval scope does not match PAYLOAD-CANARY')))
+        response = self.approve()
+        self.assertEqual((response.status, response.body), (409, {'error': 'REJECTED'}))
+        self.assertEqual(self.post(b'{}', entry=self.entry_for(complete=Recorder(returns=[])),
+                                   path='/jobs/job-7/approve',
+                                   headers={'Content-Type': 'application/json',
+                                            'Authorization': 'Bearer ' + API_KEY.decode(),
+                                            'X-Approval-Token': TOKEN}).status, 500)
+
+    def test_complete_must_be_callable(self):
+        with self.assertRaisesRegex(ContractError, 'complete must be callable'):
+            self.entry_for(complete='not-callable')
+
+
 if __name__ == '__main__':
     unittest.main()

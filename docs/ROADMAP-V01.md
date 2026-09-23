@@ -473,11 +473,26 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
     muss aber wirklich auf eine sehen, und die TTL-Kontrollpunkte sind nur so ehrlich wie
     dieser eine Aufruf.
 
-    **Offen bleibt der Approval-Pfad über HTTP.** Ein Approval-Token ist eine Capability,
-    die ein Client vorzeigen müsste, und der Eingang hat kein Feld dafür. Das Gateway würde
-    ohnehin ablehnen; die Verdrahtung sagt es vorher und benennt damit die Lücke, statt sie
-    wie ein Policy-Fehler aussehen zu lassen. Approval-pflichtige Arbeit ist bis dahin nur
-    durch direkten Aufruf des Orchestrators erreichbar.
+    **Approval über HTTP** (Entscheidung: gehört in v0.1). Ein Approval ist an genau einen
+    signierten Wire gebunden, also braucht es zwei Anfragen. `POST /jobs` stellt den
+    Handoff aus, zeichnet `HANDOFF_ISSUED` auf und antwortet `PENDING_APPROVAL`; der Job
+    wartet in einem begrenzten, prozesslokalen Speicher. `Service.approve(job_id)` erteilt
+    serverseitig den einmaligen Token und zeichnet `APPROVAL_GRANTED` auf — bewusst ohne
+    HTTP-Route, denn wer freigeben darf, ist eine Entscheidung über Personen, und v0.1 kennt
+    keinen Principal-Typ dafür. Der Client legt den Token in `X-Approval-Token` an
+    `POST /jobs/<job_id>/approve` vor, mit einem Body von genau `{}`. Danach läuft der Job
+    durch denselben Ausführungspfad wie jeder andere; das Gateway verbraucht den Token
+    atomar.
+
+    Ein falscher Token oder der eines anderen Jobs wird vom Gateway abgelehnt, bevor
+    etwas läuft. Die Ablehnung steht in der Kette, der Job wartet weiter auf den richtigen
+    Token, und der fremde Token ist nicht verbraucht. Ein unbekannter Job, der Job eines
+    anderen Subjects, ein falscher und ein verbrauchter Token ergeben von außen dieselbe
+    Antwort `409 REJECTED`. Tests gehen jeden dieser Fälle über den echten Socket.
+
+    Offen bleibt die **Zustellung des Tokens**: Wie er vom Freigebenden zum Client kommt,
+    ist Sache des Deployments. Der Speicher wartender Jobs ist prozesslokal wie alle
+    Ledger in v0.1.
 
 ### Teil 3 — nachweisbar machen
 
