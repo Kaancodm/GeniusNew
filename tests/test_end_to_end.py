@@ -342,6 +342,26 @@ class EndToEndTest(Fixture, unittest.TestCase):
             build(root_secret=ROOT_SECRET, policy=self.policy_for(),
                   api_keys={API_KEY: 'subject-demo'}, workers=(UngrantedWorker(),))
 
+    def two_subject_policy(self, *, second_agent):
+        grants = tuple(
+            Grant(subject, 'user-demo', agent, 'basic', ('summarize',), 'isolated', False)
+            for subject, agent in (('subject-a', 'worker-demo'), ('subject-b', second_agent)))
+        return Policy('policy-v1', 'orchestrator-1', 60,
+                      ('summarize',), ('isolated',), grants)
+
+    def test_the_wiring_refuses_a_tool_granted_to_several_agents(self):
+        with self.assertRaisesRegex(ContractError, 'more than one worker agent'):
+            build(root_secret=ROOT_SECRET,
+                  policy=self.two_subject_policy(second_agent='worker-other'),
+                  api_keys={API_KEY: 'subject-a'}, workers=(DeterministicSummarizer(),))
+
+    def test_subjects_sharing_one_agent_are_still_wired(self):
+        service = build(root_secret=ROOT_SECRET,
+                        policy=self.two_subject_policy(second_agent='worker-demo'),
+                        api_keys={API_KEY: 'subject-a'},
+                        workers=(DeterministicSummarizer(),))
+        self.assertIsNotNone(service)
+
     def test_build_refuses_what_it_cannot_rely_on(self):
         for policy in (None, 'policy', 42, {}):
             with self.subTest(policy=type(policy)):

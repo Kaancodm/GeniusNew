@@ -124,14 +124,17 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
         if not isinstance(runner, WorkerRunner):
             _fail("runner_factory must return a WorkerRunner")
         # The grant names which agent may run a subject's jobs, so a worker is
-        # registered under the agent id its grant carries. A worker nobody is
-        # granted is simply never routed to.
-        for grant in policy.grants:
-            if runner.tool in grant.tools:
-                endpoints.append(WorkerEndpoint(grant.worker_agent_id, runner))
-                break
-        else:
+        # registered under the agent id its grant carries. Taking the first of
+        # several would leave the other agents' subjects unroutable, found only
+        # per request as WORKER_NOT_CONFIGURED.
+        agents = {grant.worker_agent_id for grant in policy.grants
+                  if runner.tool in grant.tools}
+        if not agents:
             _fail(f"no grant in this policy names a worker for tool {runner.tool!r}")
+        if len(agents) > 1:
+            _fail(f"grants name more than one worker agent for tool {runner.tool!r}; "
+                  "one worker cannot be registered as several agents")
+        endpoints.append(WorkerEndpoint(agents.pop(), runner))
 
     orchestrator = Orchestrator(orchestrator_id=policy.orchestrator_id,
                                 integrity_key=keys.integrity_key,
