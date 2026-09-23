@@ -27,6 +27,7 @@ Usage:
     python3 scripts/autoresearch.py start --target tests/test_demo.py --tag demo-speed
     python3 scripts/autoresearch.py step --note "memoize the second demo run"
     python3 scripts/autoresearch.py status
+    python3 scripts/autoresearch.py verify   # for an external driver: prints seconds
 """
 
 from __future__ import annotations
@@ -153,7 +154,9 @@ class Loop:
         except GateFailed as failure:
             raise SystemExit(f"the baseline is not green: {failure}") from None
         (self.root / STATE_DIR).mkdir(exist_ok=True)
-        state = {"tag": tag, "target": target, "best": asdict(baseline)}
+        state = {"tag": tag, "target": target, "best": asdict(baseline),
+                 "baseline": asdict(baseline),
+                 "base": _git(self.root, "rev-parse", "HEAD").strip()}
         self._save(state)
         with (self.root / STATE_DIR / f"{tag}.tsv").open("w") as log:
             log.write("\t".join(_COLUMNS) + "\n")
@@ -205,6 +208,32 @@ class Loop:
         self._log(state, "keep", measured, note)
         return "keep"
 
+    def verify(self) -> float:
+        """One number for an external loop driver, or a refusal. Changes nothing.
+
+        For a driver that commits before it measures and reverts on its own,
+        such as the uditgoenka/autoresearch skill for Claude Code. It decides
+        keep or discard from the number; the gates stay here. Scope is checked
+        against the commit the loop started from, so a committed change outside
+        the target is caught as well as an uncommitted one.
+        """
+        state = self._load()
+        target = state["target"]
+        baseline = Measurement(**state["baseline"])
+        since = set(_git(self.root, "diff", "--name-only", state["base"]).split())
+        _, untracked = changed_files(self.root)
+        outside = (since | untracked) - {target}
+        if outside:
+            raise SystemExit(f"changed outside the target: {', '.join(sorted(outside))}")
+        try:
+            measured = self.measure(self.root, target)
+        except GateFailed as failure:
+            raise SystemExit(str(failure)) from None
+        if (measured.tests < baseline.tests or measured.refusals < baseline.refusals
+                or measured.attacks < baseline.attacks):
+            raise SystemExit(f"fewer checks than the baseline: {measured}")
+        return measured.seconds
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -215,6 +244,7 @@ def main() -> int:
     step = commands.add_parser("step")
     step.add_argument("--note", required=True)
     commands.add_parser("status")
+    commands.add_parser("verify")
     arguments = parser.parse_args()
 
     loop = Loop(ROOT)
@@ -222,6 +252,8 @@ def main() -> int:
         print(f"baseline: {loop.start(arguments.target, arguments.tag)}")
     elif arguments.command == "step":
         print(loop.step(arguments.note))
+    elif arguments.command == "verify":
+        print(loop.verify())
     else:
         state = loop._load()
         print((ROOT / STATE_DIR / f"{state['tag']}.tsv").read_text(), end="")

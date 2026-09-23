@@ -149,6 +149,48 @@ class LoopTest(unittest.TestCase):
         loop.step('tab\there\nnewline')
         self.assertEqual(len(self.log()[-1]), len(autoresearch._COLUMNS))
 
+    # --- verify: one number for an external driver ---------------------------
+
+    def commit(self, name='target.py', text='slow = False\n'):
+        self.edit(name, text)
+        self.git('commit', '-q', '-am', f'experiment: {name}')
+
+    def test_verify_prints_the_number_for_a_committed_change_to_the_target(self):
+        loop, _ = self.started(Measurement(8.0, 100, 20, 13))
+        self.commit()
+        self.assertEqual(loop.verify(), 8.0)
+
+    def test_verify_catches_a_committed_change_outside_the_target(self):
+        loop, measure = self.started()
+        self.commit('other.py', 'untouched = False\n')
+        with self.assertRaisesRegex(SystemExit, 'outside the target: other.py'):
+            loop.verify()
+        self.assertEqual(measure.calls, ['target.py'])  # the baseline only
+
+    def test_verify_catches_an_untracked_file(self):
+        loop, _ = self.started()
+        self.edit('new.py', 'x = 1\n')
+        with self.assertRaisesRegex(SystemExit, 'outside the target: new.py'):
+            loop.verify()
+
+    def test_verify_refuses_fewer_checks_than_the_baseline(self):
+        for weaker in (Measurement(5.0, 99, 20, 13), Measurement(5.0, 100, 19, 13),
+                       Measurement(5.0, 100, 20, 12)):
+            with self.subTest(weaker=weaker):
+                loop = Loop(self.root, measure=FakeMeasure(weaker))
+                loop.state_path.parent.mkdir(exist_ok=True)
+                loop._save({'tag': 'probe', 'target': 'target.py',
+                            'best': autoresearch.asdict(BASE),
+                            'baseline': autoresearch.asdict(BASE),
+                            'base': self.git('rev-parse', 'HEAD').strip()})
+                with self.assertRaisesRegex(SystemExit, 'fewer checks'):
+                    loop.verify()
+
+    def test_verify_turns_a_red_gate_into_a_refusal(self):
+        loop, _ = self.started(GateFailed('the demo did not pass'))
+        with self.assertRaisesRegex(SystemExit, 'the demo did not pass'):
+            loop.verify()
+
     def test_step_without_start_says_so(self):
         with self.assertRaisesRegex(SystemExit, 'run `start` first'):
             Loop(self.root, measure=FakeMeasure()).step('x')

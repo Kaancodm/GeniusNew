@@ -50,3 +50,31 @@ python3 scripts/autoresearch.py start --target tests/test_demo.py --tag demo-spe
 `start` verlangt einen sauberen Arbeitsbaum, legt den lokalen Branch
 `autoresearch/<tag>` an und misst die Baseline. Ist sie nicht grün, startet nichts.
 Das Protokoll steht in `autoresearch/<tag>.tsv` (von Git ignoriert).
+
+## Mit dem Claude-Code-Skill uditgoenka/autoresearch
+
+[uditgoenka/autoresearch](https://github.com/uditgoenka/autoresearch) (MIT) ist ein
+Skill für Claude Code, der dieselbe Schleife von der Agenten-Seite fährt: Er committet
+jede Idee, misst mit einem Verify-Befehl und macht per `git revert` rückgängig. Er wird
+**lokal** installiert, nicht in dieses Repository. Das ist fremder Code, der in deinem
+Claude Code läuft; lies ihn vor der Installation.
+
+Dann übernimmt der Skill Keep und Discard, und die Tore bleiben hier: `verify` gibt genau
+eine Zahl aus (Sekunden, niedriger ist besser) und endet mit Exit-Code ≠ 0, sobald etwas
+außerhalb der Zieldatei geändert wurde (committet oder nicht), ein Tor rot ist oder
+weniger geprüft wird als bei der Baseline. `step` wird in diesem Modus nicht benutzt.
+
+```sh
+python3 scripts/autoresearch.py start --target tests/test_demo.py --tag demo-speed
+```
+
+```
+/autoresearch
+Goal: Die Testsuite schneller machen, ohne Prüfungen zu verlieren
+Scope: tests/test_demo.py
+Metric: Laufzeit der Suite in Sekunden (niedriger ist besser)
+Verify: python3 scripts/autoresearch.py verify
+Iterations: 25
+```
+
+Die Regeln oben gelten unverändert, vor allem: nichts pushen.
