@@ -32,6 +32,30 @@ Insbesondere werden Artefakte mit Agent-Common-Bezug nicht übernommen. Wenn ein
 - Auditdaten dürfen keine Nutzdaten oder Secrets leaken.
 - Sicherheitsrelevante Grenzen müssen testbar und reproduzierbar sein.
 
+## Bekannte Grenzen von v0.1
+
+v0.1 ist kein Sicherheitsnachweis für einen echten Betrieb (`docs/ROADMAP-V01.md`). Die
+folgenden Grenzen sind bewusst offen. Belege mit **(offen gehalten)** sind Tests, die die
+Lücke selbst behaupten: sie werden rot, sobald jemand die Grenze schließt, ohne diese
+Liste anzupassen. Die übrigen Belege zeigen, wo die Grenze im Code oder in der
+Dokumentation steht.
+
+| Grenze | Folge | Beleg |
+| --- | --- | --- |
+| Alle Instanzen laufen in **einem Prozess** | §8-Trennung ist logisch, keine Speichertrennung | `docs/ROADMAP-V01.md` Schritte 13 und 17 |
+| Job-Ledger des Orchestrators ist **prozesslokal** | Neustart oder zweite Instanz mit gleicher Kennung dispatcht denselben unverfallenen Handoff erneut | `tests/test_orchestrator.py::test_the_ledger_is_process_local_and_this_is_the_boundary` (offen gehalten) |
+| Annahme-Ledger der Ergebnisprüfung ist **prozesslokal** | Neustart nimmt dasselbe Ergebnis erneut an | `tests/test_verifier.py::test_the_ledger_is_process_local_and_this_is_the_boundary` (offen gehalten) |
+| Beide Ledger sind auf **100 000** Einträge begrenzt und laufen nie ab | Danach lehnt die Instanz alles ab (fail closed), bis sie neu startet | `_MAX_JOBS` in `geniusnew/orchestrator.py`, `_MAX_ACCEPTED` in `geniusnew/verifier.py` |
+| Handoff-, Ergebnis- und Kopfsignatur sind **HMAC** (symmetrisch) | Wer prüfen kann, kann signieren; Unabhängigkeit ist organisatorisch, nicht kryptografisch | `tests/test_verifier.py::test_the_symmetric_key_means_this_instance_could_also_sign` (offen gehalten) |
+| Der **Audit-Anker** liegt im selben Prozess wie die Kette | Schützt gegen Kürzen durch Dritte, nicht gegen den Schreiber selbst | Roadmap Schritt 8, offen |
+| **Approval-pflichtige Jobs** sind über HTTP nicht erreichbar | Nur per direktem Orchestrator-Aufruf | `tests/test_end_to_end.py::test_an_approval_bound_job_is_refused_with_the_gap_named` (offen gehalten) |
+| Worker-Isolation ist eine **Prozessgrenze**, keine microVM | Kein Schutz gegen bereits geladenen nativen Code oder rohe Syscalls; ohne POSIX-Limits (Windows) keine Ausführung | `docs/ISOLATION-V01.md`, `tests/test_isolation.py` |
+| HTTP-Eingang ohne **TLS, Rate-Limiting, Sessions** | Deployment-Aufgabe; der Eingang lauscht in der Demo nur auf `127.0.0.1` | `geniusnew/http_entry.py` |
+| API-Key-Digests sind **ungesalzen** | Richtig für zufällige Maschinenschlüssel, falsch für menschlich gewählte | Modul-Docstring von `geniusnew/http_entry.py` |
+
+Eine Grenze aus dieser Liste zu schließen ist eine eigene, begründete Änderung mit Test,
+kein Nebeneffekt.
+
 ## Meldung von Schwachstellen
 
 Keine sensitiven Schwachstellendetails, Tokens oder Exploit-Daten in öffentliche Issues schreiben. Sicherheitsfunde zunächst über einen privaten, geeigneten Kanal des Repository-Eigentümers melden.
