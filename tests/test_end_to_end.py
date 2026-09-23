@@ -12,11 +12,16 @@ said so: both had full test suites and both were right about their own half.
 """
 
 import json
+import os
 import threading
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 
+from geniusnew import wiring
+
+from geniusnew.anchor_process import AnchorProcess
 from geniusnew.audit_chain import sign_head, verify
 from geniusnew.contracts import ContractError, Grant, Policy
 from geniusnew.http_entry import serve
@@ -74,6 +79,7 @@ class Fixture:
     def setUp(self):
         self.clock = [1_700_000_000]
         self.service = self.service_for()
+        self.addCleanup(self.service.close)
         self.server = serve(self.service.entry)
         self.thread = threading.Thread(
             target=self.server.serve_forever, kwargs={'poll_interval': 0.01},
@@ -158,6 +164,10 @@ class EndToEndTest(Fixture, unittest.TestCase):
         self.assertTrue(runners)
         self.assertTrue(all(isinstance(runner, IsolatedWorkerRunner)
                             for runner in runners))
+
+    def test_default_composition_anchors_in_its_own_process(self):
+        self.assertIsInstance(self.service.anchor, AnchorProcess)
+        self.assertNotEqual(self.service.anchor.pid, os.getpid())
 
     def test_gateway_refusal_is_audited_after_handoff_issue(self):
         ticks = iter((self.clock[0], self.clock[0] + 1))
@@ -326,21 +336,30 @@ class EndToEndTest(Fixture, unittest.TestCase):
                          ['orchestrator', 'gateway', 'orchestrator', 'monitor'])
         self.assertEqual(records[-1].event.reason_code, 'RESULT_NOT_VALID')
 
-    def test_an_approval_bound_job_is_refused_with_the_gap_named(self):
-        """The entrance has no field for an approval token, and says so."""
-        service = build(
-            root_secret=ROOT_SECRET,
-            policy=self.policy_for(requires_approval=True),
-            api_keys={API_KEY: 'subject-demo'},
-            workers=(DeterministicSummarizer(),), clock=lambda: self.clock[0])
-        with self.assertRaisesRegex(ContractError, 'through the entrance'):
-            service.entry._submit(subject='subject-demo', job_id='job-x',
-                                  payload={'text': REQUEST})
-
     def test_the_wiring_refuses_a_worker_no_grant_names(self):
         with self.assertRaisesRegex(ContractError, 'no grant in this policy'):
             build(root_secret=ROOT_SECRET, policy=self.policy_for(),
                   api_keys={API_KEY: 'subject-demo'}, workers=(UngrantedWorker(),))
+
+    def two_subject_policy(self, *, second_agent):
+        grants = tuple(
+            Grant(subject, 'user-demo', agent, 'basic', ('summarize',), 'isolated', False)
+            for subject, agent in (('subject-a', 'worker-demo'), ('subject-b', second_agent)))
+        return Policy('policy-v1', 'orchestrator-1', 60,
+                      ('summarize',), ('isolated',), grants)
+
+    def test_the_wiring_refuses_a_tool_granted_to_several_agents(self):
+        with self.assertRaisesRegex(ContractError, 'more than one worker agent'):
+            build(root_secret=ROOT_SECRET,
+                  policy=self.two_subject_policy(second_agent='worker-other'),
+                  api_keys={API_KEY: 'subject-a'}, workers=(DeterministicSummarizer(),))
+
+    def test_subjects_sharing_one_agent_are_still_wired(self):
+        service = build(root_secret=ROOT_SECRET,
+                        policy=self.two_subject_policy(second_agent='worker-demo'),
+                        api_keys={API_KEY: 'subject-a'},
+                        workers=(DeterministicSummarizer(),))
+        self.assertIsNotNone(service)
 
     def test_build_refuses_what_it_cannot_rely_on(self):
         for policy in (None, 'policy', 42, {}):
@@ -360,6 +379,10 @@ class EndToEndTest(Fixture, unittest.TestCase):
                   api_keys={API_KEY: 'subject-demo'},
                   workers=(DeterministicSummarizer(),),
                   runner_factory=lambda worker: 'not-a-runner')
+        with self.assertRaisesRegex(ContractError, 'anchor must be an AuditAnchor'):
+            build(root_secret=ROOT_SECRET, policy=self.policy_for(),
+                  api_keys={API_KEY: 'subject-demo'},
+                  workers=(DeterministicSummarizer(),), anchor='not-an-anchor')
 
     def _slow_runner(self, *, takes):
         keys = self.service.keys
@@ -371,6 +394,135 @@ class EndToEndTest(Fixture, unittest.TestCase):
             return runner
 
         return factory
+
+
+OTHER_KEY = b'SECOND-API-KEY-CANARY-NOT-DISCLOSED'
+
+
+class ApprovalOverHttpTest(Fixture, unittest.TestCase):
+    """An approval-bound job over the socket: wait, get approved, run once."""
+
+    def service_for(self, **ignored):
+        grants = tuple(
+            Grant(subject, 'user-demo', 'worker-demo', 'basic', ('summarize',),
+                  'isolated', True)
+            for subject in ('subject-demo', 'subject-other'))
+        policy = Policy('policy-v1', 'orchestrator-1', 60,
+                        ('summarize',), ('isolated',), grants)
+        return build(root_secret=ROOT_SECRET, policy=policy,
+                     api_keys={API_KEY: 'subject-demo', OTHER_KEY: 'subject-other'},
+                     workers=(DeterministicSummarizer(),),
+                     clock=lambda: self.clock[0])
+
+    def approve(self, job_id, token, *, key=API_KEY, body=b'{}'):
+        headers = {'Content-Type': 'application/json',
+                   'Authorization': 'Bearer ' + key.decode()}
+        if token is not None:
+            headers['X-Approval-Token'] = token.hex()
+        request = urllib.request.Request(f'{self.url}/{job_id}/approve', data=body,
+                                         method='POST', headers=headers)
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.status, json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            return error.code, json.loads(error.read())
+
+    def waiting_job(self, key=API_KEY):
+        status, body = self.post(key=key)
+        self.assertEqual((status, body['status']), (202, 'PENDING_APPROVAL'), body)
+        return body['job_id']
+
+    def actions(self):
+        return [(record.event.actor.component, record.event.action)
+                for record in self.service.chain.records]
+
+    def test_a_job_waits_then_runs_with_its_token_and_the_chain_says_so(self):
+        job_id = self.waiting_job()
+        token = self.service.approve(job_id)
+        status, body = self.approve(job_id, token)
+        self.assertEqual(status, 202, body)
+        self.assertEqual((body['job_id'], body['status'], body['reason_code']),
+                         (job_id, 'SUCCEEDED', 'WORK_COMPLETED'))
+        self.assertEqual(self.actions(), [
+            ('orchestrator', 'HANDOFF_ISSUED'), ('gateway', 'APPROVAL_GRANTED'),
+            ('gateway', 'HANDOFF_ADMITTED'), ('orchestrator', 'EXECUTION_DISPATCHED'),
+            ('monitor', 'RESULT_ACCEPTED')])
+        self.assertEqual(verify(self.service.chain.records, self.service.head(),
+                                authority=self.service.audit,
+                                anchor=self.service.anchor), 5)
+
+    def test_the_token_runs_the_job_once(self):
+        job_id = self.waiting_job()
+        token = self.service.approve(job_id)
+        self.assertEqual(self.approve(job_id, token)[0], 202)
+        self.assertEqual(self.approve(job_id, token), (409, {'error': 'REJECTED'}))
+
+    def test_a_wrong_token_is_audited_and_leaves_the_job_waiting(self):
+        job_id = self.waiting_job()
+        token = self.service.approve(job_id)
+        self.assertEqual(self.approve(job_id, os.urandom(32)), (409, {'error': 'REJECTED'}))
+        self.assertIn(('gateway', 'HANDOFF_REJECTED'), self.actions())
+        status, body = self.approve(job_id, token)
+        self.assertEqual((status, body['status']), (202, 'SUCCEEDED'))
+
+    def test_another_jobs_token_is_refused_and_not_spent(self):
+        first, second = self.waiting_job(), self.waiting_job()
+        first_token = self.service.approve(first)
+        second_token = self.service.approve(second)
+        self.assertEqual(self.approve(first, second_token)[0], 409)
+        self.assertEqual(self.approve(second, second_token)[1]['status'], 'SUCCEEDED')
+        self.assertEqual(self.approve(first, first_token)[1]['status'], 'SUCCEEDED')
+
+    def test_another_subject_cannot_complete_the_job(self):
+        job_id = self.waiting_job()
+        token = self.service.approve(job_id)
+        self.assertEqual(self.approve(job_id, token, key=OTHER_KEY),
+                         (409, {'error': 'REJECTED'}))
+        self.assertEqual(self.approve(job_id, token)[1]['status'], 'SUCCEEDED')
+
+    def test_unknown_unapproved_and_foreign_jobs_look_the_same(self):
+        foreign = self.waiting_job(key=OTHER_KEY)
+        unapproved = self.waiting_job()
+        answers = {
+            'unknown': self.approve('job-that-does-not-exist', os.urandom(32)),
+            'unapproved': self.approve(unapproved, os.urandom(32)),
+            'foreign': self.approve(foreign, self.service.approve(foreign)),
+        }
+        self.assertEqual(set(map(repr, answers.values())), {repr((409, {'error': 'REJECTED'}))})
+
+    def test_a_malformed_approval_is_refused_before_anything_runs(self):
+        job_id = self.waiting_job()
+        before = len(self.service.chain.records)
+        self.assertEqual(self.approve(job_id, None)[0], 400)
+        self.assertEqual(self.approve(job_id, os.urandom(32), body=b'{"text":"x"}')[0], 400)
+        self.assertEqual(len(self.service.chain.records), before)
+
+    def test_only_a_waiting_job_can_be_approved(self):
+        with self.assertRaisesRegex(ContractError, 'no job is waiting'):
+            self.service.approve('job-that-does-not-exist')
+
+
+class PendingJobsTest(unittest.TestCase):
+    def waiting(self, expires_at=100):
+        handoff = type('Handoff', (), {'expires_at': expires_at})()
+        return wiring._Waiting('subject-demo', b'wire', handoff, 'trace-x')
+
+    def test_a_job_id_waits_once(self):
+        jobs = wiring.PendingJobs()
+        jobs.add('job-1', self.waiting(), now=10)
+        with self.assertRaisesRegex(ContractError, 'already waiting'):
+            jobs.add('job-1', self.waiting(), now=10)
+
+    def test_it_is_bounded_and_expired_entries_do_not_count(self):
+        jobs = wiring.PendingJobs()
+        with unittest.mock.patch.object(wiring, '_MAX_PENDING', 2):
+            jobs.add('job-1', self.waiting(expires_at=20), now=10)
+            jobs.add('job-2', self.waiting(), now=10)
+            with self.assertRaisesRegex(ContractError, 'too many jobs'):
+                jobs.add('job-3', self.waiting(), now=10)
+            jobs.add('job-3', self.waiting(), now=20)
+        with self.assertRaisesRegex(ContractError, 'no job is waiting'):
+            jobs.peek('job-1')
 
 
 if __name__ == '__main__':

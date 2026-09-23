@@ -78,16 +78,17 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    festgehaltener, signierter Kettenkopf dazu. Tests gegen Änderung, Einfügung **und
    Löschung des letzten Eintrags**.
 
-   **Status: nicht abgeschlossen.** Mechanismus, Autoritätstrennung und Tests stehen
+   **Status bis zum eigenen Anker-Prozess** (der aktuelle Stand folgt unten).
+   Mechanismus, Autoritätstrennung und Tests stehen
    (`geniusnew/audit_chain.py`): Position, signierter Kopf mit eigenem Audit-Schlüssel,
    und ein Anker, gegen den eine gekürzte und neu signierte Kette scheitert. Der Anker
    bindet sich an eine *Kette*, nicht an eine Länge: ein Vorrücken muss belegen, dass der
    Eintrag an der bereits festgehaltenen Position weiterhin auf den festgehaltenen Hash
    führt. Ein bloß monotoner Zähler war hier nachweislich zu wenig — er akzeptiert jede
    längere Kette, auch eine ohne gemeinsame Geschichte.
-   Offen bleibt die *Externalität* des Ankers. Er liegt derzeit im selben Prozess wie die
-   Kette, und damit im Vertrauensbereich dessen, der schreibt — das modelliert die Grenze,
-   es ist sie nicht. Wo der Anker tatsächlich liegt, ist eine Deployment-Entscheidung, und
+   Offen war die *Externalität* des Ankers. Er lag im selben Prozess wie die Kette, und
+   damit im Vertrauensbereich dessen, der schreibt — das modelliert die Grenze, es ist sie
+   nicht. Wo der Anker tatsächlich liegt, ist eine Deployment-Entscheidung, und
    sie hängt an Schritten 12 bis 14: erst wenn Gateway und Ergebnisprüfung als getrennte
    Instanzen existieren, gibt es überhaupt einen Ort außerhalb des Schreibers. Der Schritt
    gilt als erledigt, wenn der Anker dort liegt.
@@ -96,6 +97,26 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    prüfen kann, kann auch signieren. Eine Trennung in privaten Signatur- und öffentlichen
    Prüfschlüssel braucht ein Primitiv außerhalb der Standardbibliothek und ist deshalb
    eine Abhängigkeitsentscheidung, keine Codeänderung.
+
+   **Status: Anker in eigenem Prozess** (`geniusnew/anchor_process.py`). Die
+   Verdrahtung legt den Kopf standardmäßig bei einem Kindprozess fest. Der Schreiber
+   hält nur zwei Pipes und kann über sie genau zwei Dinge fragen: „lege diesen Kopf über
+   diese Records fest“ und „was ist festgelegt“. Eine Nachricht zum Zurücksetzen gibt es
+   nicht. Der Kindprozess führt den unveränderten `AuditAnchor` aus und baut die Records
+   mit einer eigenen `AuditAuthority` neu auf; neue Kettenlogik kommt nicht hinzu. Die
+   Demo belegt die Grenze mit einem dreizehnten Angriff: Der Schreiber setzt den Anker in
+   seinem eigenen Speicher zurück und reicht die gekürzte, neu signierte Kette ein.
+   Gegen den bisherigen In-Prozess-Anker gelingt das, gegen den Prozess nicht; beide
+   Richtungen hält ein Test fest.
+
+   Offen bleibt der **Lebenszyklus**: Der Dienst startet den Anker und kann ihn damit
+   auch beenden, und die Festlegungen liegen nur im Speicher — ein Neustart ist ein
+   Zurücksetzen. Das zu schließen heißt, den Anker unter einem anderen Betriebssystem-
+   Nutzer zu betreiben und zu persistieren; beides ist Deployment bzw. Persistenz und
+   damit außerhalb von v0.1. Ein Test hält die Grenze offen.
+
+   **Entscheidung zu HMAC:** bleibt für v0.1. Die Grenze steht in `SECURITY.md` und ist
+   per Test offen gehalten; asymmetrische Signaturen kommen nach v0.1.
 
 9. **Ergebnisvertrag** — das Ergebnis wird vom Worker signiert und bei der Annahme
    geprüft, symmetrisch zum eingehenden Handoff. Ohne diesen Schritt bleibt „das Ergebnis
@@ -263,6 +284,14 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
     vertrauenswürdigen serverseitigen Quelle beziehen, nicht die eine von der anderen. Das
     ist eine Verdrahtungs- und Deployment-Frage (Schritte 16 und 17), kein Vertragsdefekt,
     und bleibt bis dahin ausdrücklich offen.
+
+    **Entscheidung für v0.1: logische Trennung reicht.** Seit Schritt 17 kommt die Policy
+    für beide Rollen aus der Kompositionswurzel, nicht die eine von der anderen. Gateway
+    und Orchestrator bleiben aber Objekte in einem Prozess. Für die Zielbeschreibung von
+    v0.1 gilt „eine vom Orchestrator unabhängige Instanz prüft die Policy“ damit als
+    erfüllt im Sinne von §8: getrennte Rollen mit eigener API-Grenze, eigener
+    Revalidierung des Wires und eigenem Audit-Akteur. Eine Prozesstrennung wie beim
+    Worker und beim Audit-Anker kommt nach v0.1.
 
     **Offen bleibt die Reichweite des Ledgers.** Es ist eine Menge in einem Prozess. Ein
     Neustart oder eine zweite Instanz mit derselben Kennung führt denselben unverfallenen
@@ -452,11 +481,26 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
     muss aber wirklich auf eine sehen, und die TTL-Kontrollpunkte sind nur so ehrlich wie
     dieser eine Aufruf.
 
-    **Offen bleibt der Approval-Pfad über HTTP.** Ein Approval-Token ist eine Capability,
-    die ein Client vorzeigen müsste, und der Eingang hat kein Feld dafür. Das Gateway würde
-    ohnehin ablehnen; die Verdrahtung sagt es vorher und benennt damit die Lücke, statt sie
-    wie ein Policy-Fehler aussehen zu lassen. Approval-pflichtige Arbeit ist bis dahin nur
-    durch direkten Aufruf des Orchestrators erreichbar.
+    **Approval über HTTP** (Entscheidung: gehört in v0.1). Ein Approval ist an genau einen
+    signierten Wire gebunden, also braucht es zwei Anfragen. `POST /jobs` stellt den
+    Handoff aus, zeichnet `HANDOFF_ISSUED` auf und antwortet `PENDING_APPROVAL`; der Job
+    wartet in einem begrenzten, prozesslokalen Speicher. `Service.approve(job_id)` erteilt
+    serverseitig den einmaligen Token und zeichnet `APPROVAL_GRANTED` auf — bewusst ohne
+    HTTP-Route, denn wer freigeben darf, ist eine Entscheidung über Personen, und v0.1 kennt
+    keinen Principal-Typ dafür. Der Client legt den Token in `X-Approval-Token` an
+    `POST /jobs/<job_id>/approve` vor, mit einem Body von genau `{}`. Danach läuft der Job
+    durch denselben Ausführungspfad wie jeder andere; das Gateway verbraucht den Token
+    atomar.
+
+    Ein falscher Token oder der eines anderen Jobs wird vom Gateway abgelehnt, bevor
+    etwas läuft. Die Ablehnung steht in der Kette, der Job wartet weiter auf den richtigen
+    Token, und der fremde Token ist nicht verbraucht. Ein unbekannter Job, der Job eines
+    anderen Subjects, ein falscher und ein verbrauchter Token ergeben von außen dieselbe
+    Antwort `409 REJECTED`. Tests gehen jeden dieser Fälle über den echten Socket.
+
+    Offen bleibt die **Zustellung des Tokens**: Wie er vom Freigebenden zum Client kommt,
+    ist Sache des Deployments. Der Speicher wartender Jobs ist prozesslokal wie alle
+    Ledger in v0.1.
 
 ### Teil 3 — nachweisbar machen
 
@@ -483,18 +527,39 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
 
     **Seit Schritt 17 zeigt sie den echten Pfad.** Der Job geht **über HTTP** hinein, die
     Identität wird aus dem Schlüssel serverseitig bestimmt, Gateway und Ergebnisprüfung
-    sind eigene Instanzen, und die Kette nennt zwei verschiedene Komponenten als Akteure.
+    sind eigene Instanzen, und die Kette nennt drei verschiedene Komponenten als Akteure
+    (`orchestrator`, `gateway`, `monitor`).
     Damit steht die Zielbeschreibung von v0.1 nicht mehr als Absicht da, sondern als
     Ausgabe eines Befehls — bis auf die Prozessgrenze zwischen den Instanzen, die eine
     Deployment-Frage bleibt.
 
-    Aus fünf Angriffen sind zwölf geworden: vier davon gehen über den Socket, weil der
+    Aus fünf Angriffen sind dreizehn geworden: vier davon gehen über den Socket, weil der
     Eingang das Einzige ist, was ein Fremder erreicht — ein nicht registrierter Schlüssel,
     ein `tier` im Body, eine selbstgewählte Job-Kennung, eine Tür, die es nicht gibt. Die
-    übrigen acht halten die Objekte, die ein Insider hätte.
+    übrigen neun halten die Objekte, die ein Insider hätte; der neunte ist der Schreiber
+    selbst, der den Anker zurückzusetzen versucht (Schritt 8).
+
 19. **CI führt den End-to-End-Test mit aus**, nicht nur die Unit-Tests.
+
+    **Status: steht** (`.github/workflows/verify.yml`). Der Workflow ruft
+    `unittest discover -s tests` auf und nimmt damit `tests/test_end_to_end.py` (Socket bis
+    zur gegen den Anker verifizierten Kette) und `tests/test_demo.py` mit, das
+    `scripts/demo.sh` als Unterprozess startet und Exit-Code 0 plus `PASS` verlangt. Keiner
+    dieser Tests hat ein `skip`; fällt der Pfad, wird die CI rot. Danach läuft der
+    Refusal-Mutation-Guard über dieselbe Suite, also muss auch jede Ablehnung auf dem
+    End-to-End-Pfad von einem Test bemerkt werden.
+
+    Grenze: die Isolation verlangt POSIX-Ressourcenlimits. Die CI läuft auf
+    `ubuntu-latest`; unter Windows verweigert der isolierte Runner die Ausführung
+    (fail closed), die Demo endet dort also nicht mit `PASS`.
+
 20. **README-Quickstart**, den ein Fremder ohne Rückfragen befolgen kann. Am besten von
     jemandem gegengelesen, der das Projekt nicht kennt.
+
+    **Status: geschrieben, nicht gegengelesen.** Der Quickstart steht in `README.md`. Der
+    zweite Halbsatz dieses Schritts ist nicht erfüllt, solange niemand ohne
+    Projektkenntnis ihn befolgt hat; bis dahin gilt der Schritt als offen.
+
 21. **Tag `v0.1`** auf einem grünen, verifizierten Commit.
 
 ## Arbeitsregeln
@@ -529,3 +594,8 @@ Migrationszyklus gekostet und strukturell nichts verbessert. Das Projekt heißt 
 
 Was nach v0.1 kommt, ist in `docs/MIGRATION-MATRIX.md` unter `REBUILD` klassifiziert und
 an einen exakten Quell-SHA gebunden. Diese Roadmap greift dem nicht vor.
+
+Ein Werkzeug liegt bereit, das erst nach v0.1 laufen soll: `scripts/autoresearch.py` mit
+den Anweisungen in `docs/AUTORESEARCH.md`. Ein Agent ändert genau eine Datei, das Skript
+misst die Laufzeit der Suite und behält eine Änderung nur, wenn Tests, Refusal-Guard und
+Demo mindestens so stark bleiben. Es berührt keinen Produktcode.

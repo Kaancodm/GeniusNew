@@ -36,6 +36,20 @@ orchestrator burns each id exactly once, so a caller supplying them could deny
 service to a job it does not own, or replay a name. The entrance mints one from
 `secrets`; the generator is a seam only so tests can be deterministic.
 
+## Approval travels as a header, not as a field
+
+An approval-bound job takes two requests, because a one-time approval is bound
+to one signed wire and that wire has to exist before anyone can approve it.
+`POST /jobs` answers `PENDING_APPROVAL`; the token is granted server-side and
+handed to the client out of band; `POST /jobs/<job_id>/approve` presents it in
+`X-Approval-Token` with a body of exactly `{}`. The token is a capability, not
+payload, so it stays out of the one-field body — and an approval request that
+carries anything else in its body is refused like any other extra field.
+
+Every refusal from behind the entrance is the same `409 REJECTED`: an unknown
+job, another subject's job, a wrong token and a used one cannot be told apart
+from outside, so the route answers nothing about which jobs exist.
+
 ## What this is not
 
 There is no rate limiting, no authentication beyond the key, no TLS termination,
@@ -48,6 +62,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
@@ -59,6 +74,8 @@ _MAX_KEY_BYTES = 256
 _MIN_KEY_BYTES = 16
 _CONTENT_TYPE = "application/json"
 _PATH = "/jobs"
+_APPROVE_PATH = re.compile(r"\A/jobs/([A-Za-z0-9-]{1,64})/approve\Z")
+_APPROVAL_TOKEN = re.compile(r"\A[0-9a-f]{64}\Z")
 _METHOD = "POST"
 _AUTH_SCHEME = "Bearer "
 
@@ -191,17 +208,21 @@ class HttpEntry:
     def __init__(self, *, registry: PrincipalRegistry,
                  submit: Callable[..., Mapping[str, Any]],
                  job_ids: Callable[[], str] | None = None,
-                 max_body_bytes: int = _MAX_BODY_BYTES) -> None:
+                 max_body_bytes: int = _MAX_BODY_BYTES,
+                 complete: Callable[..., Mapping[str, Any]] | None = None) -> None:
         if not isinstance(registry, PrincipalRegistry):
             _fail("registry must be a PrincipalRegistry")
         if not callable(submit):
             _fail("submit must be callable")
+        if complete is not None and not callable(complete):
+            _fail("complete must be callable")
         if job_ids is not None and not callable(job_ids):
             _fail("job_ids must be callable")
         if type(max_body_bytes) is not int or not 0 < max_body_bytes <= _MAX_BODY_BYTES:
             _fail(f"max_body_bytes must be between 1 and {_MAX_BODY_BYTES}")
         self._registry = registry
         self._submit = submit
+        self._complete = complete
         self._job_ids = job_ids or (lambda: f"job-{secrets.token_hex(16)}")
         self._max_body_bytes = max_body_bytes
 
@@ -211,7 +232,12 @@ class HttpEntry:
             return _refusal(400, "MALFORMED_REQUEST")
         if not isinstance(headers, Mapping):
             return _refusal(400, "MALFORMED_REQUEST")
-        if path != _PATH:
+        approving = _APPROVE_PATH.match(path)
+        # Without a completion callback the route does not exist, and says so
+        # the same way any other unknown path does.
+        if approving is not None and self._complete is None:
+            return _refusal(404, "NOT_FOUND")
+        if path != _PATH and approving is None:
             return _refusal(404, "NOT_FOUND")
         if method != _METHOD:
             return _refusal(405, "METHOD_NOT_ALLOWED")
@@ -233,6 +259,10 @@ class HttpEntry:
         principal = self._principal(lowered.get("authorization"))
         if principal is None:
             return _refusal(401, "UNAUTHENTICATED")
+
+        if approving is not None:
+            return self._approve(principal, approving.group(1), body,
+                                 lowered.get("x-approval-token"))
 
         payload = self._payload(body)
         if payload is None:
@@ -273,9 +303,25 @@ class HttpEntry:
         job_id = self._job_ids()
         if type(job_id) is not str or not job_id:
             return _refusal(500, "REJECTED")
+        return self._call(self._submit, job_id, subject=principal.subject,
+                          job_id=job_id, payload=payload)
+
+    def _approve(self, principal: Principal, job_id: str, body: bytes,
+                 token: Any) -> Response:
         try:
-            outcome = self._submit(subject=principal.subject, job_id=job_id,
-                                   payload=payload)
+            empty = json.loads(body.decode("utf-8")) == {}
+        except (UnicodeDecodeError, ValueError, RecursionError):
+            empty = False
+        if not empty:
+            return _refusal(400, "MALFORMED_REQUEST")
+        if type(token) is not str or not _APPROVAL_TOKEN.match(token):
+            return _refusal(400, "MALFORMED_REQUEST")
+        return self._call(self._complete, job_id, subject=principal.subject,
+                          job_id=job_id, approval_token=bytes.fromhex(token))
+
+    def _call(self, target: Callable[..., Any], minted: str, **arguments: Any) -> Response:
+        try:
+            outcome = target(**arguments)
         except ContractError:
             # The refusal's own sentence stays inside. A client learns that its
             # job was refused, not which check refused it: those messages name
@@ -283,7 +329,7 @@ class HttpEntry:
             return _refusal(409, "REJECTED")
         if not isinstance(outcome, Mapping):
             return _refusal(500, "REJECTED")
-        body = {"job_id": job_id, **{key: value for key, value in outcome.items()}}
+        body = {"job_id": minted, **{key: value for key, value in outcome.items()}}
         return Response(status=202, reason="ACCEPTED", body=body)
 
 

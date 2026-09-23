@@ -59,7 +59,8 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/workers.py", "geniusnew/isolation.py",
            "geniusnew/isolation_child.py", "geniusnew/gateway.py",
            "geniusnew/orchestrator.py", "geniusnew/verifier.py",
-           "geniusnew/http_entry.py", "geniusnew/wiring.py")
+           "geniusnew/http_entry.py", "geniusnew/wiring.py",
+           "geniusnew/anchor_process.py")
 
 # Each module's own way of refusing counts. `_deny` is `orchestrator.py`'s
 # helper, `Rejected` is `verifier.py`'s exception type, `GatewayRejected`

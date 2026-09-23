@@ -26,7 +26,7 @@ the payload, and fails if any of them reaches this output.
 ## The second half is the point
 
 Any pipeline can print success. The refusals are what the contracts are for, so
-the demo performs twelve attacks and requires every one to be refused. Seven
+the demo performs thirteen attacks and requires every one to be refused. Seven
 were real holes at some point — found by review, by adversarial probing, and one
 by wiring two finished components together and discovering they did not fit.
 """
@@ -34,6 +34,7 @@ by wiring two finished components together and discovering they did not fit.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import threading
 import urllib.error
@@ -115,6 +116,7 @@ def main(root_secret: bytes, request_text: str, api_key: bytes = API_KEY) -> int
         verified = verify(records, head, authority=service.audit,
                           anchor=service.anchor)
         step(5, "Head signed with the audit key and committed to the anchor")
+        line(f"    anchor runs in its own process: {service.anchor.pid != os.getpid()}")
         line(f"    count {head.count}   head {head.head_hash}")
         line(f"    VERIFIED against the anchored head: {verified} entries")
 
@@ -135,6 +137,7 @@ def main(root_secret: bytes, request_text: str, api_key: bytes = API_KEY) -> int
         server.shutdown()
         server.server_close()
         thread.join(5)
+        service.close()
 
     job_ok = body["status"] == "SUCCEEDED" and body["reason_code"] == "WORK_COMPLETED"
     chain_ok = verified == len(records) == 4
@@ -174,7 +177,7 @@ def post(url: str, api_key: bytes, payload: dict) -> tuple[int, dict]:
 
 
 def build_attacks(service, url, api_key, request_text, records, head):
-    """Twelve attempts, each refused by a different check.
+    """Thirteen attempts, each refused by a different check.
 
     Four go in over HTTP, because the entrance is the only part a stranger can
     reach. The rest hold the objects an insider would have.
@@ -211,6 +214,14 @@ def build_attacks(service, url, api_key, request_text, records, head):
                            now=NOW)
         finally:
             handoff.payload["text"] = original
+
+    def rewind_anchor():
+        vars(service.anchor).update(_count=0, _head_hash="0" * 64)
+        return verify(records[:-1],
+                      sign_head(count=len(records) - 1,
+                                head_hash=records[-2].record_hash,
+                                authority=service.audit),
+                      authority=service.audit, anchor=service.anchor)
 
     fresh = ResultVerifier(verifier_id="verifier-2",
                            integrity_key=keys.integrity_key,
@@ -259,6 +270,11 @@ def build_attacks(service, url, api_key, request_text, records, head):
                                   head_hash=records[-2].record_hash,
                                   authority=service.audit),
                         authority=service.audit, anchor=service.anchor)),
+        # What a writer can do to an anchor in its own memory: set it back to
+        # nothing, then present the shortened chain. Against an in-process
+        # AuditAnchor this is accepted; the anchor process keeps its state
+        # where these assignments cannot reach.
+        ("Rewind the anchor from inside the writer", rewind_anchor),
     ]
 
 

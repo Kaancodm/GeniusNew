@@ -45,9 +45,11 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from threading import Lock
 from typing import Any, Callable, Iterable, Mapping
 
-from .approvals import ApprovalStore
+from .anchor_process import AnchorProcess
+from .approvals import ApprovalStore, create_scope
 from .audit import AuditAuthority, event_from_handoff
 from .audit_chain import AuditAnchor, AuditChain
 from .contracts import ContractError, Policy, validate, validate_pending
@@ -61,10 +63,63 @@ from .verifier import Rejected, ResultVerifier
 from .workers import Worker, WorkerRunner
 
 _TRACE_PREFIX = "trace-"
+_MAX_PENDING = 1000
+_APPROVAL_TTL_SECONDS = 60
 
 
 def _fail(message: str) -> None:
     raise ContractError(message)
+
+
+@dataclass(frozen=True)
+class _Waiting:
+    subject: str
+    wire: bytes
+    handoff: Any
+    trace_id: str
+
+
+class PendingJobs:
+    """Approval-bound jobs issued over HTTP and not yet run.
+
+    Process-local and bounded, like every ledger in v0.1. An entry expires with
+    its handoff: nothing could run it afterwards, so it is dropped the next time
+    one is added rather than counted against the bound for ever.
+    """
+
+    def __init__(self) -> None:
+        self._jobs: dict[str, _Waiting] = {}
+        self._lock = Lock()
+
+    def add(self, job_id: str, waiting: _Waiting, *, now: int) -> None:
+        with self._lock:
+            for stale in [key for key, value in self._jobs.items()
+                          if value.handoff.expires_at <= now]:
+                del self._jobs[stale]
+            if job_id in self._jobs:
+                _fail("a job with this id is already waiting for approval")
+            if len(self._jobs) >= _MAX_PENDING:
+                _fail("too many jobs are waiting for approval")
+            self._jobs[job_id] = waiting
+
+    def peek(self, job_id: str) -> _Waiting:
+        with self._lock:
+            waiting = self._jobs.get(job_id)
+        if waiting is None:
+            _fail("no job is waiting for approval under this id")
+        return waiting
+
+    def take(self, job_id: str, subject: str) -> _Waiting:
+        """Remove the job for its own subject. Anyone else gets the same refusal."""
+        with self._lock:
+            waiting = self._jobs.get(job_id)
+            if waiting is None or waiting.subject != subject:
+                _fail("no job of this subject is waiting for approval under this id")
+            return self._jobs.pop(job_id)
+
+    def restore(self, job_id: str, waiting: _Waiting) -> None:
+        with self._lock:
+            self._jobs.setdefault(job_id, waiting)
 
 
 @dataclass(frozen=True)
@@ -86,20 +141,57 @@ class Service:
     anchor: AuditAnchor
     policy: Policy
     keys: ServiceKeys
+    approvals: ApprovalStore
+    pending: PendingJobs
+    clock: Callable[[], int]
+
+    def approve(self, job_id: str, *, ttl_seconds: int = _APPROVAL_TTL_SECONDS) -> bytes:
+        """Grant the one-time approval for a job waiting over HTTP.
+
+        Server-side only, and deliberately without an HTTP route: who may
+        approve is a decision about people, and v0.1 has no principal type for
+        an approver. The token reaches the client out of band and comes back on
+        `POST /jobs/<job_id>/approve`, where the gateway consumes it once.
+        """
+        waiting = self.pending.peek(job_id)
+        now = self.clock()
+        scope = create_scope(waiting.wire, subject=waiting.subject, job_id=job_id,
+                             policy=self.policy, integrity_key=self.keys.integrity_key,
+                             now=now)
+        grant = self.approvals.grant(scope, now=now, ttl_seconds=ttl_seconds)
+        _append_event(
+            chain=self.chain, audit=self.audit, handoff=waiting.handoff,
+            trace_id=waiting.trace_id, component="gateway",
+            instance_id=self.gateway.gateway_id, action="APPROVAL_GRANTED",
+            decision="ALLOWED", reason_code="OPERATOR_APPROVED", occurred_at=now)
+        return grant.token
 
     def head(self):
-        """The signed chain head, committed to the anchor. Cheap to ask for."""
+        """The signed chain head, committed to the anchor."""
         head = self.chain.head(self.audit)
         self.anchor.commit(head, self.chain.records, authority=self.audit)
         return head
+
+    def close(self) -> None:
+        """End the anchor process, if this service started one."""
+        if isinstance(self.anchor, AnchorProcess):
+            self.anchor.close()
 
 
 def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
           workers: Iterable[Worker], clock: Callable[[], int] | None = None,
           gateway_id: str = "gateway-1", verifier_id: str = "verifier-1",
           job_ids: Callable[[], str] | None = None,
-          runner_factory: Callable[..., WorkerRunner] | None = None) -> Service:
-    """Assemble one service. The only function that knows all the parts."""
+          runner_factory: Callable[..., WorkerRunner] | None = None,
+          anchor: AuditAnchor | None = None) -> Service:
+    """Assemble one service. The only function that knows all the parts.
+
+    The default anchor is an `AnchorProcess`. Passing an in-process
+    `AuditAnchor` is a test seam, the same way `runner_factory` is: it puts the
+    anchor back inside the writer's memory.
+    """
+    if anchor is not None and not isinstance(anchor, AuditAnchor):
+        _fail("anchor must be an AuditAnchor")
     if not isinstance(policy, Policy):
         _fail("policy is invalid")
     keys = derive_keys(root_secret)
@@ -107,8 +199,9 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
         _fail("clock must be callable")
     now = clock or (lambda: int(time.time()))
 
+    approvals = ApprovalStore()
     gateway = Gateway(gateway_id=gateway_id, integrity_key=keys.integrity_key,
-                      approval_store=ApprovalStore())
+                      approval_store=approvals)
     worker_authority = WorkerAuthority(result_key=keys.result_key,
                                        integrity_key=keys.integrity_key)
     # The production/default path is fail-closed isolated execution. Tests may
@@ -124,14 +217,17 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
         if not isinstance(runner, WorkerRunner):
             _fail("runner_factory must return a WorkerRunner")
         # The grant names which agent may run a subject's jobs, so a worker is
-        # registered under the agent id its grant carries. A worker nobody is
-        # granted is simply never routed to.
-        for grant in policy.grants:
-            if runner.tool in grant.tools:
-                endpoints.append(WorkerEndpoint(grant.worker_agent_id, runner))
-                break
-        else:
+        # registered under the agent id its grant carries. Taking the first of
+        # several would leave the other agents' subjects unroutable, found only
+        # per request as WORKER_NOT_CONFIGURED.
+        agents = {grant.worker_agent_id for grant in policy.grants
+                  if runner.tool in grant.tools}
+        if not agents:
             _fail(f"no grant in this policy names a worker for tool {runner.tool!r}")
+        if len(agents) > 1:
+            _fail(f"grants name more than one worker agent for tool {runner.tool!r}; "
+                  "one worker cannot be registered as several agents")
+        endpoints.append(WorkerEndpoint(agents.pop(), runner))
 
     orchestrator = Orchestrator(orchestrator_id=policy.orchestrator_id,
                                 integrity_key=keys.integrity_key,
@@ -141,40 +237,67 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
                               result_key=keys.result_key)
     audit = AuditAuthority(audit_key=keys.audit_key)
     chain = AuditChain()
-    anchor = AuditAnchor()
+    pending = PendingJobs()
 
+    submit, complete = _submitter(
+        orchestrator=orchestrator, gateway=gateway, verifier=verifier,
+        audit=audit, chain=chain, policy=policy, keys=keys, now=now,
+        pending=pending)
     entry = HttpEntry(
         registry=PrincipalRegistry.from_api_keys(api_keys),
-        submit=_submitter(orchestrator=orchestrator, gateway=gateway,
-                          verifier=verifier, audit=audit, chain=chain,
-                          policy=policy, keys=keys, now=now),
-        job_ids=job_ids,
+        submit=submit, complete=complete, job_ids=job_ids,
     )
+    # Started last, so a refusal above cannot leave a process behind.
+    if anchor is None:
+        anchor = AnchorProcess(audit_key=keys.audit_key)
     return Service(
         entry=entry, orchestrator=orchestrator, gateway=gateway,
         verifier=verifier, audit=audit, chain=chain, anchor=anchor,
-        policy=policy, keys=keys,
+        policy=policy, keys=keys, approvals=approvals, pending=pending,
+        clock=now,
     )
 
 
 def _submitter(*, orchestrator: Orchestrator, gateway: Gateway,
                verifier: ResultVerifier, audit: AuditAuthority,
                chain: AuditChain, policy: Policy, keys: ServiceKeys,
-               now: Callable[[], int]):
+               now: Callable[[], int], pending: PendingJobs):
     """Turn one authenticated request into one audited, verified job.
 
     Evidence is appended as each security-relevant decision happens. That is
     intentionally incremental: a later refusal must not erase the fact that an
     earlier component issued, admitted, or dispatched the job.
+
+    Returns two callables. `submit` issues a job and, unless its grant requires
+    approval, runs it. `complete` runs an approval-bound job once the client
+    presents its token. Both go through the same `run`, so an approved job is
+    checked by exactly the path every other job is.
     """
 
     def submit(*, subject: str, job_id: str, payload: Mapping[str, str]) -> dict[str, Any]:
-        # An approval token is a capability a client would have to present, and
-        # the entrance has no field for one. Keep that gap explicit until the
-        # HTTP contract grows a safe place to carry it.
+        wire, handoff, trace_id = issue_job(subject=subject, job_id=job_id,
+                                            payload=payload)
         if policy.grant_for(subject).requires_approval:
-            _fail("approval-bound jobs cannot be submitted through the entrance")
+            pending.add(job_id, _Waiting(subject, wire, handoff, trace_id), now=now())
+            return {"status": "PENDING_APPROVAL",
+                    "handoff_sha256": handoff_digest(handoff)}
+        return run(subject=subject, job_id=job_id, wire=wire, handoff=handoff,
+                   trace_id=trace_id)
 
+    def complete(*, subject: str, job_id: str, approval_token: bytes) -> dict[str, Any]:
+        waiting = pending.take(job_id, subject)
+        try:
+            return run(subject=subject, job_id=job_id, wire=waiting.wire,
+                       handoff=waiting.handoff, trace_id=waiting.trace_id,
+                       approval_token=approval_token)
+        except GatewayRejected:
+            # Refused before anything ran — a wrong token, or one for another
+            # job. The job's id is not burned and its own approval is not
+            # spent, so it stays waiting for the right one.
+            pending.restore(job_id, waiting)
+            raise
+
+    def issue_job(*, subject: str, job_id: str, payload: Mapping[str, str]):
         admitted_at = now()
         # Route before issuing so an impossible route produces no signed
         # authorization artifact.
@@ -193,12 +316,15 @@ def _submitter(*, orchestrator: Orchestrator, gateway: Gateway,
             decision=admission.decision.decision,
             reason_code=admission.decision.reason_code,
             occurred_at=admission.decision.occurred_at)
+        return admission.wire, handoff, trace_id
 
+    def run(*, subject: str, job_id: str, wire: bytes, handoff, trace_id: str,
+            approval_token: bytes | None = None) -> dict[str, Any]:
         dispatch_at = now()
         try:
             dispatched = orchestrator.dispatch(
-                admission.wire, subject=subject, job_id=job_id, policy=policy,
-                now=dispatch_at)
+                wire, subject=subject, job_id=job_id, policy=policy,
+                now=dispatch_at, approval_token=approval_token)
         except GatewayRejected as refusal:
             _append_event(
                 chain=chain, audit=audit, handoff=handoff, trace_id=trace_id,
@@ -281,7 +407,7 @@ def _submitter(*, orchestrator: Orchestrator, gateway: Gateway,
             "result_sha256": acceptance.result_sha256,
         }
 
-    return submit
+    return submit, complete
 
 
 def _trace_id(handoff) -> str:
@@ -307,7 +433,7 @@ def _revalidate(*, policy: Policy, keys: ServiceKeys, wire: bytes, subject: str,
     approval-bound wire does for ever. Audit has to be able to derive the same
     handoff identity for those jobs too, so it uses the pending path when the
     grant says so. The gateway receipt remains separate evidence carried to the
-    verifier; approval over the HTTP entrance is still explicitly out of scope.
+    verifier.
     """
     grant = policy.grant_for(subject)
     revalidate = validate_pending if grant.requires_approval else validate
