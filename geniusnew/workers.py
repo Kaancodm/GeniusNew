@@ -48,6 +48,7 @@ a worker that never ran.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Mapping
 
 from .contracts import ContractError, Handoff
@@ -157,16 +158,42 @@ class WorkerRunner:
         # copy keeps a misbehaving worker from invalidating its own result, and
         # the check afterwards catches one that found another way.
         before = handoff_digest(handoff)
+        started = self._monotonic()
+        failure = None
         try:
             output = self._run_worker(dict(handoff.payload))
         except _WorkerIsolationViolation:
-            return self._refuse(handoff, _ISOLATION_VIOLATED, now=now)
+            failure = _ISOLATION_VIOLATED
         except _WorkerResourceExhausted:
-            return self._refuse(handoff, _RESOURCE_EXHAUSTED, now=now)
+            failure = _RESOURCE_EXHAUSTED
         except Exception:  # noqa: BLE001 - a worker failing is an outcome here
             # Deliberately not `str(exc)`: reason_code is a closed shape so that
-            # a failure cannot carry text out of the execution domain.
-            return self._refuse(handoff, _WORKER_FAILED, now=now)
+            # a failure cannot carry text out of the execution domain. Recorded
+            # rather than signed here, so the deadline below is checked first —
+            # and, because the refusal is then raised outside the handler, the
+            # worker's exception cannot ride out on `__context__` either.
+            failure = _WORKER_FAILED
+
+        # Roadmap step 15, and the one control point that was missing: `now` is
+        # the dispatch clock and never advances, so a worker that ran past
+        # `expires_at` produced a result nothing here could tell from a prompt
+        # one. Measured, a summarizer sleeping 1.5s under a one-second TTL got
+        # its result signed and accepted. Elapsed time is measured across the
+        # work function and compared against the deadline in real seconds — no
+        # rounding, because rounding up refuses valid short jobs and rounding
+        # down lets a job overrun.
+        #
+        # Checked before any outcome is signed, success or failure alike: past
+        # `expires_at` there is no signable answer at all, and a signed FAILED
+        # for a dead authorization is the same lie as a signed SUCCEEDED.
+        #
+        # The signed artifact is untouched: `produced_at` stays the dispatch
+        # clock, so the same job still produces the same bytes. Only the
+        # decision to sign at all depends on how long the work took.
+        if now + (self._monotonic() - started) >= handoff.expires_at:
+            _fail("handoff expired while the worker was running")
+        if failure is not None:
+            return self._refuse(handoff, failure, now=now)
         if handoff_digest(handoff) != before:
             return self._refuse(handoff, _PAYLOAD_MUTATED, now=now)
 
@@ -176,6 +203,16 @@ class WorkerRunner:
                            authority=self._authority, now=now)
         except ContractError:
             return self._refuse(handoff, _OUTPUT_REJECTED, now=now)
+
+    def _monotonic(self) -> float:
+        """Elapsed-time source, as a seam.
+
+        A test that proved this by sleeping would be honest and expensive:
+        `scripts/refusals.py` runs the whole suite once per refusal, so one
+        second of sleeping costs three minutes of CI. Overriding this is how
+        the tests make a worker take an hour without taking an hour.
+        """
+        return time.monotonic()
 
     def _run_worker(self, payload: Mapping[str, str]) -> Mapping[str, str]:
         """Execute the untrusted work function.

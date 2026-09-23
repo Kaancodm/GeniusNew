@@ -189,8 +189,154 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
     geteilte veränderliche Autorität. Er trifft Entscheidungen, er bestätigt sie nicht
     selbst.
 
+    **Status: steht** (`geniusnew/orchestrator.py`). Der Schritt wurde zweimal unabhängig
+    gebaut; dieser Stand führt beide zusammen. Das Routing-Modell stammt aus
+    `feat/orchestrator`, der Zustand, die Entscheidungssätze und die Permit-Bindung aus
+    `feat/orchestrator-decisions`.
+
+    Er entscheidet dreierlei und hält jede Entscheidung fest: ob ein Auftrag zulässig ist,
+    welchen konfigurierten Worker die vertrauenswürdige Policy dafür benennt, und dass ein
+    Dispatch stattgefunden hat. Das signierte Ergebnis gibt er **unbewertet** zurück — er
+    hält keinen Ergebnisschlüssel und ruft `accept` nie auf, kann seinen eigenen Job also
+    nicht für gelungen erklären. Das ist Schritt 14, und §8 verlangt, dass es eine andere
+    Rolle bleibt.
+
+    Umgekehrt kann er seinen Handoff nicht selbst zulassen: einen `DispatchPermit` mintet
+    nur `gateway.py`, und `WorkerRunner.execute` nimmt nichts anderes an. Prüfbar ist für
+    ihn nur, dass der zurückgegebene Permit **genau den eingereichten Wire** bindet — sonst
+    liefe der Worker einen Vertrag, den dieser Orchestrator nie abgeschickt hat, während
+    der zurückgegebene Wire weiter den anderen beschriebe.
+
+    Die Zuordnung ist eine Tatsache des Grants: der Grant benennt die `worker_agent_id`,
+    also ist Routing ein Nachschlagen auf diese Kennung und nie eine Wahl zwischen
+    Kandidaten. Das Tool des konfigurierten Endpunkts muss trotzdem im Grant stehen — ein
+    Worker unter der richtigen Agent-Kennung, der ein anderes Tool implementiert, erreichte
+    sonst eine Fähigkeit, die die Policy nie erteilt hat. Beides wird **vor** dem Gateway
+    geprüft, damit ein fehlgeleiteter Auftrag kein einmaliges Approval verbrennt.
+
+    Er signiert mit einem **eigenen** Integritätsschlüssel statt in das Gateway zu greifen.
+    Handoff v1 ist HMAC, die Bytes sind heute dieselben; den Schlüssel als eigene Eingabe
+    zu nehmen ist das, was getrennte Schlüssel überhaupt möglich hält und Rotation nicht zu
+    einer gemeinsamen Entscheidung zweier Rollen macht.
+
+    Deterministisch: keine Uhr, keine Entropie — `now` ist ein Argument. Die Registry wird
+    bei der Konstruktion in eine unveränderliche Abbildung kopiert, ein Aufrufer kann
+    danach weder Worker hinzufügen noch das Routing ändern noch einen anderen Runner in den
+    Dispatch-Pfad schmuggeln. **Kein Failover**, denn ein zweiter Versuch nach einer
+    Ablehnung ist genau der Rückfall, der aus Default-Deny ein Default-Retry macht.
+
+    Der einzige Zustand ist das Job-Ledger. Eine `job_id` wird verbraucht, wenn ein Permit
+    vorliegt und die Arbeit gleich läuft — nicht vorher: ein vom Gateway abgelehnter
+    Auftrag verliert seine Kennung sonst endgültig, und gerade beim fehlenden
+    Approval-Token ist das Approval an einen Wire gebunden, der genau diese Kennung trägt.
+    Was gelaufen ist, bleibt verbraucht, auch wenn der Dispatch scheitert; sie wieder
+    freizugeben machte das Ledger zum Replay-Fenster statt zum Nachweis. Es ist beschränkt;
+    eine unbegrenzte Menge, die ein Aufrufer wachsen lassen kann, ist ein Speicher-DoS mit
+    Beleg.
+
+    Aus dem Review dazugekommen: `admit` gibt die Ausstellungsentscheidung mit zurück,
+    sonst hätte der zwingend zweistufige Approval-Pfad ein signiertes Artefakt ohne
+    protokollierbare Entscheidung. Die Verfügbarkeit der `job_id` wird **vor** dem Gateway
+    erfragt, damit eine Wiederholung kein einmaliges Approval verbrennt, das dann keine
+    Arbeit bezahlt; die atomare Reservierung danach bleibt die eigentliche Autorität.
+    Scheitert die Ausführung, trägt die Ablehnung die Dispatch-Entscheidung mit sich
+    (`DispatchAttempted`) — die Kennung ist verbraucht und der Permit konsumiert, der
+    Versuch hat also stattgefunden. Zeitstempel sind auf das Fenster begrenzt, das
+    `audit.py` annimmt, und zwar dort, wo `now` hereinkommt: eine Ablehnung, die wegen
+    ihrer eigenen Uhr nicht aufzeichenbar wäre, ist keine auditierbare Ablehnung. Und die
+    bereinigte Ablehnung wird **außerhalb** des `except`-Blocks erhoben: `from None` setzt
+    nur `__suppress_context__`, der Originaltext bleibt ein Attribut entfernt liegen — eine
+    Nachricht zu säubern ist nicht dasselbe wie zu säubern.
+
+    Ablehnungen tragen geschlossene Reason-Codes mit je einem festen Satz, damit der
+    Ablehnungspfad kein Textkanal wird; jede verwendete Aktion liegt im geschlossenen
+    Audit-Vokabular von `audit.py` (ein Test prüft das gegen dessen Menge). Fremde
+    Ablehnungen — die des Gateways, die der Worker-Grenze — werden **unverändert**
+    durchgereicht: die Entscheidung einer anderen Instanz als eigene zu protokollieren wäre
+    derselbe Fehler in die andere Richtung. `geniusnew/orchestrator.py` gehört zum
+    Refusal-Mutation-Guard der CI, der dafür `_deny` gelernt hat; ohne das wären alle
+    Admission-Ablehnungen für ihn unsichtbar gewesen, während das Modul in der Liste stand.
+
+    **Offen bleibt die Herkunft der Policy.** Das Gateway prüft den Wire unabhängig,
+    bekommt die Policy aber als Parameter — in dieser Verdrahtung vom Orchestrator.
+    Unabhängigkeit verlangt, dass beide Rollen dieselbe Policy aus derselben
+    vertrauenswürdigen serverseitigen Quelle beziehen, nicht die eine von der anderen. Das
+    ist eine Verdrahtungs- und Deployment-Frage (Schritte 16 und 17), kein Vertragsdefekt,
+    und bleibt bis dahin ausdrücklich offen.
+
+    **Offen bleibt die Reichweite des Ledgers.** Es ist eine Menge in einem Prozess. Ein
+    Neustart oder eine zweite Instanz mit derselben Kennung führt denselben unverfallenen
+    Handoff erneut aus; das Gateway hält kein eigenes Handoff-Ledger und mintet jedes Mal
+    einen frischen Permit. Dauerhafter gemeinsamer Zustand ist eine Persistenzentscheidung,
+    die unter *Bewusst nicht in v0.1* ausdrücklich draußen steht — der Anspruch lautet
+    deshalb „ein Dispatch pro Job-Kennung **pro Instanz**", und ein Test hält genau diese
+    Grenze offen fest, so wie `test_results.py` es für die Einmaligkeit der Annahme tut.
+
+    **Offen bleibt außerdem die Prozessgrenze.** In einem Prozess gibt es keine
+    Speichergrenze; der Orchestrator hält einen Endpunkt in die Ausführung hinein.
+    Nachweisbar ist, was an der API gilt: er hält keine fremde Autorität in seinem eigenen
+    Zustand, kann kein Permit minten und kein Ergebnis annehmen. Die Trennung nach §8 ist
+    in v0.1 eine logische Rollentrennung, keine Speichertrennung.
+
 14. **Ergebnisprüfung** — unabhängige Annahme: Signatur, Integrität, TTL. Weder Worker
     noch Orchestrator validieren ihr eigenes Ergebnis.
+
+    **Status: steht** (`geniusnew/verifier.py`). Die Instanz nimmt **Wires entgegen, keine
+    Objekte**: ein übergebenes `Handoff` ist die Schlussfolgerung, die jemand anders über
+    diese Bytes gezogen hat, also parst und revalidiert sie den Handoff-Wire selbst gegen
+    vertrauenswürdige Policy und serverseitige Identität — dieselbe Grenze wie beim
+    Gateway, nur am anderen Ende des Pfads. Was sie danach prüft, ist `results.accept`,
+    aufgerufen mit einem Handoff, den sie selbst abgeleitet hat.
+
+    Neu ist, was kein Vertrag leisten kann: **Einmaligkeit**. `results.py` hält diese Lücke
+    ausdrücklich offen — ein Vertrag hält keinen Zustand, also nimmt `accept` dasselbe
+    Ergebnis so oft an, wie es gefragt wird (ein Test belegt genau das). Hier hat ein
+    zugelassener Handoff genau ein angenommenes Ergebnis, so wie `approvals.py` es für
+    Tokens tut.
+
+    Das Ledger verbraucht die Kennung **erst nach vollständiger Prüfung**. Beim Eintritt zu
+    verbrauchen hieße: wer diese Instanz erreicht, verbrennt mit einem gefälschten Ergebnis
+    die eine Annahme des Jobs und sperrt das echte dauerhaft aus — ein Denial of Service,
+    gebaut aus der Anti-Replay-Regel. Ein Test führt das vor.
+
+    Ein signiertes `FAILED` ist ein echtes Ergebnis und wird als solches angenommen.
+    Annahme betrifft das Artefakt, nicht den Ausgang; Fehlschläge als ungültig abzulehnen
+    hieße, ein Worker könnte seine eigenen Fehler unsichtbar machen.
+
+    Der vierte TTL-Kontrollpunkt aus Schritt 15 greift hier eine Schicht früher als
+    erwartet: ein abgelaufener Handoff scheitert schon an der Revalidierung, bevor das
+    Ergebnis überhaupt geparst wird. Die entsprechende Prüfung in `accept` bleibt als
+    Verteidigung für Aufrufer, die ein `Handoff` anders in die Hand bekommen.
+
+    Die Trennlinie ist bewusst scharf: alles, was den Job oder seine Artefakte betrifft,
+    ist ein `Rejected` mit geschlossenem Code und damit als Audit-Eintrag festhaltbar;
+    alles, was den **Aufruf** betrifft — eine Uhr, die kein Integer ist, eine Policy, die
+    keine ist —, bleibt ein einfacher `ContractError`. Wer seine eigenen Argumente falsch
+    setzt, fällt kein Urteil über ein Ergebnis und darf auch nicht so protokolliert werden.
+
+    **Offen bleibt die Reichweite des Ledgers** — dieselbe Grenze wie beim Job-Ledger des
+    Orchestrators. Es ist eine Menge in einem Prozess; ein Neustart oder eine zweite
+    Instanz mit derselben Kennung nimmt dasselbe Ergebnis erneut an. Der Anspruch lautet
+    deshalb „eine Annahme pro Handoff **pro Instanz**", und ein Test hält das fest.
+
+    **Offen bleibt die Symmetrie.** Das Ergebnis-HMAC ist symmetrisch — wer prüfen kann,
+    kann signieren. Die Unabhängigkeit ist hier eine getrennte Instanz mit eigener
+    API-Grenze, keine kryptografische; ein Test hält diese Grenze offen fest, statt sie
+    wegzubehaupten. Eine asymmetrische Ergebnissignatur ist die Abhängigkeitsentscheidung
+    aus Schritt 8 und änderte nur den Konstruktor dieser Datei.
+
+    **Offen bleibt die Approval-Evidenz.** Ein approval-pflichtiger Wire trägt dauerhaft
+    `PENDING_APPROVAL` — das Konsumieren schreibt ihn nicht um —, also kann diese Instanz
+    einen genehmigten Job nicht von einem ungenehmigten unterscheiden. Sie **verlangt**
+    deshalb den Receipt-Hash des Gateways und protokolliert ihn, ohne ihn verifizieren zu
+    können: der Store, der das könnte, gehört dem Gateway. Ohne Receipt wird abgelehnt —
+    das lässt die Evidenz mitreisen. Das Verifizieren zu nennen wäre, UNKNOWN als PASS zu
+    lesen. Die Auflösung gehört zu Schritt 17.
+
+    `geniusnew/verifier.py` gehört zum Refusal-Mutation-Guard; `scripts/refusals.py` kennt
+    dafür jetzt auch den modul-eigenen Ablehnungstyp `Rejected`. Ohne das wäre ausgerechnet
+    die Einmaligkeitsregel für die Prüfung unsichtbar gewesen, während das Modul in der
+    Liste stand.
 
     Die Schritte 12 bis 14 sind bewusst getrennt. `CONSTITUTION-V1-DRAFT.md` §8 verlangt,
     dass Orchestrierung, Policy-/Gateway-Prüfung, Ausführung, Ergebnisprüfung und
@@ -204,11 +350,113 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
     Schritt 11 ersetzt das nicht. Eigener End-to-End-Test für Ablauf **während** der
     Ausführung.
 
+    **Status: steht** (`tests/test_ttl.py`, plus eine Ergänzung in `geniusnew/workers.py`).
+    Die vier Punkte sind: Admission (das Gateway revalidiert den Wire), vor dem Dispatch
+    (die Worker-Grenze lehnt ab, **bevor** die Arbeitsfunktion läuft), Revalidierung im
+    Worker (nach der Arbeit, gegen die tatsächlich verstrichene Zeit) und Annahme. Jeder
+    Test prüft die **Meldung**, nicht nur dass irgendetwas abgelehnt wurde — mehrere dieser
+    Eingaben würden von einem späteren Punkt ohnehin abgelehnt, „ein ContractError kam"
+    überlebte also das Löschen des früheren.
+
+    **Der dritte Punkt fehlte.** `now` ist die Dispatch-Uhr und rückt nie vor, also war
+    eine Ausführung, die die Deadline überschritt, von einer prompten nicht zu
+    unterscheiden. Gemessen, bevor etwas geändert wurde: ein Worker, der 1,5 Sekunden
+    schläft, bekam unter einer TTL von **einer** Sekunde sein Ergebnis signiert *und*
+    angenommen. Jetzt wird die verstrichene Zeit über die Arbeitsfunktion gemessen und in
+    echten Sekunden gegen die Deadline gehalten — ohne Rundung, denn Aufrunden lehnt
+    gültige kurze Jobs ab und Abrunden lässt einen Job überziehen.
+
+    Das signierte Artefakt bleibt davon unberührt: `produced_at` ist weiterhin die
+    Dispatch-Uhr, derselbe Job erzeugt dieselben Bytes. Nur die Entscheidung, überhaupt zu
+    signieren, hängt an der Dauer. Ein Test hält das fest, weil `scripts/demo.sh` genau
+    diese Digests ausgibt, damit ein Leser zwei Läufe vergleichen kann.
+
+    Dass ein Ressourcen-Zeitlimit das nicht ersetzt, ist keine Meinung, sondern Arithmetik:
+    ein Wall-Limit darf bis 30 Sekunden gehen, eine Handoff-TTL bei einer Sekunde liegen.
+    Die beiden beantworten verschiedene Fragen — was ein Worker verbrauchen darf, und wie
+    lange die Erlaubnis dazu gilt.
+
+    **Kein Test hier schläft.** `scripts/refusals.py` führt die gesamte Suite einmal pro
+    Ablehnung aus, derzeit 175-mal; eine Sekunde Schlaf kostet drei Minuten CI. Die
+    Zeitquelle des Runners ist deshalb eine überschreibbare Naht (`_monotonic`), und die
+    Tests lassen einen Worker eine Stunde dauern, ohne eine Stunde zu dauern. In der
+    Produktion ist es `time.monotonic`; gefunden wurde die Lücke mit einem echten Worker.
+
 16. **HTTP-Eingang** — API-Key wird serverseitig auf einen Principal abgebildet.
     Identität, Tier und Rechte kommen **nie** aus dem Request.
 
+    **Status: steht** (`geniusnew/http_entry.py`). Die Regel ist als Verbot formuliert,
+    und so ist sie auch umgesetzt: der Request-Body ist eine **geschlossene Form** mit
+    genau einem Feld, der Payload. Ein mitgeschicktes `tier`, `subject`, `user_id`,
+    `tools` oder `job_id` wird **abgelehnt, nicht stillschweigend verworfen** — ein Feld,
+    das hier durchkäme, wäre in jeder späteren Schicht vertrauenswürdig, denn die prüfen
+    gegen den Policy-Grant, den diese Entscheidung ausgewählt hat. Stilles Verwerfen sagt
+    dem Angreifer nichts und dem ehrlichen Aufrufer auch nichts.
+
+    Ein `Principal` trägt **nur** das Subject. Tier, Tools und User-ID stehen im Grant;
+    sie hier mitzuführen schüfe eine zweite Wahrheitsquelle über Autorisierung, und das
+    Erste, was einer zweiten Wahrheitsquelle passiert, ist Widerspruch.
+
+    Schlüssel liegen nie im Klartext: die Registry hält SHA-256-Digests und löst per
+    Dictionary-Lookup auf. Kein Vergleichs-Loop, dessen Dauer verrät, wie viel von einem
+    Schlüssel stimmte; nach der Konstruktion kein Klartext im Speicher; ein Dump des
+    Objekts offenbart kein Credential. Ein unbekannter und ein fehlender Schlüssel ergeben
+    **dieselbe** Antwort — ein Test sammelt fünf Varianten ein und verlangt genau eine
+    Antwort, damit kein Orakel entsteht.
+
+    Die Job-Kennung wird **hier** erzeugt. Wer sie selbst wählen darf, wählt, mit welcher
+    Kennung er kollidiert: der Orchestrator verbraucht jede genau einmal, ein Aufrufer
+    könnte also fremde Jobs verdrängen oder einen Namen wiederholen.
+
+    Die Socket-Hälfte ist bewusst die dünne: alles, was entscheidet, ist ohne Server
+    testbar. Sie verrät außerdem die Interpreter-Version nicht (der Default-Header nennt
+    Python samt Nummer) und protokolliert die Request-Zeile nicht — angreifergewählter
+    Text in einem Log, das ein Operator liest, gehört nicht dorthin; Protokollierung
+    gehört in die Audit-Chain, wo geschlossen ist, was vorkommen darf.
+
+    `scripts/refusals.py` kennt jetzt auch **zurückgegebene** Ablehnungen: eine Grenze,
+    die einem Fremden antwortet, kann ihn nicht anschreien. Ohne das wären Pfad, Methode
+    und unbekannter Schlüssel für die Prüfung unsichtbar gewesen. Sie fand daraufhin
+    sechs ungetestete Ablehnungen und eine **unerreichbare** — ein Kollisionscheck über
+    Schlüssel-Digests, den eine Mapping-Eingabe nie auslösen kann; er ist entfernt statt
+    nachträglich mit einem Test geschmückt.
+
+    **Nicht enthalten:** Rate-Limiting, TLS, Sessions, jede Authentifizierung über den
+    Schlüssel hinaus. Das sind Deployment-Fragen, und sie hier zu behaupten wäre genau
+    die Art Aussage, die `SECURITY.md` verhindern soll.
+
 17. **Verdrahtung** plus ein End-to-End-Test, der den gesamten Pfad geht, die
     Ergebnissignatur prüft und die Audit-Chain gegen den festgehaltenen Kopf verifiziert.
+
+    **Status: steht** (`geniusnew/wiring.py`, `tests/test_end_to_end.py`). Ein Request geht
+    über einen echten Socket hinein, der Eingang macht aus dem API-Key ein Subject, der
+    Orchestrator lässt zu und routet, das Gateway prüft den Wire unabhängig nach und mintet
+    den einzigen Permit, den die Worker-Grenze annimmt, der Worker läuft dahinter, die
+    Ergebnisprüfung nimmt an, ohne beauftragt zu haben, und die Audit-Rolle hält fest, was
+    jede Instanz entschieden hat. Danach verifiziert die Kette gegen einen Kopf, den der
+    Anker hält.
+
+    **Die Verdrahtung hat sofort einen echten Defekt gefunden.** `Dispatch` ließ den
+    Approval-Receipt des Gateways fallen, und die Ergebnisprüfung verlangt ihn für einen
+    approval-pflichtigen Job — die beiden Komponenten waren also **gar nicht
+    zusammensteckbar**. Beide hatten vollständige Testsuiten, beide hatten für ihre eigene
+    Hälfte recht. Nichts außer dem Zusammenstecken hätte das gesagt. Genau dafür ist dieser
+    Schritt da.
+
+    Was eine Kompositionswurzel den Teilen schuldet, steht im Modul-Docstring und ist hier
+    dreierlei: Schlüssel werden **einmal** abgeleitet und nach Rolle vergeben, niemand
+    greift in eine andere Komponente; die **Policy kommt von hier**, nicht von einer
+    Komponente — damit ist die offene Stelle aus Schritt 13 wenigstens in der Herkunft
+    behoben, wenn auch noch nicht in der Prozessgrenze; und die **Uhr ist echt**. Alle
+    Module nehmen `now` als Argument und lesen keine Uhr, was sie testbar macht — irgendwer
+    muss aber wirklich auf eine sehen, und die TTL-Kontrollpunkte sind nur so ehrlich wie
+    dieser eine Aufruf.
+
+    **Offen bleibt der Approval-Pfad über HTTP.** Ein Approval-Token ist eine Capability,
+    die ein Client vorzeigen müsste, und der Eingang hat kein Feld dafür. Das Gateway würde
+    ohnehin ablehnen; die Verdrahtung sagt es vorher und benennt damit die Lücke, statt sie
+    wie ein Policy-Fehler aussehen zu lassen. Approval-pflichtige Arbeit ist bis dahin nur
+    durch direkten Aufruf des Orchestrators erreichbar.
 
 ### Teil 3 — nachweisbar machen
 
@@ -217,6 +465,33 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
 18. **`scripts/demo.sh`** — ein Befehl. Startet einen Job, gibt die Audit-Chain aus,
     verifiziert sie gegen den festgehaltenen Kopf und sagt deutlich, ob die Prüfung
     bestanden wurde. Die Ausgabe enthält nur, was Schritt 7 erlaubt.
+
+    **Status: steht** (`scripts/demo.sh`, `scripts/demo.py`). Ein Job geht durch alle
+    heute vorhandenen Schichten, die Kette wird gegen den Anker verifiziert, und das
+    Skript endet mit `PASS` oder `FAIL` und einem entsprechenden Exit-Code — eine Demo,
+    die nicht scheitern kann, beweist nichts.
+
+    Die zweite Hälfte ist der eigentliche Punkt: zwölf Manipulationsversuche, die alle
+    abgelehnt werden müssen. Sieben davon waren einmal ein echtes Loch — aus Review, aus
+    eigenem Probing, und eines aus dem Zusammenstecken zweier fertiger Komponenten.
+
+    Die Auflage „nur, was Schritt 7 erlaubt" wird als Test geführt, nicht als Vorsatz:
+    `tests/test_demo.py` setzt Kanarienvögel in Root-Secret und Payload und schlägt fehl,
+    wenn einer davon in der Ausgabe auftaucht. Gedruckt werden Digests, keine Inhalte und
+    kein Schlüsselmaterial — auch kein gekürztes Präfix, denn acht Byte eines Schlüssels
+    sind acht Byte.
+
+    **Seit Schritt 17 zeigt sie den echten Pfad.** Der Job geht **über HTTP** hinein, die
+    Identität wird aus dem Schlüssel serverseitig bestimmt, Gateway und Ergebnisprüfung
+    sind eigene Instanzen, und die Kette nennt zwei verschiedene Komponenten als Akteure.
+    Damit steht die Zielbeschreibung von v0.1 nicht mehr als Absicht da, sondern als
+    Ausgabe eines Befehls — bis auf die Prozessgrenze zwischen den Instanzen, die eine
+    Deployment-Frage bleibt.
+
+    Aus fünf Angriffen sind zwölf geworden: vier davon gehen über den Socket, weil der
+    Eingang das Einzige ist, was ein Fremder erreicht — ein nicht registrierter Schlüssel,
+    ein `tier` im Body, eine selbstgewählte Job-Kennung, eine Tür, die es nicht gibt. Die
+    übrigen acht halten die Objekte, die ein Insider hätte.
 19. **CI führt den End-to-End-Test mit aus**, nicht nur die Unit-Tests.
 20. **README-Quickstart**, den ein Fremder ohne Rückfragen befolgen kann. Am besten von
     jemandem gegengelesen, der das Projekt nicht kennt.

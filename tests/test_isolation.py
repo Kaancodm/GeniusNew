@@ -1,4 +1,5 @@
 import os
+import subprocess
 import tempfile
 import time
 import unittest
@@ -141,6 +142,31 @@ class AuthorityProbeWorker(Worker):
 
         present = any(isinstance(value, WorkerAuthority) for value in gc.get_objects())
         return {"text": "authority-present" if present else "authority-absent"}
+
+
+class CallerFrameProbeWorker(Worker):
+    tool = "summarize"
+
+    def run(self, payload):
+        import inspect
+        from geniusnew.results import WorkerAuthority
+        from geniusnew.workers import WorkerRunner
+
+        frame = inspect.currentframe()
+        present = False
+        try:
+            while frame is not None:
+                for value in frame.f_locals.values():
+                    if isinstance(value, (WorkerAuthority, WorkerRunner)):
+                        present = True
+                        break
+                if present:
+                    break
+                frame = frame.f_back
+        finally:
+            del frame
+        return {"text": "caller-authority-present" if present
+                else "caller-authority-absent"}
 
 
 class IsolationLimitsTest(unittest.TestCase):
@@ -382,12 +408,84 @@ class ProcessIsolationTest(unittest.TestCase):
         self.assertEqual(isolated, direct)
         self.assertTrue(self.taken(isolated).succeeded)
 
+    def test_child_pipes_are_closed_after_success_failure_and_timeout(self):
+        cases = [
+            (DeterministicSummarizer(), IsolationLimits(), "WORK_COMPLETED"),
+            (ExplodingWorker(), IsolationLimits(), "WORKER_FAILED"),
+            (SlowWorker(), IsolationLimits(wall_seconds=0.1), "RESOURCE_EXHAUSTED"),
+        ]
+        real_popen = subprocess.Popen
+        for worker, limits, reason in cases:
+            with self.subTest(reason=reason):
+                processes = []
+
+                def spawn(*args, **kwargs):
+                    process = real_popen(*args, **kwargs)
+                    processes.append(process)  # Retain it: GC is not cleanup.
+                    return process
+
+                try:
+                    with patch.object(isolation_module.subprocess, "Popen", side_effect=spawn):
+                        wire = self.runner(worker, limits).execute(self.permit_for(), now=110)
+                    self.assertEqual(self.taken(wire).reason_code, reason)
+                    self.assertEqual(len(processes), 1)
+                    process = processes[0]
+                    self.assertIsNotNone(process.poll())
+                    self.assertTrue(process.stdin.closed)
+                    self.assertTrue(process.stdout.closed)
+                finally:
+                    for process in processes:
+                        isolation_module._kill_process(process)
+                        process.stdin.close()
+                        process.stdout.close()
+
+    def test_reader_failure_reaps_child_and_closes_pipes(self):
+        real_popen = subprocess.Popen
+        processes = []
+
+        def spawn(*args, **kwargs):
+            process = real_popen(*args, **kwargs)
+            processes.append(process)
+            return process
+
+        try:
+            with patch.object(isolation_module.subprocess, "Popen", side_effect=spawn), \
+                    patch.object(isolation_module, "_read_process", side_effect=OSError("read failed")):
+                wire = self.runner(SlowWorker()).execute(self.permit_for(), now=110)
+            self.assertEqual(self.taken(wire).reason_code, "WORKER_FAILED")
+            self.assertEqual(len(processes), 1)
+            process = processes[0]
+            self.assertTrue(process.stdin.closed)
+            self.assertTrue(process.stdout.closed)
+            self.assertIsNotNone(process.poll())
+        finally:
+            for process in processes:
+                isolation_module._kill_process(process)
+                process.stdin.close()
+                process.stdout.close()
+
     def test_signing_authority_object_is_not_present_in_the_fresh_interpreter(self):
         taken = self.taken(
             self.runner(AuthorityProbeWorker()).execute(self.permit_for(self.handoff), now=110)
         )
         self.assertTrue(taken.succeeded)
         self.assertEqual(taken.output, {"text": "authority-absent"})
+
+    def test_worker_cannot_walk_parent_caller_frames_to_the_signing_authority(self):
+        isolated = self.taken(
+            self.runner(CallerFrameProbeWorker()).execute(
+                self.permit_for(self.handoff), now=110)
+        )
+        self.assertTrue(isolated.succeeded)
+        self.assertEqual(isolated.output, {"text": "caller-authority-absent"})
+
+        # This is the exploit the composition root must not use: in-process
+        # execution exposes a WorkerRunner in the caller chain to worker code.
+        direct_wire = WorkerRunner(
+            CallerFrameProbeWorker(), authority=self.authority
+        ).execute(self.permit_for(self.handoff), now=110)
+        direct = self.taken(direct_wire)
+        self.assertEqual(direct.output, {"text": "caller-authority-present"})
 
     def test_network_creation_is_denied_and_recorded(self):
         taken = self.taken(self.runner(NetworkWorker()).execute(self.permit_for(self.handoff), now=110))

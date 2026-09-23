@@ -324,23 +324,28 @@ def _run_isolated(worker: Worker, payload: Mapping[str, str],
                   limits: IsolationLimits) -> Any:
     request = _request(worker, payload, limits)
     with tempfile.TemporaryDirectory(prefix="geniusnew-worker-") as root:
-        process = subprocess.Popen(
+        with subprocess.Popen(
             [sys.executable, "-m", "geniusnew.isolation_child", os.path.realpath(root)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             close_fds=True,
             env=_minimal_environment(),
-        )
-        assert process.stdin is not None
-        try:
-            process.stdin.write(request)
-            process.stdin.close()
-        except (BrokenPipeError, OSError):
-            _kill_process(process)
-            raise _WorkerIsolationViolation() from None
-        data, status = _read_process(process, float(limits.wall_seconds))
-        return _decode_child_message(data, status)
+        ) as process:
+            assert process.stdin is not None
+            try:
+                try:
+                    process.stdin.write(request)
+                    process.stdin.close()
+                except (BrokenPipeError, OSError):
+                    raise _WorkerIsolationViolation() from None
+                data, status = _read_process(process, float(limits.wall_seconds))
+                return _decode_child_message(data, status)
+            finally:
+                # Reap even on an unexpected read/write failure before Popen's
+                # context manager closes both pipes. Never rely on GC, or let
+                # __exit__ wait indefinitely for a child after a parent error.
+                _kill_process(process)
 
 
 def _write_message(fd: int, message: dict[str, Any]) -> None:
