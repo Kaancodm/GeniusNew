@@ -6,7 +6,14 @@ import unittest
 from geniusnew.contracts import ContractError, Grant, Policy, canonical, issue, validate
 
 
-class ContractsTest(unittest.TestCase):
+class ContractsFixture:
+    """Shared setup. Deliberately not a TestCase.
+
+    Subclassing a TestCase to reuse its fixture re-runs every one of its tests
+    inside the subclass, which silently doubles the suite and inflates any count
+    taken from it.
+    """
+
     def setUp(self):
         self.key = b'phase-1-test-integrity-key-32bytes'
         self.grant = Grant('subject-demo', 'user-demo', 'worker-demo', 'basic',
@@ -26,6 +33,8 @@ class ContractsTest(unittest.TestCase):
         args.update(kw)
         return validate(wire, **args)
 
+
+class ContractsTest(ContractsFixture, unittest.TestCase):
     def test_round_trip_and_determinism(self):
         wire = self.issue()
         self.assertEqual(wire, self.issue())
@@ -202,7 +211,7 @@ class ContractsTest(unittest.TestCase):
             Grant('subject-demo', 'user-demo', 'worker-demo', 'admin', (), 'isolated', False)
 
 
-class UncoveredRefusalsTest(ContractsTest):
+class UncoveredRefusalsTest(ContractsFixture, unittest.TestCase):
     """One test per refusal that `scripts/refusals.py` found nothing covering.
 
     Each of these checks was doing its job — none was redundant. They simply
