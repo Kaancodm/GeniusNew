@@ -37,6 +37,11 @@ import hmac
 import re
 from typing import Any
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (Ed25519PrivateKey,
+                                                              Ed25519PublicKey)
+
 from .contracts import ContractError, Handoff, canonical
 
 CONSTITUTION_VERSION = "constitution-v1-draft"
@@ -60,6 +65,12 @@ _MAX_IDENTIFIER_BYTES = 160
 _MAX_OCCURRED_AT = 4102444800  # 2100-01-01T00:00:00Z
 _REASON_CODE = re.compile(r"\A[A-Z][A-Z0-9_]{0,63}\Z")
 _DIGEST = re.compile(r"\A[0-9a-f]{64}\Z")
+_SIGNING_LABEL = b"geniusnew/audit-head-signing/ed25519/v1"
+_EVENT_KEYS = frozenset({
+    "action", "actor", "constitution_version", "decision", "handoff_sha256",
+    "job_id", "occurred_at", "payload_sha256", "policy_version", "reason_code",
+    "subject", "trace_id",
+})
 
 
 def _fail(message: str) -> None:
@@ -138,13 +149,48 @@ class ComponentActor:
         return f"{self.component}:{self.instance_id}"
 
 
+class AuditVerifier:
+    """The public half of the audit authority: it checks heads and makes none.
+
+    Everything that only needs to *check* the log — `audit_chain.verify`, the
+    anchor, a forensic reader — is given this and nothing else. It holds a
+    32-byte Ed25519 public key and has no signing method; there is no private
+    key anywhere in it to reach for. With HMAC the same object had to hold the
+    key that signs, which is the gap this closes for audit heads.
+    """
+
+    def __init__(self, *, public_key: bytes) -> None:
+        if type(public_key) is not bytes or len(public_key) != 32:
+            _fail("public_key must be 32 bytes")
+        try:
+            self._key = Ed25519PublicKey.from_public_bytes(public_key)
+        except ValueError:
+            raise ContractError("public_key is not an Ed25519 public key") from None
+        self._public_key = public_key
+
+    @property
+    def public_key(self) -> bytes:
+        return self._public_key
+
+    def verifies(self, message: bytes, signature: bytes) -> bool:
+        try:
+            self._key.verify(signature, message)
+        except InvalidSignature:
+            return False
+        return True
+
+
 class AuditAuthority:
     """The Audit/Forensics role of `CONSTITUTION-V1-DRAFT.md` section 8.
 
-    Holds the audit key, which is deliberately **not** the handoff integrity
-    key. A component that can issue or validate handoffs therefore cannot mint
-    an audit actor or sign an audit head, which is what keeps the roles separate
-    in practice rather than only on paper.
+    Holds the audit signing key, which is deliberately **not** the handoff
+    integrity key. A component that can issue or validate handoffs therefore
+    cannot mint an audit actor or sign an audit head, which is what keeps the
+    roles separate in practice rather than only on paper.
+
+    The signing key is Ed25519, derived from the audit key under its own label,
+    so the root secret stays the only secret to manage. What the key signs can
+    be checked by an `AuditVerifier` that never holds it.
 
     Constructed once from server-side runtime configuration. A request handler
     that does not hold it cannot attribute a decision to any component.
@@ -153,11 +199,18 @@ class AuditAuthority:
     def __init__(self, *, audit_key: bytes) -> None:
         if type(audit_key) is not bytes or len(audit_key) < 32:
             _fail("audit_key must be at least 32 bytes")
-        self._audit_key = audit_key
+        seed = hmac.new(audit_key, _SIGNING_LABEL, hashlib.sha256).digest()
+        self._signing_key = Ed25519PrivateKey.from_private_bytes(seed)
+        self._verifier = AuditVerifier(public_key=self._signing_key.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw))
 
-    @property
-    def audit_key(self) -> bytes:
-        return self._audit_key
+    def verifier(self) -> AuditVerifier:
+        return self._verifier
+
+    def sign(self, message: bytes) -> bytes:
+        if type(message) is not bytes:
+            _fail("message must be bytes")
+        return self._signing_key.sign(message)
 
     def actor(self, component: str, instance_id: str) -> ComponentActor:
         return ComponentActor(component, instance_id, _ACTOR_PROVENANCE)
@@ -247,3 +300,24 @@ def event_from_handoff(handoff: Handoff, *, trace_id: str, actor: ComponentActor
         payload_sha256=handoff.payload_sha256,
         occurred_at=_integer(occurred_at, "occurred_at"),
     )
+
+
+def rehydrate_event(value: Any) -> AuditEvent:
+    """Rebuild an event read back as data, so a log can be checked, not written.
+
+    An actor normally proves that the audit authority stood behind an event.
+    An event read back from storage or a pipe has no such proof of its own; its
+    attribution is exactly as trustworthy as the signed head that covers the
+    record it sits in. That is why a verifier may rebuild one without holding
+    the signing key: nothing rebuilt here counts until `audit_chain.verify` has
+    checked the chain against a head signed by the authority.
+    """
+    if not isinstance(value, dict) or set(value) != _EVENT_KEYS:
+        _fail("record carries a malformed event")
+    actor = value["actor"]
+    if type(actor) is not str or actor.count(":") != 1:
+        _fail("record carries a malformed actor")
+    component, instance_id = actor.split(":")
+    fields = {name: value[name] for name in _EVENT_KEYS - {"actor"}}
+    return AuditEvent(actor=ComponentActor(component, instance_id, _ACTOR_PROVENANCE),
+                      **fields)

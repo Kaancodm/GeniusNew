@@ -115,8 +115,12 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    Nutzer zu betreiben und zu persistieren; beides ist Deployment bzw. Persistenz und
    damit außerhalb von v0.1. Ein Test hält die Grenze offen.
 
-   **Entscheidung zu HMAC:** bleibt für v0.1. Die Grenze steht in `SECURITY.md` und ist
-   per Test offen gehalten; asymmetrische Signaturen kommen nach v0.1.
+   **Entscheidung zu HMAC:** blieb für v0.1. Nach v0.1 sind **Audit-Köpfe Ed25519**:
+   `AuditAuthority` signiert, `AuditVerifier` hält nur den öffentlichen Schlüssel, und der
+   Anker-Prozess bekommt nur diesen. Damit ist die Schlüsselfrage dieses Schritts für die
+   Kette gelöst; der Anker kann einen gefälschten Kopf ablehnen, aber keinen erzeugen.
+   Handoff- und Ergebnissignaturen folgen in eigenen Schritten. Erste Abhängigkeit:
+   `cryptography`, in `requirements.txt` exakt gepinnt und mit Hashes.
 
 9. **Ergebnisvertrag** — das Ergebnis wird vom Worker signiert und bei der Annahme
    geprüft, symmetrisch zum eingehenden Handoff. Ohne diesen Schritt bleibt „das Ergebnis

@@ -39,10 +39,10 @@ execution; sharing one key would mean every component that issues or validates a
 handoff could also forge the record of its own decisions. `AuditAuthority` holds
 the audit key and is the only thing that can sign a head or mint an actor.
 
-HMAC remains symmetric: anything that can verify a head could also sign one. That
-is precisely why the anchor exists, and why a verification-only authority — a
-public key against a private signing key — is the next strengthening rather than
-something this module pretends to provide.
+Heads are signed with Ed25519. Checking one needs only an `AuditVerifier`, the
+public half, so the anchor, a verifier and a forensic reader can check heads
+without being able to make one. With the HMAC of head version 1, anything that
+could verify a head could also sign it; a head of that version is refused now.
 """
 
 from __future__ import annotations
@@ -56,12 +56,13 @@ import sys
 from threading import Lock
 from typing import Any, Iterable
 
-from .audit import AuditAuthority, AuditEvent
+from .audit import AuditAuthority, AuditEvent, AuditVerifier
 from .contracts import ContractError, canonical
 
-_HEAD_VERSION = "geniusnew-audit-head-v1"
+_HEAD_VERSION = "geniusnew-audit-head-v2"
 _EMPTY_HASH = "0" * 64
 _DIGEST = re.compile(r"\A[0-9a-f]{64}\Z")
+_SIGNATURE = re.compile(r"\A[0-9a-f]{128}\Z")
 
 # A record count is what bounds how much of an untrusted iterable is read, so it
 # needs a ceiling of its own. Without one, a head signed for 2**64 records passes
@@ -86,6 +87,15 @@ def _fail(message: str) -> None:
 def _authority(value: Any) -> AuditAuthority:
     if not isinstance(value, AuditAuthority):
         _fail("authority must be an AuditAuthority")
+    return value
+
+
+def _verifier(value: Any) -> AuditVerifier:
+    """What checking a head needs: the public half, or an authority's own."""
+    if isinstance(value, AuditAuthority):
+        return value.verifier()
+    if not isinstance(value, AuditVerifier):
+        _fail("authority must be an AuditAuthority or an AuditVerifier")
     return value
 
 
@@ -144,12 +154,12 @@ class AuditHead:
 
 def sign_head(*, count: int, head_hash: str, authority: AuditAuthority) -> AuditHead:
     """Commit to a chain length and ending hash, outside the chain itself."""
-    key = _authority(authority).audit_key
+    signer = _authority(authority)
     body = {"count": _count(count, "count"),
             "head_hash": _digest(head_hash, "head_hash"),
             "version": _HEAD_VERSION}
     return AuditHead(_HEAD_VERSION, body["count"], body["head_hash"],
-                     hmac.new(key, canonical(body), hashlib.sha256).hexdigest())
+                     signer.sign(canonical(body)).hex())
 
 
 def _bounded_chain(records: Any, limit: int) -> tuple[Any, ...]:
@@ -209,7 +219,7 @@ class AuditAnchor:
             return self._count, self._head_hash
 
     def commit(self, head: AuditHead, records: Iterable[AuditRecord], *,
-               authority: AuditAuthority) -> tuple[int, str]:
+               authority: AuditAuthority | AuditVerifier) -> tuple[int, str]:
         """Record a head. Extending the committed chain is allowed; nothing else is.
 
         `records` must be the chain the head was signed over. It is verified in
@@ -291,16 +301,16 @@ class AuditChain:
         return sign_head(count=count, head_hash=head_hash, authority=authority)
 
 
-def _verify_head(head: Any, *, authority: AuditAuthority) -> AuditHead:
-    key = _authority(authority).audit_key
+def _verify_head(head: Any, *, authority: AuditAuthority | AuditVerifier) -> AuditHead:
+    verifier = _verifier(authority)
     if not isinstance(head, AuditHead):
         _fail("head is invalid")
     if type(head.version) is not str or head.version != _HEAD_VERSION:
         _fail("head version is not recognised")
     _count(head.count, "head.count")
     _digest(head.head_hash, "head.head_hash")
-    expected = hmac.new(key, canonical(head.body()), hashlib.sha256).hexdigest()
-    if type(head.signature) is not str or not hmac.compare_digest(head.signature, expected):
+    if (type(head.signature) is not str or not _SIGNATURE.match(head.signature)
+            or not verifier.verifies(canonical(head.body()), bytes.fromhex(head.signature))):
         _fail("head signature does not verify")
     return head
 
@@ -325,7 +335,8 @@ def _checked_record(value: Any, position: int) -> AuditRecord:
 
 
 def verify(records: Iterable[AuditRecord], head: AuditHead, *,
-           authority: AuditAuthority, anchor: AuditAnchor | None = None) -> int:
+           authority: AuditAuthority | AuditVerifier,
+           anchor: AuditAnchor | None = None) -> int:
     """Check the chain against its signed head, and optionally against an anchor.
 
     Raises `ContractError` on the first problem found, so a caller that treats
