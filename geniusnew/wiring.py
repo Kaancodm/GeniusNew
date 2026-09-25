@@ -48,7 +48,6 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Any, Callable, Iterable, Mapping
 
-from .anchor_process import AnchorProcess
 from .approvals import ApprovalStore, create_scope
 from .audit import AuditAuthority, event_from_handoff
 from .audit_chain import AuditAnchor, AuditChain
@@ -174,25 +173,24 @@ class Service:
         self.anchor.commit(head, self.chain.records, authority=self.audit)
         return head
 
-    def close(self) -> None:
-        """End the anchor process, if this service started one."""
-        if isinstance(self.anchor, AnchorProcess):
-            self.anchor.close()
-
 
 def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
           workers: Iterable[Worker], clock: Callable[[], int] | None = None,
           gateway_id: str = "gateway-1", verifier_id: str = "verifier-1",
           job_ids: Callable[[], str] | None = None,
           runner_factory: Callable[..., WorkerRunner] | None = None,
-          anchor: AuditAnchor | None = None) -> Service:
+          anchor: AuditAnchor) -> Service:
     """Assemble one service. The only function that knows all the parts.
 
-    The default anchor is an `AnchorProcess`. Passing an in-process
+    The anchor is the one part this root does not make. It is started by its
+    own lifecycle path, `anchor_process.start`, and handed in as an
+    `AnchorClient`: a service that started its anchor could also end it, and
+    a service restart would then be an anchor reset. So there is no default,
+    and `Service` has no method that stops anything. Passing an in-process
     `AuditAnchor` is a test seam, the same way `runner_factory` is: it puts the
     anchor back inside the writer's memory.
     """
-    if anchor is not None and not isinstance(anchor, AuditAnchor):
+    if not isinstance(anchor, AuditAnchor):
         _fail("anchor must be an AuditAnchor")
     if not isinstance(policy, Policy):
         _fail("policy is invalid")
@@ -253,9 +251,6 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
         registry=PrincipalRegistry.from_api_keys(api_keys),
         submit=submit, complete=complete, job_ids=job_ids,
     )
-    # Started last, so a refusal above cannot leave a process behind.
-    if anchor is None:
-        anchor = AnchorProcess(verifier=audit.verifier())
     return Service(
         entry=entry, orchestrator=orchestrator, gateway=gateway,
         verifier=verifier, audit=audit, chain=chain, anchor=anchor,

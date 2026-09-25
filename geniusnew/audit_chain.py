@@ -205,7 +205,7 @@ class AuditAnchor:
 
     Keeping it in the same process as the chain defeats its purpose. It is
     modelled here so the boundary is explicit and testable; the wired service
-    runs it in a process of its own through `anchor_process.AnchorProcess`.
+    runs it in a process of its own, reached through `anchor_process.AnchorClient`.
     """
 
     def __init__(self) -> None:

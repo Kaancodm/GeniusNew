@@ -1,0 +1,4 @@
+# The scripts run under Linux and WSL. A checkout with CRLF line endings, which
+# Git for Windows produces by default, breaks the shebang line of demo.sh.
+*.sh text eol=lf
+*.py text eol=lf

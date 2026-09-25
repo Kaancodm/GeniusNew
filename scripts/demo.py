@@ -26,16 +26,32 @@ the payload, and fails if any of them reaches this output.
 ## The second half is the point
 
 Any pipeline can print success. The refusals are what the contracts are for, so
-the demo performs thirteen attacks and requires every one to be refused. Seven
+the demo performs sixteen attacks and requires every one to be refused. Seven
 were real holes at some point — found by review, by adversarial probing, and one
 by wiring two finished components together and discovering they did not fit.
+
+## Who starts the anchor
+
+The demo does, as an operator would, through `anchor_process.start` — not the
+service. The service is built with a client that holds the anchor's socket path
+and nothing else, and the last attack restarts the service to show that
+this no longer resets what the anchor committed.
+
+## Where it runs
+
+Linux, and so WSL. Worker isolation needs resource limits it can apply, which
+Windows lacks and macOS refuses, and the anchor a Unix socket; a host without
+them gets a plain `FAIL` naming the reason and where to run it instead, not a
+traceback — the refusal itself is the service's (fail closed).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
+import tempfile
 import threading
 import urllib.error
 import urllib.request
@@ -43,9 +59,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from geniusnew.anchor_process import start  # noqa: E402
+from geniusnew.audit import AuditAuthority  # noqa: E402
 from geniusnew.audit_chain import sign_head, verify  # noqa: E402
 from geniusnew.contracts import ContractError, Grant, Policy, issue, validate  # noqa: E402
 from geniusnew.http_entry import serve  # noqa: E402
+from geniusnew.isolation import _resource_supported  # noqa: E402
+from geniusnew.keys import derive_keys  # noqa: E402
 from geniusnew.results import WorkerAuthority, produce  # noqa: E402
 from geniusnew.verifier import ResultVerifier  # noqa: E402
 from geniusnew.wiring import build  # noqa: E402
@@ -66,17 +86,50 @@ def step(number: int, text: str) -> None:
     line(f"[{number}] {text}")
 
 
+def unsupported_host() -> str | None:
+    """Why this host cannot run the demo, or None if it can."""
+    if _resource_supported() and hasattr(socket, "AF_UNIX"):
+        return None
+    return ("this host cannot apply the resource limits worker isolation needs, "
+            "so the service refuses to run (fail closed). Run the demo on Linux; "
+            "on Windows inside WSL: wsl ./scripts/demo.sh")
+
+
 def main(root_secret: bytes, request_text: str, api_key: bytes = API_KEY) -> int:
+    reason = unsupported_host()
+    if reason is not None:
+        line(f"FAIL — {reason}")
+        return 1
+    with tempfile.TemporaryDirectory(prefix="geniusnew-anchor-") as directory:
+        # The operator's part: the anchor is started here, outside the service,
+        # and only this handle can stop it. It gets the public key; the
+        # service gets the path.
+        audit = AuditAuthority(audit_key=derive_keys(root_secret).audit_key)
+        anchor = start(verifier=audit.verifier(),
+                       socket_path=os.path.join(directory, "anchor.sock"))
+        try:
+            return demonstrate(root_secret, request_text, api_key, anchor)
+        finally:
+            anchor.stop()
+
+
+def service_for(root_secret: bytes, api_key: bytes, anchor, job_ids):
     grant = Grant("subject-demo", "user-demo", "worker-demo", "basic",
                   ("summarize",), "isolated", False)
     policy = Policy("policy-v1", "orchestrator-1", 60,
                     ("summarize",), ("isolated",), (grant,))
-    ids = iter(f"job-demo-{index:04d}" for index in range(100))
+    return build(root_secret=root_secret, policy=policy,
+                 api_keys={api_key: "subject-demo"},
+                 workers=(DeterministicSummarizer(),),
+                 clock=lambda: NOW, job_ids=job_ids,
+                 anchor=anchor.client())
 
-    service = build(root_secret=root_secret, policy=policy,
-                    api_keys={api_key: "subject-demo"},
-                    workers=(DeterministicSummarizer(),),
-                    clock=lambda: NOW, job_ids=lambda: next(ids))
+
+def demonstrate(root_secret: bytes, request_text: str, api_key: bytes, anchor) -> int:
+    ids = iter(f"job-demo-{index:04d}" for index in range(100))
+    service = service_for(root_secret, api_key, anchor, lambda: next(ids))
+    policy = service.policy
+    grant = policy.grants[0]
 
     step(0, "Three role keys derived from one root secret")
     line("    handoff integrity · worker result · audit — no two equal by construction")
@@ -116,13 +169,16 @@ def main(root_secret: bytes, request_text: str, api_key: bytes = API_KEY) -> int
         verified = verify(records, head, authority=service.audit,
                           anchor=service.anchor)
         step(5, "Head signed with the audit key and committed to the anchor")
-        line(f"    anchor runs in its own process: {service.anchor.pid != os.getpid()}")
+        line(f"    anchor runs in its own process: {anchor.pid != os.getpid()}")
+        line("    started outside the service; the service holds only its socket path")
         line(f"    count {head.count}   head {head.head_hash}")
         line(f"    VERIFIED against the anchored head: {verified} entries")
 
         step(6, "Now the tampering — every one of these must be refused")
         refused = 0
-        attacks = build_attacks(service, url, api_key, request_text, records, head)
+        attacks = build_attacks(service, url, api_key, request_text, records, head,
+                                restart=lambda: service_for(root_secret, api_key,
+                                                            anchor, lambda: "job-x"))
         for name, attempt in attacks:
             try:
                 attempt()
@@ -137,7 +193,6 @@ def main(root_secret: bytes, request_text: str, api_key: bytes = API_KEY) -> int
         server.shutdown()
         server.server_close()
         thread.join(5)
-        service.close()
 
     job_ok = body["status"] == "SUCCEEDED" and body["reason_code"] == "WORK_COMPLETED"
     chain_ok = verified == len(records) == 4
@@ -176,8 +231,8 @@ def post(url: str, api_key: bytes, payload: dict) -> tuple[int, dict]:
         raise Refused(f"HTTP {error.code} {json.loads(error.read())['error']}") from None
 
 
-def build_attacks(service, url, api_key, request_text, records, head):
-    """Thirteen attempts, each refused by a different check.
+def build_attacks(service, url, api_key, request_text, records, head, restart):
+    """Sixteen attempts, each refused by a different check.
 
     Four go in over HTTP, because the entrance is the only part a stranger can
     reach. The rest hold the objects an insider would have.
@@ -222,6 +277,17 @@ def build_attacks(service, url, api_key, request_text, records, head):
                                 head_hash=records[-2].record_hash,
                                 authority=service.audit),
                       authority=service.audit, anchor=service.anchor)
+
+    def restart_service():
+        # A restart builds everything anew, the chain included, and connects
+        # to the anchor the operator is still running. With an anchor the
+        # service started itself, the restart started a fresh anchor too.
+        restarted = restart()
+        return verify(records[:-1],
+                      sign_head(count=len(records) - 1,
+                                head_hash=records[-2].record_hash,
+                                authority=restarted.audit),
+                      authority=restarted.audit, anchor=restarted.anchor)
 
     fresh = ResultVerifier(verifier_id="verifier-2",
                            handoff_verifier=service.handoff_verifier,
@@ -282,6 +348,9 @@ def build_attacks(service, url, api_key, request_text, records, head):
         # AuditAnchor this is accepted; the anchor process keeps its state
         # where these assignments cannot reach.
         ("Rewind the anchor from inside the writer", rewind_anchor),
+        # What a writer can do to an anchor it started: restart, and with it
+        # the anchor. The anchor's lifecycle is not the service's any more.
+        ("Restart the service and re-sign the chain", restart_service),
     ]
 
 
@@ -290,6 +359,9 @@ def post_raw(url: str, api_key: bytes, payload: dict) -> tuple[int, dict]:
 
 
 if __name__ == "__main__":
+    # A console that cannot encode an arrow must not turn a result into a
+    # traceback. Hosts with UTF-8 output are unaffected.
+    sys.stdout.reconfigure(errors="backslashreplace")
     raise SystemExit(main(
         root_secret=b"demo-root-secret-not-for-real-use!!!",
         request_text="Zero trust means never trust, always verify.",

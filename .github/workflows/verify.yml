@@ -21,6 +21,81 @@ jobs:
         run: python -m pip install --require-hashes -r requirements.txt
       - name: Run contract tests
         run: python -m unittest discover -s tests -v
+      # What a stranger has: the committed files, nothing cached, no
+      # environment, and the README's steps — a venv, the pinned install, the
+      # demo. The last line must be the one README.md tells them to expect,
+      # word for word.
+      - name: Quickstart from a fresh copy with an empty environment
+        shell: bash
+        run: |
+          fresh="$RUNNER_TEMP/fresh"
+          mkdir "$fresh"
+          git archive HEAD | tar -x -C "$fresh"
+          (cd "$fresh" && env -i PATH="$PATH" sh -ec '
+            python3 -m venv .venv && . .venv/bin/activate
+            python3 -m pip install -q --require-hashes -r requirements.txt
+            ./scripts/demo.sh') | tee "$RUNNER_TEMP/demo.out"
+          grep -qxF -- "$(tail -n 1 "$RUNNER_TEMP/demo.out")" README.md
+
+  # The runner is the macOS machine. The full suite ran here once: every
+  # isolated worker ended ISOLATION_VIOLATED, so the isolation now refuses
+  # macOS when it is built. This job holds what is true here instead.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # Held open: the reason, not just the outcome. If macOS starts accepting
+      # the limit, this fails and the refusal can be revisited.
+      - name: macOS refuses the address-space limit the isolation sets
+        run: |
+          python - <<'EOF'
+          import resource, sys
+          try:
+              resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024,) * 2)
+          except (ValueError, OSError) as refusal:
+              print(f"RLIMIT_AS refused: {refusal!r}")
+              sys.exit(0)
+          sys.exit("RLIMIT_AS was accepted here; revisit the macOS refusal")
+          EOF
+      - name: Install the pinned dependency
+        run: python -m pip install --require-hashes -r requirements.txt
+      - name: The audit anchor runs here
+        run: python -m unittest discover -s tests -p test_anchor_process.py -v
+      - name: The demo fails closed and points to Linux
+        run: |
+          status=0
+          python scripts/demo.py > demo.out 2>&1 || status=$?
+          cat demo.out
+          test "$status" -eq 1
+          test "$(wc -l < demo.out)" -eq 1
+          grep -q "^FAIL .*fail closed.*Linux" demo.out
+
+  # No POSIX resource limits, so the worker isolation refuses to run. This
+  # holds that refusal in place: exit code 1, a FAIL line that says why and
+  # points to WSL — never a PASS, and never a traceback.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install the pinned dependency
+        run: python -m pip install --require-hashes -r requirements.txt
+      - name: The demo fails closed and names WSL
+        shell: bash
+        env:
+          PYTHONUTF8: '1'
+        run: |
+          status=0
+          python scripts/demo.py > demo.out 2>&1 || status=$?
+          cat demo.out
+          test "$status" -eq 1
+          test "$(wc -l < demo.out)" -eq 1
+          grep -q "^FAIL .*fail closed.*WSL" demo.out
 
   guarded:
     runs-on: ubuntu-latest
@@ -58,16 +133,19 @@ jobs:
         run: python scripts/refusals.py "$MODULE"
 
   # The check name branch protection may require. A skipped job counts as
-  # passing there, so this runs always and demands success from both.
+  # passing there, so this runs always and demands success from every job.
   contracts:
-    needs: [tests, refusals]
+    needs: [tests, macos, windows, refusals]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Tests and every refusal check passed
+      - name: Tests, platforms and every refusal check passed
         env:
           TESTS: ${{ needs.tests.result }}
+          MACOS: ${{ needs.macos.result }}
+          WINDOWS: ${{ needs.windows.result }}
           REFUSALS: ${{ needs.refusals.result }}
         run: |
-          echo "tests=$TESTS refusals=$REFUSALS"
-          test "$TESTS" = success && test "$REFUSALS" = success
+          echo "tests=$TESTS macos=$MACOS windows=$WINDOWS refusals=$REFUSALS"
+          test "$TESTS" = success && test "$MACOS" = success \
+            && test "$WINDOWS" = success && test "$REFUSALS" = success

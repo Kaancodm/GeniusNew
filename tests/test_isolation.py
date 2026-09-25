@@ -113,6 +113,17 @@ class SlowWorker(Worker):
         return {"text": "late"}
 
 
+class MemoryHogWorker(Worker):
+    tool = "summarize"
+
+    def run(self, payload):
+        # bytes() asks calloc for zeroed pages and touches none of them, so
+        # without a memory limit this returns at once. bytearray() writes every
+        # page, runs into the CPU limit instead, and passes for the wrong reason.
+        hog = bytes(768 * 1024 * 1024)
+        return {"text": str(len(hog))}
+
+
 class LimitsWorker(Worker):
     tool = "summarize"
 
@@ -207,6 +218,15 @@ class IsolationLimitsTest(unittest.TestCase):
             IsolatedWorkerRunner(
                 DeterministicSummarizer(), authority=authority, limits="not-limits"
             )
+
+    def test_only_linux_counts_as_able_to_apply_the_limits(self):
+        """macOS has `resource` but refuses the address-space limit; see the docstring."""
+        for platform in ("darwin", "win32", "freebsd14"):
+            with self.subTest(platform=platform):
+                with patch.object(isolation_module.sys, "platform", platform):
+                    self.assertFalse(isolation_module._resource_supported())
+        with patch.object(isolation_module.sys, "platform", "linux"):
+            self.assertTrue(isolation_module._resource_supported())
 
     def test_runner_fails_closed_without_resource_limits(self):
         authority = WorkerAuthority(result_key=b"a-separate-result-key-of-32bytes!")
@@ -547,6 +567,21 @@ class ProcessIsolationTest(unittest.TestCase):
         limits = IsolationLimits(wall_seconds=0.1)
         taken = self.taken(
             self.runner(SlowWorker(), limits).execute(self.permit_for(self.handoff), now=110)
+        )
+        self.assertFalse(taken.succeeded)
+        self.assertEqual(taken.reason_code, "RESOURCE_EXHAUSTED")
+        self.assertIsNone(taken.output)
+
+    def test_memory_past_the_limit_is_refused_not_granted(self):
+        """Enforced, not only set. A limit the child can read is not yet a limit.
+
+        The test below shows the value arrives. This one asks the kernel: on a
+        host that accepts the setting and ignores it, the allocation succeeds
+        and this test is what says so.
+        """
+        limits = IsolationLimits(memory_bytes=256 * 1024 * 1024)
+        taken = self.taken(
+            self.runner(MemoryHogWorker(), limits).execute(self.permit_for(self.handoff), now=110)
         )
         self.assertFalse(taken.succeeded)
         self.assertEqual(taken.reason_code, "RESOURCE_EXHAUSTED")
