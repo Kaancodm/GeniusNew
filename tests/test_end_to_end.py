@@ -101,7 +101,7 @@ class Fixture:
         self.addCleanup(self.server.server_close)
 
     def anchor_client(self):
-        return AnchorClient(self.anchor.socket_path) if self.anchor else AuditAnchor()
+        return self.anchor.client() if self.anchor else AuditAnchor()
 
     def started_anchor(self):
         """Started as an operator would, outside the service it will anchor."""

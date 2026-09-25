@@ -59,7 +59,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from geniusnew.anchor_process import AnchorClient, start  # noqa: E402
+from geniusnew.anchor_process import start  # noqa: E402
 from geniusnew.audit import AuditAuthority  # noqa: E402
 from geniusnew.audit_chain import sign_head, verify  # noqa: E402
 from geniusnew.contracts import ContractError, Grant, Policy, issue, validate  # noqa: E402
@@ -122,7 +122,7 @@ def service_for(root_secret: bytes, api_key: bytes, anchor, job_ids):
                  api_keys={api_key: "subject-demo"},
                  workers=(DeterministicSummarizer(),),
                  clock=lambda: NOW, job_ids=job_ids,
-                 anchor=AnchorClient(anchor.socket_path))
+                 anchor=anchor.client())
 
 
 def demonstrate(root_secret: bytes, request_text: str, api_key: bytes, anchor) -> int:

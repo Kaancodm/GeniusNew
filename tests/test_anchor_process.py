@@ -6,8 +6,12 @@ import json
 import os
 import socket
 import tempfile
+import threading
 import unittest
 import unittest.mock
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from geniusnew import anchor_process
 from geniusnew.anchor_process import AnchorClient, start
@@ -18,6 +22,17 @@ from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, can
 AUDIT_KEY = b'a-separate-audit-key-of-32-bytes!'
 OTHER_KEY = b'yet-another-audit-key-of-32bytes!'
 EMPTY = '0' * 64
+NONCE = 'ab' * 32
+# Stands in for the key a real anchor process makes when it starts.
+ANCHOR_KEY = Ed25519PrivateKey.from_private_bytes(b'anchor-key-for-tests-32-bytes!!!')
+ANCHOR_PUBLIC = ANCHOR_KEY.public_key().public_bytes(serialization.Encoding.Raw,
+                                                     serialization.PublicFormat.Raw)
+
+
+def signed(reply, nonce=NONCE, key=ANCHOR_KEY):
+    """A reply as the anchor sends it: with the nonce, signed over both."""
+    reply = {**reply, 'nonce': nonce}
+    return {**reply, 'signature': key.sign(canonical(reply)).hex()}
 
 
 class ChainFixture:
@@ -68,7 +83,7 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
     def setUp(self):
         super().setUp()
         self.handle = started_anchor(self)
-        self.anchor = AnchorClient(self.handle.socket_path)
+        self.anchor = self.handle.client()
 
     def test_a_commit_is_held_by_the_anchor_and_verified_against(self):
         committed = self.anchor.commit(self.head, self.records, authority=self.authority)
@@ -147,14 +162,45 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
         self.anchor.commit(self.head, self.records, authority=self.authority)
         del self.anchor
         gc.collect()
-        restarted = AnchorClient(self.handle.socket_path)
+        restarted = self.handle.client()
         self.assertEqual(restarted.committed, (5, self.head.head_hash))
         shorter, resigned = self.truncated()
         with self.assertRaisesRegex(ContractError, 'anchor committed 5 records; this chain has 4'):
             verify(shorter, resigned, authority=self.authority, anchor=restarted)
 
+    def test_a_replaced_socket_is_refused_not_believed(self):
+        """Codex review on #32: the writer moves the path to a stand-in of its own.
+
+        Unlinking the path leaves the real anchor running and unreachable; the
+        stand-in answers "nothing committed" in exactly the right shape. Before
+        answers were signed, the shortened, re-signed chain then verified.
+        """
+        self.anchor.commit(self.head, self.records, authority=self.authority)
+        os.unlink(self.handle.socket_path)
+        stand_in = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(stand_in.close)
+        stand_in.bind(self.handle.socket_path)
+        stand_in.listen(4)
+
+        def answer_nothing_committed():
+            for _ in range(2):
+                connection, _ = stand_in.accept()
+                with connection, connection.makefile('rb') as requests:
+                    nonce = json.loads(anchor_process._read_frame(requests))['nonce']
+                    connection.sendall(frame({'count': 0, 'head_hash': EMPTY, 'kind': 'ok',
+                                              'nonce': nonce, 'signature': '00' * 64}))
+
+        server = threading.Thread(target=answer_nothing_committed, daemon=True)
+        server.start()
+        shorter, resigned = self.truncated()
+        with self.assertRaisesRegex(ContractError, 'not signed by this anchor'):
+            self.anchor.committed
+        with self.assertRaisesRegex(ContractError, 'not signed by this anchor'):
+            verify(shorter, resigned, authority=self.authority, anchor=self.anchor)
+        server.join(5)
+
     def test_the_client_holds_nothing_that_could_stop_the_anchor(self):
-        self.assertEqual(set(vars(self.anchor)), {'_socket_path'})
+        self.assertEqual(set(vars(self.anchor)), {'_anchor_key', '_socket_path'})
         for name in ('stop', 'close', 'pid', '_process'):
             with self.subTest(name=name):
                 self.assertFalse(hasattr(self.anchor, name))
@@ -189,7 +235,11 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
         restarted = started_anchor(self, directory=os.path.dirname(self.handle.socket_path))
         shorter, resigned = self.truncated()
         self.assertEqual(verify(shorter, resigned, authority=self.authority,
-                                anchor=AnchorClient(restarted.socket_path)), 4)
+                                anchor=restarted.client()), 4)
+        # A client still holding the first anchor's key notices the restart:
+        # the new process signs with a key of its own.
+        with self.assertRaisesRegex(ContractError, 'not signed by this anchor'):
+            self.anchor.committed
 
 
 class InProcessAnchorTest(ChainFixture, unittest.TestCase):
@@ -212,7 +262,7 @@ class InProcessAnchorTest(ChainFixture, unittest.TestCase):
         for path in ('anchor.sock', None, b'/tmp/anchor.sock'):
             with self.subTest(path=path):
                 with self.assertRaisesRegex(ContractError, 'absolute path'):
-                    AnchorClient(path)
+                    AnchorClient(path, anchor_key=ANCHOR_PUBLIC)
         with self.assertRaisesRegex(ContractError, 'absolute path'):
             start(verifier=self.authority.verifier(), socket_path='anchor.sock')
 
@@ -322,16 +372,64 @@ class ChildProtocolTest(ChainFixture, unittest.TestCase):
         with self.assertRaisesRegex(ContractError, 'too large'):
             anchor_process._frame({'kind': 'x' * 64}, 16)
 
+    def state(self, reply, nonce=NONCE):
+        return anchor_process._state(reply, nonce=nonce,
+                                     key=anchor_process._anchor_key(ANCHOR_PUBLIC))
+
     def test_the_writer_reads_only_the_two_reply_shapes(self):
-        self.assertEqual(anchor_process._state({'count': 1, 'head_hash': EMPTY, 'kind': 'ok'}),
+        self.assertEqual(self.state(signed({'count': 1, 'head_hash': EMPTY, 'kind': 'ok'})),
                          (1, EMPTY))
         with self.assertRaisesRegex(ContractError, 'anchor already committed'):
-            anchor_process._state({'kind': 'refused', 'message': 'anchor already committed'})
+            self.state(signed({'kind': 'refused', 'message': 'anchor already committed'}))
         for reply in ({'kind': 'refused', 'message': 7}, {'kind': 'ok'},
                       {'kind': 'ok', 'count': 1, 'head_hash': EMPTY, 'extra': 1}):
             with self.subTest(reply=sorted(reply)):
                 with self.assertRaisesRegex(ContractError, 'invalid reply'):
-                    anchor_process._state(reply)
+                    self.state(signed(reply))
+
+    def test_a_reply_counts_only_if_this_anchor_signed_it(self):
+        good = {'count': 1, 'head_hash': EMPTY, 'kind': 'ok'}
+        other = Ed25519PrivateKey.from_private_bytes(b'another-anchor-key-of-32-bytes!!')
+        forged = [
+            {**good, 'nonce': NONCE},
+            {**signed(good), 'signature': 7},
+            {**signed(good), 'signature': 'zz'},
+            {**signed(good), 'count': 0},
+            signed(good, key=other),
+        ]
+        for reply in forged:
+            with self.subTest(reply=sorted(reply)):
+                with self.assertRaisesRegex(ContractError, 'not signed by this anchor'):
+                    self.state(reply)
+
+    def test_a_signed_reply_to_another_request_is_not_an_answer(self):
+        """Replaying something the anchor once said is not the anchor saying it now."""
+        for nonce in ('cd' * 32, None):
+            with self.subTest(nonce=nonce):
+                with self.assertRaisesRegex(ContractError, 'answers another request'):
+                    self.state(signed({'count': 0, 'head_hash': EMPTY, 'kind': 'ok'},
+                                      nonce=nonce))
+
+    def test_the_client_needs_the_anchors_key(self):
+        for key in (None, 'ab' * 32, ANCHOR_PUBLIC[:31]):
+            with self.subTest(key=type(key).__name__):
+                with self.assertRaisesRegex(ContractError, 'anchor_key must be 32 bytes'):
+                    anchor_process.AnchorClient('/tmp/anchor.sock', anchor_key=key)
+
+    def test_ready_must_name_the_anchors_key(self):
+        cases = [
+            ('did not report ready', {'kind': 'ok', 'anchor_key': ANCHOR_PUBLIC.hex()}),
+            ('did not report ready', {'kind': 'ready'}),
+            ('must be hex', {'kind': 'ready', 'anchor_key': 7}),
+            ('32 bytes', {'kind': 'ready', 'anchor_key': 'zz'}),
+        ]
+        for message, ready in cases:
+            with self.subTest(message=message, ready=sorted(ready)):
+                with self.assertRaisesRegex(ContractError, message):
+                    anchor_process._ready(ready)
+        self.assertEqual(anchor_process._ready({'kind': 'ready',
+                                                'anchor_key': ANCHOR_PUBLIC.hex()}),
+                         ANCHOR_PUBLIC)
 
     def serve(self, data):
         """One connection, served as the anchor serves it. Returns what came back."""
@@ -339,18 +437,30 @@ class ChildProtocolTest(ChainFixture, unittest.TestCase):
         with server, client:
             client.sendall(data)
             client.shutdown(socket.SHUT_WR)
-            anchor_process._serve_connection(server, self.anchor, self.authority.verifier())
+            anchor_process._serve_connection(server, self.anchor, self.authority.verifier(),
+                                             ANCHOR_KEY)
             server.close()
             return client.makefile('rb').read()
 
-    def test_each_connection_gets_one_answer(self):
+    def test_each_connection_gets_one_signed_answer(self):
         self.assertEqual([answer['kind'] for answer in replies(
-            self.serve(frame(self.commit_message())))], ['ok'])
-        self.assertEqual(replies(self.serve(frame({'kind': 'reset'})))[0]['kind'], 'refused')
-        answers = replies(self.serve(frame({'kind': 'committed'})
-                                     + frame({'kind': 'committed'})))
-        self.assertEqual(answers, [{'count': 5, 'head_hash': self.head.head_hash,
-                                    'kind': 'ok'}])
+            self.serve(frame({**self.commit_message(), 'nonce': NONCE})))], ['ok'])
+        self.assertEqual(replies(self.serve(frame({'kind': 'reset', 'nonce': NONCE})))[0]['kind'],
+                         'refused')
+        answers = replies(self.serve(frame({'kind': 'committed', 'nonce': NONCE})
+                                     + frame({'kind': 'committed', 'nonce': NONCE})))
+        self.assertEqual(answers, [signed({'count': 5, 'head_hash': self.head.head_hash,
+                                           'kind': 'ok'})])
+        self.assertEqual(self.state(answers[0]), (5, self.head.head_hash))
+
+    def test_a_request_without_a_usable_nonce_is_refused(self):
+        for nonce in (None, 7, 'AB' * 32, 'ab' * 31, 'zz' * 32):
+            with self.subTest(nonce=nonce):
+                request = {'kind': 'committed'} if nonce is None else {'kind': 'committed',
+                                                                      'nonce': nonce}
+                answer = replies(self.serve(frame(request)))[0]
+                self.assertEqual((answer['kind'], answer['nonce']), ('refused', None))
+                self.assertIn('nonce', answer['message'])
 
     def test_a_torn_or_oversized_frame_gets_no_answer(self):
         oversized = (anchor_process._MAX_REQUEST_BYTES + 1).to_bytes(4, 'big')

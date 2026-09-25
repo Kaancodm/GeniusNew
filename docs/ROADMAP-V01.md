@@ -120,7 +120,13 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    `Service` hat keine Methode mehr, die etwas beendet. Statt zweier Pipes hält der
    Schreiber jetzt einen Unix-Socket-Pfad; fragen kann er darüber weiterhin genau die
    zwei Dinge von oben. Den öffentlichen Prüfschlüssel bekommt der Anker von dem, der
-   ihn startet, nicht vom Schreiber. Ein Neustart des Dienstes setzt den
+   ihn startet, nicht vom Schreiber. Ein Pfad ist aber nur ein Name: Das erste Review
+   dieser Änderung zeigte, dass der Schreiber ihn auf einen eigenen Listener umbiegen
+   konnte, der „nichts festgelegt“ antwortet — und die gekürzte, neu signierte Kette
+   wurde angenommen. Seitdem erzeugt der Anker beim Start ein eigenes Schlüsselpaar,
+   dessen öffentliche Hälfte nur der Starter über seine Pipe bekommt, und signiert jede
+   Antwort über eine Nonce der Anfrage. Ein Ersatz kann nicht signieren, eine alte
+   Antwort passt zu keiner neuen Nonce. Ein Neustart des Dienstes setzt den
    Anker nicht mehr zurück; die Demo belegt das mit einem eigenen Angriff, und
    `tests/test_end_to_end.py` hält es fest.
 
