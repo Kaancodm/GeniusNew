@@ -1,11 +1,11 @@
 import unittest
 
-from geniusnew.contracts import ContractError, Grant, Policy, issue
+from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, issue
 
 
 class IssueWireLimitTest(unittest.TestCase):
     def test_issue_rejects_wire_that_gateway_would_reject_for_size(self):
-        key = b'wire-limit-test-integrity-key-32bytes'
+        key = HandoffSigner(integrity_key=b'wire-limit-test-integrity-key-32bytes')
         grant = Grant(
             'subject-demo', 'user-demo', 'worker-demo', 'basic',
             ('summarize',), 'isolated', False,
@@ -21,7 +21,7 @@ class IssueWireLimitTest(unittest.TestCase):
                 subject='subject-demo',
                 job_id='job-demo',
                 policy=policy,
-                integrity_key=key,
+                signer=key,
                 now=100,
             )
 

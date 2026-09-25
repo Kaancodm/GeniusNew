@@ -51,7 +51,8 @@ from typing import Any, Callable, Iterable, Mapping
 from .approvals import ApprovalStore, create_scope
 from .audit import AuditAuthority, event_from_handoff
 from .audit_chain import AuditAnchor, AuditChain
-from .contracts import ContractError, Policy, validate, validate_pending
+from .contracts import (ContractError, HandoffSigner, HandoffVerifier, Policy, validate,
+                        validate_pending)
 from .gateway import ADMISSION_REASON_CODE, Gateway, GatewayRejected
 from .http_entry import HttpEntry, PrincipalRegistry
 from .isolation import IsolatedWorkerRunner
@@ -140,6 +141,7 @@ class Service:
     anchor: AuditAnchor
     policy: Policy
     keys: ServiceKeys
+    handoff_verifier: HandoffVerifier
     approvals: ApprovalStore
     pending: PendingJobs
     clock: Callable[[], int]
@@ -155,7 +157,7 @@ class Service:
         waiting = self.pending.peek(job_id)
         now = self.clock()
         scope = create_scope(waiting.wire, subject=waiting.subject, job_id=job_id,
-                             policy=self.policy, integrity_key=self.keys.integrity_key,
+                             policy=self.policy, verifier=self.handoff_verifier,
                              now=now)
         grant = self.approvals.grant(scope, now=now, ttl_seconds=ttl_seconds)
         _append_event(
@@ -197,8 +199,12 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
         _fail("clock must be callable")
     now = clock or (lambda: int(time.time()))
 
+    # The orchestrator alone signs handoffs; everything that checks one gets
+    # the public half and could not issue a handoff if it tried.
+    handoff_signer = HandoffSigner(integrity_key=keys.integrity_key)
+    handoff_verifier = handoff_signer.verifier()
     approvals = ApprovalStore()
-    gateway = Gateway(gateway_id=gateway_id, integrity_key=keys.integrity_key,
+    gateway = Gateway(gateway_id=gateway_id, handoff_verifier=handoff_verifier,
                       approval_store=approvals)
     worker_authority = WorkerAuthority(result_key=keys.result_key,
                                        integrity_key=keys.integrity_key)
@@ -228,10 +234,10 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
         endpoints.append(WorkerEndpoint(agents.pop(), runner))
 
     orchestrator = Orchestrator(orchestrator_id=policy.orchestrator_id,
-                                integrity_key=keys.integrity_key,
+                                signer=handoff_signer,
                                 gateway=gateway, workers=endpoints)
     verifier = ResultVerifier(verifier_id=verifier_id,
-                              integrity_key=keys.integrity_key,
+                              handoff_verifier=handoff_verifier,
                               result_key=keys.result_key)
     audit = AuditAuthority(audit_key=keys.audit_key)
     chain = AuditChain()
@@ -239,8 +245,8 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
 
     submit, complete = _submitter(
         orchestrator=orchestrator, gateway=gateway, verifier=verifier,
-        audit=audit, chain=chain, policy=policy, keys=keys, now=now,
-        pending=pending)
+        audit=audit, chain=chain, policy=policy,
+        handoff_verifier=handoff_verifier, now=now, pending=pending)
     entry = HttpEntry(
         registry=PrincipalRegistry.from_api_keys(api_keys),
         submit=submit, complete=complete, job_ids=job_ids,
@@ -248,15 +254,16 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
     return Service(
         entry=entry, orchestrator=orchestrator, gateway=gateway,
         verifier=verifier, audit=audit, chain=chain, anchor=anchor,
-        policy=policy, keys=keys, approvals=approvals, pending=pending,
+        policy=policy, keys=keys, handoff_verifier=handoff_verifier,
+        approvals=approvals, pending=pending,
         clock=now,
     )
 
 
 def _submitter(*, orchestrator: Orchestrator, gateway: Gateway,
                verifier: ResultVerifier, audit: AuditAuthority,
-               chain: AuditChain, policy: Policy, keys: ServiceKeys,
-               now: Callable[[], int], pending: PendingJobs):
+               chain: AuditChain, policy: Policy,
+               handoff_verifier: HandoffVerifier, now: Callable[[], int], pending: PendingJobs):
     """Turn one authenticated request into one audited, verified job.
 
     Evidence is appended as each security-relevant decision happens. That is
@@ -301,7 +308,7 @@ def _submitter(*, orchestrator: Orchestrator, gateway: Gateway,
             payload, subject=subject, job_id=job_id, policy=policy,
             now=admitted_at)
         handoff = _revalidate(
-            policy=policy, keys=keys, wire=admission.wire,
+            policy=policy, handoff_verifier=handoff_verifier, wire=admission.wire,
             subject=subject, job_id=job_id, now=admitted_at)
         trace_id = _trace_id(handoff)
         _append_event(
@@ -420,7 +427,7 @@ def _append_event(*, chain: AuditChain, audit: AuditAuthority, handoff,
         occurred_at=occurred_at))
 
 
-def _revalidate(*, policy: Policy, keys: ServiceKeys, wire: bytes, subject: str,
+def _revalidate(*, policy: Policy, handoff_verifier: HandoffVerifier, wire: bytes, subject: str,
                 job_id: str, now: int):
     """Parse the wire again for the audit role, pending approval included.
 
@@ -433,4 +440,4 @@ def _revalidate(*, policy: Policy, keys: ServiceKeys, wire: bytes, subject: str,
     grant = policy.grant_for(subject)
     revalidate = validate_pending if grant.requires_approval else validate
     return revalidate(wire, subject=subject, job_id=job_id, policy=policy,
-                      integrity_key=keys.integrity_key, now=now)
+                      verifier=handoff_verifier, now=now)

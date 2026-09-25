@@ -5,7 +5,7 @@ from unittest import mock
 from geniusnew import orchestrator as orchestrator_module
 from geniusnew.approvals import ApprovalStore, create_scope
 from geniusnew.audit import AuditAuthority, event_from_handoff
-from geniusnew.contracts import ContractError, Grant, Policy, validate
+from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, validate
 from geniusnew.gateway import Gateway
 from geniusnew.orchestrator import (ACTIONS, DENIALS, Admission, Decision, Denied,
                                     Dispatch, DispatchAttempted, Orchestrator,
@@ -55,11 +55,11 @@ class Fixture:
     """Shared setup. A mixin, not a TestCase: subclassing one re-runs its suite."""
 
     def setUp(self):
-        self.key = b'phase-2-test-integrity-key-32bytes'
+        self.key = HandoffSigner(integrity_key=b'phase-2-test-integrity-key-32bytes')
         tokens = itertools.count()
         self.store = ApprovalStore(
             token_source=lambda: b'demo-approval-token-for-tests-%012d' % next(tokens))
-        self.gateway = Gateway(gateway_id='gateway-test', integrity_key=self.key,
+        self.gateway = Gateway(gateway_id='gateway-test', handoff_verifier=self.key.verifier(),
                                approval_store=self.store)
         self.result_authority = WorkerAuthority(
             result_key=b'a-separate-result-key-of-32bytes!')
@@ -77,10 +77,10 @@ class Fixture:
                       ('summarize', 'translate'), ('isolated',), (grant,))
 
     def orchestrator_for(self, *, workers=DEFAULT, gateway=DEFAULT,
-                         orchestrator_id='orchestrator-demo', integrity_key=DEFAULT):
+                         orchestrator_id='orchestrator-demo', signer=DEFAULT):
         return Orchestrator(
             orchestrator_id=orchestrator_id,
-            integrity_key=self.key if integrity_key is DEFAULT else integrity_key,
+            signer=self.key if signer is DEFAULT else signer,
             gateway=self.gateway if gateway is DEFAULT else gateway,
             workers=(self.endpoint,) if workers is DEFAULT else workers)
 
@@ -125,7 +125,7 @@ class Fixture:
         handoff = validate(dispatched.handoff_wire, subject='subject-demo',
                            job_id=job_id,
                            policy=self.policy if policy is DEFAULT else policy,
-                           integrity_key=self.key, now=now)
+                           verifier=self.key, now=now)
         return accept(dispatched.result_wire, handoff=handoff,
                       authority=self.result_authority, now=now)
 
@@ -137,7 +137,7 @@ class OrchestratorTest(Fixture, unittest.TestCase):
 
     def test_admission_derives_identity_and_capabilities_only_from_policy(self):
         handoff = validate(self.wire(), subject='subject-demo', job_id='job-demo',
-                           policy=self.policy, integrity_key=self.key, now=101)
+                           policy=self.policy, verifier=self.key, now=101)
         self.assertEqual(handoff.user_id, 'user-demo')
         self.assertEqual(handoff.worker_agent_id, 'worker-demo')
         self.assertEqual(handoff.tools, ('summarize',))
@@ -198,12 +198,12 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         rotation from being a decision two roles have to make together.
         """
         stranger = Gateway(gateway_id='gateway-other',
-                           integrity_key=b'a-different-integrity-key-32bytes',
+                           handoff_verifier=HandoffSigner(integrity_key=b'a-different-integrity-key-32bytes').verifier(),
                            approval_store=ApprovalStore())
         orchestrator = self.orchestrator_for(gateway=stranger)
         wire = self.wire(orchestrator=orchestrator)
         validate(wire, subject='subject-demo', job_id='job-demo',
-                 policy=self.policy, integrity_key=self.key, now=101)
+                 policy=self.policy, verifier=self.key, now=101)
         # And the gateway with the other key refuses it, as an independent
         # verifier must — that refusal stays the gateway's word, not a Denied.
         with self.assertRaises(ContractError) as caught:
@@ -283,7 +283,7 @@ class OrchestratorTest(Fixture, unittest.TestCase):
                                  requires_approval=True)
         wire = self.wire(policy=policy)
         scope = create_scope(wire, subject='subject-demo', job_id='job-demo',
-                             policy=policy, integrity_key=self.key, now=101)
+                             policy=policy, verifier=self.key, now=101)
         granted = self.store.grant(scope, now=101, ttl_seconds=30)
         decision = self.denied(self.dispatch, wire, policy=policy, now=102,
                                approval_token=granted.token)
@@ -328,7 +328,7 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         self.assertEqual(self.orchestrator._jobs, set())
 
         scope = create_scope(wire, subject='subject-demo', job_id='job-demo',
-                             policy=policy, integrity_key=self.key, now=101)
+                             policy=policy, verifier=self.key, now=101)
         granted = self.store.grant(scope, now=101, ttl_seconds=30)
         # The same id goes through once the approval is there. The result is not
         # accepted here: an approval-bound wire stays PENDING_APPROVAL, which
@@ -350,7 +350,7 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         policy = self.policy_for(requires_approval=True)
         wire = self.wire(policy=policy)
         scope = create_scope(wire, subject='subject-demo', job_id='job-demo',
-                             policy=policy, integrity_key=self.key, now=101)
+                             policy=policy, verifier=self.key, now=101)
         granted = self.store.grant(scope, now=101, ttl_seconds=30)
         dispatched = self.dispatch(wire, policy=policy, now=102,
                                    approval_token=granted.token)
@@ -362,7 +362,7 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         policy = self.policy_for(requires_approval=True)
         wire = self.wire(policy=policy)
         scope = create_scope(wire, subject='subject-demo', job_id='job-demo',
-                             policy=policy, integrity_key=self.key, now=101)
+                             policy=policy, verifier=self.key, now=101)
         granted = self.store.grant(scope, now=101, ttl_seconds=30)
         self.dispatch(wire, policy=policy, now=102, approval_token=granted.token)
         with self.assertRaises(ContractError):
@@ -404,7 +404,7 @@ class OrchestratorTest(Fixture, unittest.TestCase):
 
         runner = self.counting()
         orchestrator = self.orchestrator_for(
-            gateway=Forged(gateway_id='gateway-test', integrity_key=self.key,
+            gateway=Forged(gateway_id='gateway-test', handoff_verifier=self.key.verifier(),
                            approval_store=ApprovalStore()),
             workers=(WorkerEndpoint('worker-demo', runner),))
         with self.assertRaisesRegex(ContractError, 'dispatch permit'):
@@ -428,7 +428,7 @@ class OrchestratorTest(Fixture, unittest.TestCase):
 
         runner = self.counting()
         orchestrator = self.orchestrator_for(
-            gateway=Substituting(gateway_id='gateway-test', integrity_key=self.key,
+            gateway=Substituting(gateway_id='gateway-test', handoff_verifier=self.key.verifier(),
                                  approval_store=ApprovalStore()),
             workers=(WorkerEndpoint('worker-demo', runner),))
         with self.assertRaisesRegex(ContractError, 'different handoff'):
@@ -481,7 +481,7 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         dispatched = self.submit()
         handoff = validate(dispatched.handoff_wire, subject='subject-demo',
                            job_id='job-demo', policy=self.policy,
-                           integrity_key=self.key, now=101)
+                           verifier=self.key, now=101)
         authority = AuditAuthority(audit_key=b'an-audit-key-of-thirty-two-bytes')
         actor = authority.actor('orchestrator', 'orchestrator-demo')
         for decision in dispatched.decisions:
@@ -543,7 +543,7 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         policy = self.policy_for(requires_approval=True)
         first = self.wire(policy=policy, job_id='job-taken')
         scope = create_scope(first, subject='subject-demo', job_id='job-taken',
-                             policy=policy, integrity_key=self.key, now=101)
+                             policy=policy, verifier=self.key, now=101)
         self.dispatch(first, policy=policy, job_id='job-taken', now=102,
                       approval_token=self.store.grant(scope, now=101,
                                                       ttl_seconds=30).token)
@@ -561,7 +561,7 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         policy = self.policy_for(requires_approval=True)
         wire = self.wire(policy=policy)
         scope = create_scope(wire, subject='subject-demo', job_id='job-demo',
-                             policy=policy, integrity_key=self.key, now=101)
+                             policy=policy, verifier=self.key, now=101)
         granted = self.store.grant(scope, now=101, ttl_seconds=30)
         with mock.patch.object(orchestrator_module, '_MAX_JOBS', 0):
             decision = self.denied(self.dispatch, wire, policy=policy, now=102,
@@ -704,10 +704,13 @@ class OrchestratorTest(Fixture, unittest.TestCase):
             with self.subTest(orchestrator_id=orchestrator_id):
                 with self.assertRaises(ContractError):
                     self.orchestrator_for(orchestrator_id=orchestrator_id)
-        for integrity_key in (b'too-short', None, 'x' * 32, 42):
-            with self.subTest(integrity_key=repr(integrity_key)[:20]):
-                with self.assertRaisesRegex(ContractError, 'integrity_key'):
-                    self.orchestrator_for(integrity_key=integrity_key)
+        # Raw key bytes and the public half are both refused: only the signer
+        # can issue, and the orchestrator is the one place that must be able to.
+        for signer in (b'phase-2-test-integrity-key-32bytes', None, 'x' * 32, 42,
+                       self.key.verifier()):
+            with self.subTest(signer=repr(signer)[:20]):
+                with self.assertRaisesRegex(ContractError, 'signer'):
+                    self.orchestrator_for(signer=signer)
         for gateway in (None, 'gateway', 42, {}):
             with self.subTest(gateway=type(gateway)):
                 with self.assertRaisesRegex(ContractError, 'gateway'):

@@ -55,10 +55,10 @@ python3 -m pip install --require-hashes -r requirements.txt
 ```
 
 Der Befehl schickt einen Job über HTTP durch alle Schichten und greift ihn danach
-vierzehnmal an. Die letzte Zeile muss lauten:
+fünfzehnmal an. Die letzte Zeile muss lauten:
 
 ```
-PASS — job succeeded over HTTP, chain verified against the anchored head, 14/14 attacks refused.
+PASS — job succeeded over HTTP, chain verified against the anchored head, 15/15 attacks refused.
 ```
 
 und der Exit-Code ist `0`. Alles andere ist ein Fehlschlag: das Skript sagt dann, welche
@@ -72,7 +72,7 @@ Was die Ausgabe zeigt, in der Reihenfolge der nummerierten Blöcke:
 | `[2]`–`[3]` | Job geht über einen echten Socket hinein; die Identität kommt aus dem API-Key, nicht aus dem Request |
 | `[4]` | Audit-Chain mit vier Einträgen von drei Instanzen: `orchestrator`, `gateway`, `monitor` |
 | `[5]` | Kette verifiziert gegen einen signierten Kopf, festgelegt bei einem Anker in eigenem Prozess, den nicht der Dienst startet |
-| `[6]` | Vierzehn Manipulationsversuche, jeder muss mit `[ok]` abgelehnt werden |
+| `[6]` | Fünfzehn Manipulationsversuche, jeder muss mit `[ok]` abgelehnt werden |
 
 Die Ausgabe enthält bewusst nur Digests und Kennungen — keine Payload, kein Ergebnistext,
 kein Schlüsselmaterial. `tests/test_demo.py` prüft das mit Kanarienwerten.
@@ -80,9 +80,9 @@ kein Schlüsselmaterial. `tests/test_demo.py` prüft das mit Kanarienwerten.
 **Was `PASS` nicht bedeutet:** keine Produktionsfreigabe und kein Sicherheitsnachweis
 für einen echten Betrieb. Außer Worker und Audit-Anker sind die Instanzen getrennte
 Objekte in einem Prozess; die Worker-Isolation ist eine Prozessgrenze, keine microVM;
-der Anker läuft unter demselben Betriebssystem-Nutzer und hält nur Speicher; Handoff-
-und Ergebnissignaturen sind noch HMAC und damit symmetrisch (Audit-Köpfe sind Ed25519).
-Die bekannten Grenzen stehen einzeln in `SECURITY.md`.
+der Anker läuft unter demselben Betriebssystem-Nutzer und hält nur Speicher;
+Ergebnissignaturen sind noch HMAC und damit symmetrisch (Handoffs und Audit-Köpfe sind
+Ed25519). Die bekannten Grenzen stehen einzeln in `SECURITY.md`.
 
 ### Windows: über WSL
 
@@ -127,10 +127,11 @@ Roadmap zu v0.1 (`docs/ROADMAP-V01.md`): Schritte 1–19 umgesetzt. Der Audit-An
 Schritt 8 läuft in eigenem Prozess und wird über einen eigenen Pfad gestartet und
 gestoppt (`anchor_process.start`); der Dienst hält nur seinen Socket-Pfad. Ob und wie der
 Anker persistiert, ist eine eigene, offene Entscheidung
-(`docs/ADR-002-anchor-persistence.md`). Schritt 20 (Gegenlesen dieses Quickstarts durch
-jemanden ohne Projektkenntnis) ist offen: das Protokoll dafür steht in
-`docs/QUICKSTART-REVIEW.md`, die Person ist noch nicht benannt. Schritt 21 (Tag `v0.1`)
-steht aus.
+(`docs/ADR-002-anchor-persistence.md`). Schritt 20 (technischer Quickstart-Review) ist
+nach den vom Projektverantwortlichen angepassten Abnahmekriterien abgeschlossen; der
+geprüfte Commit, die Umgebung, das Ergebnis und der erneute Durchlauf nach der Änderung
+auf fünfzehn Angriffe stehen in [docs/QUICKSTART-REVIEW.md](docs/QUICKSTART-REVIEW.md).
+Schritt 21 (Tag `v0.1`) steht aus.
 
 Die Phasennummern in `docs/MIGRATION-MATRIX.md` zählen die Migration aus dem
 Altprojekt und sind nicht dieselben wie die Bauphasen hier.
@@ -145,9 +146,9 @@ Siehe:
 - `docs/MIGRATION-MATRIX.md` — kanonisches Import-Gate
 - `docs/IMPORT-MANIFEST.md` — historische erste Inventur
 - `SECURITY.md`
-- `docs/HANDOFF-V1.md`
+- `docs/HANDOFF-V2.md`
 - `docs/APPROVAL-V1.md`
-- `schemas/handoff-v1.schema.json`
+- `schemas/handoff-v2.schema.json`
 - `geniusnew/contracts.py`
 - `geniusnew/approvals.py`
 - `geniusnew/workers.py`

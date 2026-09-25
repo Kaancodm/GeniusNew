@@ -26,7 +26,7 @@ the payload, and fails if any of them reaches this output.
 ## The second half is the point
 
 Any pipeline can print success. The refusals are what the contracts are for, so
-the demo performs fourteen attacks and requires every one to be refused. Seven
+the demo performs fifteen attacks and requires every one to be refused. Seven
 were real holes at some point — found by review, by adversarial probing, and one
 by wiring two finished components together and discovering they did not fit.
 
@@ -34,7 +34,7 @@ by wiring two finished components together and discovering they did not fit.
 
 The demo does, as an operator would, through `anchor_process.start` — not the
 service. The service is built with a client that holds the anchor's socket path
-and nothing else, and the fourteenth attack restarts the service to show that
+and nothing else, and the last attack restarts the service to show that
 this no longer resets what the anchor committed.
 
 ## Where it runs
@@ -62,7 +62,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from geniusnew.anchor_process import AnchorClient, start  # noqa: E402
 from geniusnew.audit import AuditAuthority  # noqa: E402
 from geniusnew.audit_chain import sign_head, verify  # noqa: E402
-from geniusnew.contracts import ContractError, Grant, Policy, validate  # noqa: E402
+from geniusnew.contracts import ContractError, Grant, Policy, issue, validate  # noqa: E402
 from geniusnew.http_entry import serve  # noqa: E402
 from geniusnew.isolation import _resource_supported  # noqa: E402
 from geniusnew.keys import derive_keys  # noqa: E402
@@ -232,7 +232,7 @@ def post(url: str, api_key: bytes, payload: dict) -> tuple[int, dict]:
 
 
 def build_attacks(service, url, api_key, request_text, records, head, restart):
-    """Fourteen attempts, each refused by a different check.
+    """Fifteen attempts, each refused by a different check.
 
     Four go in over HTTP, because the entrance is the only part a stranger can
     reach. The rest hold the objects an insider would have.
@@ -248,7 +248,7 @@ def build_attacks(service, url, api_key, request_text, records, head, restart):
     spare = dispatch("job-demo-spare")
     handoff = validate(spare.handoff_wire, subject="subject-demo",
                        job_id="job-demo-spare", policy=policy,
-                       integrity_key=keys.integrity_key, now=NOW)
+                       verifier=service.handoff_verifier, now=NOW)
     authority = WorkerAuthority(result_key=keys.result_key,
                                 integrity_key=keys.integrity_key)
 
@@ -290,7 +290,7 @@ def build_attacks(service, url, api_key, request_text, records, head, restart):
                       authority=restarted.audit, anchor=restarted.anchor)
 
     fresh = ResultVerifier(verifier_id="verifier-2",
-                           integrity_key=keys.integrity_key,
+                           handoff_verifier=service.handoff_verifier,
                            result_key=keys.result_key)
 
     return [
@@ -316,6 +316,9 @@ def build_attacks(service, url, api_key, request_text, records, head, restart):
         ("Sign results with the handoff key",
          lambda: WorkerAuthority(result_key=keys.integrity_key,
                                  integrity_key=keys.integrity_key)),
+        ("Mint a handoff with the gateway's key",
+         lambda: issue({"text": "x"}, subject="subject-demo", job_id="job-demo-minted",
+                       policy=policy, signer=service.gateway._handoff_verifier, now=NOW)),
         ("Swap the payload after validation", swap_payload),
         ("Dispatch without a gateway permit",
          lambda: service.orchestrator._workers["worker-demo"].dispatch(

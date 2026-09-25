@@ -3,7 +3,7 @@ from dataclasses import replace
 
 from geniusnew.audit import (CONSTITUTION_VERSION, AuditAuthority, AuditEvent,
                              ComponentActor, event_from_handoff)
-from geniusnew.contracts import ContractError, Grant, Policy, issue, validate
+from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, issue, validate
 
 # A canary, deliberately shaped so no scanner mistakes it for a credential:
 # readable, zero entropy, and self-describing. Its only job is to be
@@ -15,7 +15,7 @@ class EventFixture:
     """Shared setup, deliberately not a TestCase — see test_audit_chain.py."""
 
     def setUp(self):
-        self.key = b'phase-2-test-integrity-key-32bytes'
+        self.key = HandoffSigner(integrity_key=b'phase-2-test-integrity-key-32bytes')
         self.authority = AuditAuthority(audit_key=b'a-separate-audit-key-of-32-bytes!')
         self.actor = self.authority.actor('gateway', 'gw-1')
         grant = Grant('subject-demo', 'user-demo', 'worker-demo', 'basic',
@@ -26,9 +26,9 @@ class EventFixture:
 
     def issue_handoff(self, request, job_id='job-demo'):
         wire = issue(request, subject='subject-demo', job_id=job_id,
-                     policy=self.policy, integrity_key=self.key, now=100)
+                     policy=self.policy, signer=self.key, now=100)
         return validate(wire, subject='subject-demo', job_id=job_id,
-                        policy=self.policy, integrity_key=self.key, now=101)
+                        policy=self.policy, verifier=self.key, now=101)
 
     def event(self, job_id_override=None, **kw):
         args = dict(trace_id='trace-demo', actor=self.actor, action='HANDOFF_ADMITTED',

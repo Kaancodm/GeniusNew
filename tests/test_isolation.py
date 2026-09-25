@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from geniusnew.approvals import ApprovalStore
-from geniusnew.contracts import ContractError, Grant, Policy, canonical, issue, validate
+from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, canonical, issue, validate
 from geniusnew.gateway import Gateway
 import geniusnew.isolation as isolation_module
 import geniusnew.isolation_child as isolation_child_module
@@ -356,7 +356,7 @@ class IsolationChildContractTest(unittest.TestCase):
 @unittest.skipUnless(isolation_module._resource_supported(), "POSIX resource limits required")
 class ProcessIsolationTest(unittest.TestCase):
     def setUp(self):
-        self.integrity_key = b"phase-2-test-integrity-key-32bytes"
+        self.signer = HandoffSigner(integrity_key=b"phase-2-test-integrity-key-32bytes")
         self.authority = WorkerAuthority(result_key=b"a-separate-result-key-of-32bytes!")
         grant = Grant(
             "subject-demo",
@@ -380,7 +380,7 @@ class ProcessIsolationTest(unittest.TestCase):
             subject="subject-demo",
             job_id="job-demo",
             policy=self.policy,
-            integrity_key=self.integrity_key,
+            signer=self.signer,
             now=100,
         )
         self.handoff = validate(
@@ -388,12 +388,12 @@ class ProcessIsolationTest(unittest.TestCase):
             subject="subject-demo",
             job_id="job-demo",
             policy=self.policy,
-            integrity_key=self.integrity_key,
+            verifier=self.signer,
             now=101,
         )
         self.gateway = Gateway(
             gateway_id="gateway-test",
-            integrity_key=self.integrity_key,
+            handoff_verifier=self.signer.verifier(),
             approval_store=ApprovalStore(),
         )
 

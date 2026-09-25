@@ -3,7 +3,7 @@ from dataclasses import replace
 import unittest
 
 from geniusnew.approvals import ApprovalStore, create_scope
-from geniusnew.contracts import ContractError, Grant, Policy, issue, validate
+from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, issue, validate
 from geniusnew.gateway import DispatchPermit, Gateway, GatewayRejected, handoff_from_permit
 from geniusnew.results import WorkerAuthority, accept
 from geniusnew.workers import DeterministicSummarizer, WorkerRunner
@@ -11,11 +11,11 @@ from geniusnew.workers import DeterministicSummarizer, WorkerRunner
 
 class GatewayTest(unittest.TestCase):
     def setUp(self):
-        self.key = b"phase-2-test-integrity-key-32bytes"
+        self.key = HandoffSigner(integrity_key=b"phase-2-test-integrity-key-32bytes")
         self.store = ApprovalStore(token_source=lambda: b"a" * 32)
         self.gateway = Gateway(
             gateway_id="gateway-test",
-            integrity_key=self.key,
+            handoff_verifier=self.key.verifier(),
             approval_store=self.store,
         )
         self.policy = self.policy_for(requires_approval=False)
@@ -37,7 +37,7 @@ class GatewayTest(unittest.TestCase):
             subject="subject-demo",
             job_id=job_id,
             policy=policy,
-            integrity_key=self.key,
+            signer=self.key,
             now=now,
         )
 
@@ -66,7 +66,7 @@ class GatewayTest(unittest.TestCase):
             subject="subject-demo",
             job_id="job-demo",
             policy=self.policy,
-            integrity_key=self.key,
+            verifier=self.key,
             now=101,
         )
         runner = WorkerRunner(
@@ -128,7 +128,7 @@ class GatewayTest(unittest.TestCase):
             subject="subject-demo",
             job_id="job-demo",
             policy=self.policy,
-            integrity_key=self.key,
+            verifier=self.key,
             now=101,
         )
         with self.assertRaises(ContractError):
@@ -168,7 +168,7 @@ class GatewayTest(unittest.TestCase):
             subject="subject-demo",
             job_id="job-demo",
             policy=policy,
-            integrity_key=self.key,
+            verifier=self.key,
             now=101,
         )
         grant = self.store.grant(scope, now=101, ttl_seconds=30)
@@ -229,7 +229,7 @@ class GatewayTest(unittest.TestCase):
         second = self.issue(policy, job_id="job-second")
         scope = create_scope(
             first, subject="subject-demo", job_id="job-first", policy=policy,
-            integrity_key=self.key, now=101,
+            verifier=self.key, now=101,
         )
         token = self.store.grant(scope, now=101, ttl_seconds=30).token
         with self.assertRaisesRegex(ContractError, "scope"):
@@ -254,7 +254,7 @@ class GatewayTest(unittest.TestCase):
             subject="subject-demo",
             job_id="job-other",
             policy=self.policy,
-            integrity_key=self.key,
+            verifier=self.key,
             now=101,
         )
         with self.assertRaisesRegex(ContractError, "does not bind"):
@@ -272,7 +272,7 @@ class GatewayTest(unittest.TestCase):
             subject="subject-demo",
             job_id="job-demo",
             policy=self.policy,
-            integrity_key=self.key,
+            verifier=self.key,
             now=101,
         )
         with self.assertRaisesRegex(ContractError, "minted"):
@@ -337,21 +337,24 @@ class GatewayTest(unittest.TestCase):
             with self.subTest(gateway_id=gateway_id), self.assertRaises(ContractError):
                 Gateway(
                     gateway_id=gateway_id,
-                    integrity_key=self.key,
+                    handoff_verifier=self.key.verifier(),
                     approval_store=self.store,
                 )
-        for key in (None, b"", b"short", "not-bytes"):
-            with self.subTest(key=key), self.assertRaises(ContractError):
+        # The signer itself is refused too: a gateway holding it could mint
+        # the handoffs it is there to check.
+        for key in (None, b"", b"short", "not-bytes", b"x" * 32, self.key):
+            with self.subTest(key=repr(key)[:20]), self.assertRaisesRegex(
+                    ContractError, "handoff_verifier"):
                 Gateway(
                     gateway_id="gateway-test",
-                    integrity_key=key,
+                    handoff_verifier=key,
                     approval_store=self.store,
                 )
         for store in (None, {}, "store"):
             with self.subTest(store=store), self.assertRaises(ContractError):
                 Gateway(
                     gateway_id="gateway-test",
-                    integrity_key=self.key,
+                    handoff_verifier=self.key.verifier(),
                     approval_store=store,
                 )
 

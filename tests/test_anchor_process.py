@@ -13,7 +13,7 @@ from geniusnew import anchor_process
 from geniusnew.anchor_process import AnchorClient, start
 from geniusnew.audit import AuditAuthority, event_from_handoff
 from geniusnew.audit_chain import AuditAnchor, AuditChain, AuditHead, sign_head, verify
-from geniusnew.contracts import ContractError, Grant, Policy, canonical, issue, validate
+from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, canonical, issue, validate
 
 AUDIT_KEY = b'a-separate-audit-key-of-32-bytes!'
 OTHER_KEY = b'yet-another-audit-key-of-32bytes!'
@@ -25,7 +25,7 @@ class ChainFixture:
 
     def setUp(self):
         self.authority = AuditAuthority(audit_key=AUDIT_KEY)
-        key = b'phase-2-test-integrity-key-32bytes'
+        key = HandoffSigner(integrity_key=b'phase-2-test-integrity-key-32bytes')
         grant = Grant('subject-demo', 'user-demo', 'worker-demo', 'basic',
                       ('summarize',), 'isolated', False)
         policy = Policy('policy-v1', 'orchestrator-demo', 60,
@@ -34,9 +34,9 @@ class ChainFixture:
         self.chain = AuditChain()
         for step in range(5):
             wire = issue({'text': f'job {step}'}, subject='subject-demo',
-                         job_id=f'job-{step}', policy=policy, integrity_key=key, now=100)
+                         job_id=f'job-{step}', policy=policy, signer=key, now=100)
             handoff = validate(wire, subject='subject-demo', job_id=f'job-{step}',
-                               policy=policy, integrity_key=key, now=101)
+                               policy=policy, verifier=key, now=101)
             self.chain.append(event_from_handoff(
                 handoff, trace_id=f'trace-{step}', actor=actor, action='HANDOFF_ADMITTED',
                 decision='ALLOWED', reason_code='POLICY_SATISFIED', occurred_at=101 + step))

@@ -1,6 +1,6 @@
 import unittest
 
-from geniusnew.contracts import ContractError, Grant, Policy, issue, validate
+from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, issue, validate
 from geniusnew.results import (Result, WorkerAuthority, accept, handoff_digest,
                                produce)
 
@@ -24,7 +24,7 @@ class ResultFixture:
     """
 
     def setUp(self):
-        self.key = b'phase-2-test-integrity-key-32bytes'
+        self.key = HandoffSigner(integrity_key=b'phase-2-test-integrity-key-32bytes')
         self.authority = WorkerAuthority(result_key=b'a-separate-result-key-of-32bytes!')
         self.other = WorkerAuthority(result_key=b'yet-another-result-key-32-bytes!!')
         grant = Grant('subject-demo', 'user-demo', 'worker-demo', 'basic',
@@ -35,9 +35,9 @@ class ResultFixture:
 
     def issue_handoff(self, job_id='job-demo', now=100):
         wire = issue({'text': 'please summarise'}, subject='subject-demo', job_id=job_id,
-                     policy=self.policy, integrity_key=self.key, now=now)
+                     policy=self.policy, signer=self.key, now=now)
         return validate(wire, subject='subject-demo', job_id=job_id,
-                        policy=self.policy, integrity_key=self.key, now=now + 1)
+                        policy=self.policy, verifier=self.key, now=now + 1)
 
     def wire(self, output=DEFAULT, *, handoff=DEFAULT, status='SUCCEEDED',
              reason_code='WORK_COMPLETED', authority=DEFAULT, now=110):
@@ -91,7 +91,7 @@ class ResultContractTest(ResultFixture, unittest.TestCase):
 
     def test_the_handoff_key_cannot_be_used_as_a_result_key(self):
         """Signing results with the handoff key would let a worker authorize itself."""
-        padded = self.key + b'-padding-to-thirty-two-bytes'
+        padded = b'phase-2-test-integrity-key-32bytes-padding-to-thirty-two-bytes'
         with self.assertRaises(ContractError):
             WorkerAuthority(result_key=padded, integrity_key=padded)
         WorkerAuthority(result_key=padded, integrity_key=b'a-different-key-of-32-bytes-long!')
@@ -216,7 +216,7 @@ class ResultContractTest(ResultFixture, unittest.TestCase):
             handoff_ok = result_ok = True
             try:
                 issue(shape, subject='subject-demo', job_id='j', policy=self.policy,
-                      integrity_key=self.key, now=100)
+                      signer=self.key, now=100)
             except ContractError:
                 handoff_ok = False
             try:
@@ -470,9 +470,9 @@ class UncoveredRefusalsTest(ResultFixture, unittest.TestCase):
         contract rather than a feature, but fixing it belongs to that module.
         """
         wire = issue({'text': 'before the epoch'}, subject='subject-demo',
-                     job_id='job-demo', policy=self.policy, integrity_key=self.key, now=-5)
+                     job_id='job-demo', policy=self.policy, signer=self.key, now=-5)
         handoff = validate(wire, subject='subject-demo', job_id='job-demo',
-                           policy=self.policy, integrity_key=self.key, now=-4)
+                           policy=self.policy, verifier=self.key, now=-4)
         self.assertLess(handoff.issued_at, 0)
         for now in (-4, -1, 0):
             self.assertTrue(handoff.issued_at <= now < handoff.expires_at,

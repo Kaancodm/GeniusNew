@@ -5,7 +5,7 @@ from unittest import mock
 from geniusnew import verifier as verifier_module
 from geniusnew.approvals import ApprovalStore, create_scope
 from geniusnew.audit import AuditAuthority, event_from_handoff
-from geniusnew.contracts import (ContractError, Grant, Policy, issue, validate,
+from geniusnew.contracts import (ContractError, Grant, HandoffSigner, Policy, issue, validate,
                                  validate_pending)
 from geniusnew.gateway import Gateway
 from geniusnew.keys import derive_keys
@@ -23,13 +23,14 @@ class Fixture:
 
     def setUp(self):
         self.keys = derive_keys(ROOT_SECRET)
+        self.signer = HandoffSigner(integrity_key=self.keys.integrity_key)
         self.worker_authority = WorkerAuthority(result_key=self.keys.result_key,
                                                 integrity_key=self.keys.integrity_key)
         self.policy = self.policy_for()
         self.verifier = self.verifier_for()
         self.wire = self.issue()
         self.handoff = validate(self.wire, subject='subject-demo', job_id='job-demo',
-                                policy=self.policy, integrity_key=self.keys.integrity_key,
+                                policy=self.policy, verifier=self.signer,
                                 now=101)
 
     def policy_for(self, *, requires_approval=False, tools=('summarize',),
@@ -39,18 +40,19 @@ class Fixture:
         return Policy('policy-v1', 'orchestrator-demo', 60,
                       ('summarize', 'translate'), ('isolated',), (grant,))
 
-    def verifier_for(self, *, verifier_id='verifier-1', integrity_key=DEFAULT,
+    def verifier_for(self, *, verifier_id='verifier-1', handoff_verifier=DEFAULT,
                      result_key=DEFAULT):
         return ResultVerifier(
             verifier_id=verifier_id,
-            integrity_key=self.keys.integrity_key if integrity_key is DEFAULT else integrity_key,
+            handoff_verifier=(self.signer.verifier() if handoff_verifier is DEFAULT
+                              else handoff_verifier),
             result_key=self.keys.result_key if result_key is DEFAULT else result_key)
 
     def issue(self, *, policy=DEFAULT, job_id='job-demo', text='the quick brown fox',
               now=100):
         return issue({'text': text}, subject='subject-demo', job_id=job_id,
                      policy=self.policy if policy is DEFAULT else policy,
-                     integrity_key=self.keys.integrity_key, now=now)
+                     signer=self.signer, now=now)
 
     def result_for(self, handoff=DEFAULT, *, output=DEFAULT, status='SUCCEEDED',
                    reason_code='WORK_COMPLETED', now=110, authority=DEFAULT):
@@ -127,7 +129,7 @@ class ResultVerifierTest(Fixture, unittest.TestCase):
     def test_the_whole_path_from_gateway_to_acceptance(self):
         """Gateway admits, worker runs, this instance takes it — no shared objects."""
         gateway = Gateway(gateway_id='gateway-1',
-                          integrity_key=self.keys.integrity_key,
+                          handoff_verifier=self.signer.verifier(),
                           approval_store=ApprovalStore())
         permit = gateway.admit(self.wire, subject='subject-demo', job_id='job-demo',
                                policy=self.policy, now=101)
@@ -179,7 +181,7 @@ class ResultVerifierTest(Fixture, unittest.TestCase):
     def test_a_result_that_does_not_answer_this_handoff_is_refused(self):
         other_wire = self.issue(job_id='job-other')
         other = validate(other_wire, subject='subject-demo', job_id='job-other',
-                         policy=self.policy, integrity_key=self.keys.integrity_key,
+                         policy=self.policy, verifier=self.signer,
                          now=101)
         rejection = self.rejected(self.result_for(other))
         self.assertEqual(rejection.reason_code, 'RESULT_NOT_VALID')
@@ -242,7 +244,7 @@ class ResultVerifierTest(Fixture, unittest.TestCase):
         self.take()
         other_wire = self.issue(job_id='job-other')
         other = validate(other_wire, subject='subject-demo', job_id='job-other',
-                         policy=self.policy, integrity_key=self.keys.integrity_key,
+                         policy=self.policy, verifier=self.signer,
                          now=101)
         self.assertTrue(self.take(self.result_for(other), handoff_wire=other_wire,
                                   job_id='job-other').succeeded)
@@ -311,7 +313,7 @@ class ResultVerifierTest(Fixture, unittest.TestCase):
         policy = self.policy_for(requires_approval=True)
         wire = self.issue(policy=policy)
         handoff = validate_pending(wire, subject='subject-demo', job_id='job-demo',
-                                   policy=policy, integrity_key=self.keys.integrity_key,
+                                   policy=policy, verifier=self.signer,
                                    now=101)
         result_wire = self.result_for(handoff)
 
@@ -361,10 +363,10 @@ class ResultVerifierTest(Fixture, unittest.TestCase):
     def receipt_for(self, wire, policy):
         store = ApprovalStore()
         gateway = Gateway(gateway_id='gateway-1',
-                          integrity_key=self.keys.integrity_key,
+                          handoff_verifier=self.signer.verifier(),
                           approval_store=store)
         scope = create_scope(wire, subject='subject-demo', job_id='job-demo',
-                             policy=policy, integrity_key=self.keys.integrity_key,
+                             policy=policy, verifier=self.signer,
                              now=101)
         granted = store.grant(scope, now=101, ttl_seconds=30)
         permit = gateway.admit(wire, subject='subject-demo', job_id='job-demo',
@@ -436,19 +438,28 @@ class ResultVerifierTest(Fixture, unittest.TestCase):
         for verifier_id in ('', 'UPPER', 'with space', None, 42, 'x' * 64):
             with self.subTest(verifier_id=verifier_id), self.assertRaises(ContractError):
                 self.verifier_for(verifier_id=verifier_id)
-        for integrity_key in (b'too-short', None, 'x' * 32, 42):
-            with self.subTest(key=repr(integrity_key)[:20]):
-                with self.assertRaisesRegex(ContractError, 'integrity_key'):
-                    self.verifier_for(integrity_key=integrity_key)
+        # The signer is refused as well: the verifier checks handoffs and must
+        # not be able to issue one.
+        for handoff_verifier in (b'x' * 32, None, 'x' * 32, 42, self.signer):
+            with self.subTest(key=repr(handoff_verifier)[:20]):
+                with self.assertRaisesRegex(ContractError, 'handoff_verifier'):
+                    self.verifier_for(handoff_verifier=handoff_verifier)
         for result_key in (b'too-short', None, 'x' * 32, 42):
             with self.subTest(key=repr(result_key)[:20]):
                 with self.assertRaisesRegex(ContractError, 'result_key'):
                     self.verifier_for(result_key=result_key)
 
-    def test_the_result_key_must_not_be_the_handoff_key(self):
-        """A verifier holding the minting key could authorize the work it takes."""
-        with self.assertRaisesRegex(ContractError, 'must not be the handoff integrity key'):
-            self.verifier_for(result_key=self.keys.integrity_key)
+    def test_the_verifier_holds_nothing_that_can_issue_a_handoff(self):
+        """A verifier holding the minting key could authorize the work it takes.
+
+        With HMAC it had to hold that key to check a handoff at all. Now it holds
+        the public half, and neither the signer nor the key it derives from is
+        anywhere in it.
+        """
+        held = list(vars(self.verifier).values()) + list(vars(self.verifier._authority).values())
+        self.assertFalse(any(isinstance(value, HandoffSigner) for value in held))
+        self.assertNotIn(self.keys.integrity_key, held)
+        self.assertFalse(hasattr(self.verifier._handoff_verifier, 'sign'))
 
     def test_acceptance_fails_closed_on_malformed_arguments(self):
         for now in (None, '120', 120.0, True, object()):

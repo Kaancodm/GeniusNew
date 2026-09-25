@@ -70,7 +70,7 @@ from threading import Lock
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
-from .contracts import ContractError, Policy, issue
+from .contracts import ContractError, HandoffSigner, Policy, issue
 from .gateway import DispatchPermit, Gateway
 from .results import handoff_digest
 from .workers import WorkerRunner
@@ -254,18 +254,16 @@ class Dispatch:
 class Orchestrator:
     """Admission, routing and dispatch for one policy-named orchestrator."""
 
-    def __init__(self, *, orchestrator_id: str, integrity_key: bytes,
+    def __init__(self, *, orchestrator_id: str, signer: HandoffSigner,
                  gateway: Gateway, workers: Iterable[WorkerEndpoint]) -> None:
         self._orchestrator_id = _instance_id(orchestrator_id, "orchestrator_id")
-        # Its own key, not the gateway's. The handoff HMAC is symmetric in v0.1
-        # so the bytes are the same today, but reaching into the verifier for the
-        # key to sign with is the shared authority step 13 rules out: it makes
-        # separate keys impossible and rotation a shared decision.
-        if type(integrity_key) is not bytes or len(integrity_key) < 32:
-            _fail("integrity_key must be at least 32 bytes")
+        # The only component that holds the handoff signing key. The gateway
+        # holds the public half, so it can check what this issues but not issue.
+        if not isinstance(signer, HandoffSigner):
+            _fail("signer must be a HandoffSigner")
         if not isinstance(gateway, Gateway):
             _fail("gateway must be a Gateway")
-        self._integrity_key = integrity_key
+        self._signer = signer
         self._gateway = gateway
 
         # Checked on the type, not by catching TypeError from `tuple()`: a
@@ -326,7 +324,7 @@ class Orchestrator:
         trusted = self._trusted(policy, now=now)
         self._job_id(job_id)
         wire = issue(request, subject=subject, job_id=job_id, policy=trusted,
-                     integrity_key=self._integrity_key, now=now)
+                     signer=self._signer, now=now)
         return Admission(wire=wire, decision=Decision(
             action=_ISSUED, decision="ALLOWED", reason_code=_SATISFIED,
             occurred_at=now))

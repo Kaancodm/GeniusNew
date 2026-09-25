@@ -22,7 +22,7 @@ Seit diesem Stand gilt:
 - **Start und Stopp** liegen bei einem eigenen Pfad (`anchor_process.start` →
   `AnchorHandle.stop`). Der Dienst bekommt nur einen `AnchorClient` mit dem Socket-Pfad.
   Ein Neustart des Dienstes setzt den Anker nicht mehr zurück; die Demo belegt das mit
-  ihrem vierzehnten Angriff.
+  dem Angriff „Restart the service and re-sign the chain“.
 - Der Anker hält seine Festlegungen **nur im Speicher**. Ein Neustart des *Ankers* ist
   weiterhin ein Zurücksetzen. `tests/test_anchor_process.py::test_a_restarted_anchor_remembers_nothing_and_this_is_the_boundary`
   hält das offen.

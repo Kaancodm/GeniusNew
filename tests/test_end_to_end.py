@@ -220,7 +220,7 @@ class EndToEndTest(Fixture, unittest.TestCase):
         from geniusnew.contracts import validate
         handoff = validate(dispatched.handoff_wire, subject='subject-demo',
                            job_id='job-direct', policy=self.service.policy,
-                           integrity_key=self.service.keys.integrity_key,
+                           verifier=self.service.handoff_verifier,
                            now=self.clock[0])
         lie = produce({'text': 'never ran'}, handoff=handoff, status='SUCCEEDED',
                       reason_code='WORK_COMPLETED', authority=forged,

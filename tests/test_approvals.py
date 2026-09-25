@@ -2,7 +2,7 @@ import unittest
 from threading import Barrier, Thread
 
 from geniusnew.approvals import ApprovalScope, ApprovalStore, create_scope
-from geniusnew.contracts import ContractError, Grant, Policy, issue
+from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, issue
 
 
 class ApprovalFixture:
@@ -14,18 +14,18 @@ class ApprovalFixture:
     """
 
     def setUp(self):
-        self.key = b'phase-2-test-integrity-key-32bytes'
+        self.key = HandoffSigner(integrity_key=b'phase-2-test-integrity-key-32bytes')
         grant = Grant('subject-demo', 'user-demo', 'worker-demo', 'high',
                       ('summarize',), 'isolated', True)
         self.policy = Policy('policy-v1', 'orchestrator-demo', 60,
                              ('summarize',), ('isolated',), (grant,))
         self.wire = issue({'text': 'Requires approval'}, subject='subject-demo',
                           job_id='job-demo', policy=self.policy,
-                          integrity_key=self.key, now=100)
+                          signer=self.key, now=100)
 
     def scope(self, wire=None, **kw):
         args = dict(subject='subject-demo', job_id='job-demo', policy=self.policy,
-                    integrity_key=self.key, now=101)
+                    verifier=self.key, now=101)
         args.update(kw)
         return create_scope(self.wire if wire is None else wire, **args)
 
@@ -44,10 +44,10 @@ class ApprovalTest(ApprovalFixture, unittest.TestCase):
                              ('isolated',), (Grant('subject-demo', 'user-demo', 'worker-demo',
                                                     'high', ('summarize',), 'isolated', False),))
         wire = issue({'text': 'No approval'}, subject='subject-demo', job_id='job-demo',
-                     policy=no_approval, integrity_key=self.key, now=100)
+                     policy=no_approval, signer=self.key, now=100)
         with self.assertRaises(ContractError):
             create_scope(wire, subject='subject-demo', job_id='job-demo', policy=no_approval,
-                         integrity_key=self.key, now=101)
+                         verifier=self.key, now=101)
         with self.assertRaises(ContractError):
             self.scope(self.wire.replace(b'Requires', b'Attacker'))
 
@@ -218,7 +218,7 @@ class UncoveredApprovalRefusalsTest(ApprovalFixture, unittest.TestCase):
         grant = store.grant(self.scope(), now=101, ttl_seconds=60)
         other_wire = issue({'text': 'A different job'}, subject='subject-demo',
                            job_id='job-other', policy=self.policy,
-                           integrity_key=self.key, now=100)
+                           signer=self.key, now=100)
         other_scope = self.scope(wire=other_wire, job_id='job-other')
         self.assertNotEqual(other_scope.handoff_sha256, self.scope().handoff_sha256)
         with self.assertRaisesRegex(ContractError, 'scope'):

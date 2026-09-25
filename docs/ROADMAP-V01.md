@@ -121,7 +121,7 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    Schreiber jetzt einen Unix-Socket-Pfad; fragen kann er darüber weiterhin genau die
    zwei Dinge von oben. Den öffentlichen Prüfschlüssel bekommt der Anker von dem, der
    ihn startet, nicht vom Schreiber. Ein Neustart des Dienstes setzt den
-   Anker nicht mehr zurück; die Demo belegt das mit einem vierzehnten Angriff, und
+   Anker nicht mehr zurück; die Demo belegt das mit einem eigenen Angriff, und
    `tests/test_end_to_end.py` hält es fest.
 
    Offen bleiben zwei Dinge, bewusst getrennt: Der Anker läuft unter demselben
@@ -134,7 +134,9 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    `AuditAuthority` signiert, `AuditVerifier` hält nur den öffentlichen Schlüssel, und der
    Anker-Prozess bekommt nur diesen. Damit ist die Schlüsselfrage dieses Schritts für die
    Kette gelöst; der Anker kann einen gefälschten Kopf ablehnen, aber keinen erzeugen.
-   Handoff- und Ergebnissignaturen folgen in eigenen Schritten. Erste Abhängigkeit:
+   Nach v0.1 sind auch **Handoffs Ed25519** (`HandoffSigner` nur im Orchestrator,
+   `HandoffVerifier` in Gateway, Ergebnisprüfung, Approval und Audit). Die
+   Ergebnissignatur folgt in einem eigenen Schritt. Erste Abhängigkeit:
    `cryptography`, in `requirements.txt` exakt gepinnt und mit Hashes.
 
 9. **Ergebnisvertrag** — das Ergebnis wird vom Worker signiert und bei der Annahme
@@ -219,11 +221,10 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
     Zulassung und Replay über denselben oder einen anderen Runner scheitern. Der Approval-
     Token selbst verlässt den Gateway-Pfad nicht, im Permit steht nur der Receipt-Hash.
 
-    Handoff-HMAC bleibt symmetrisch: ein Gateway mit dem Integritätsschlüssel könnte
-    technisch auch signieren. Die Unabhängigkeit ist in v0.1 deshalb eine getrennte
-    Runtime-Rolle/Instanz mit eigener API-Grenze, nicht eine asymmetrische
-    Verifikationsautorität. Eine solche Schlüsseltrennung wäre eine spätere
-    Kryptographie-/Deployment-Entscheidung.
+    In v0.1 war das Handoff-HMAC symmetrisch: ein Gateway mit dem Integritätsschlüssel
+    hätte technisch auch signieren können. **Nach v0.1 geschlossen:** Handoffs sind
+    Ed25519 (Handoff v2), das Gateway hält nur den `HandoffVerifier` und lehnt es ab,
+    mit dem Signer konstruiert zu werden.
 
 13. **Orchestrator** — Admission, Zuordnung, Dispatch. Deterministisch, fail closed, keine
     geteilte veränderliche Autorität. Er trifft Entscheidungen, er bestätigt sie nicht
@@ -535,7 +536,7 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
     die nicht scheitern kann, beweist nichts.
 
     Die zweite Hälfte ist der eigentliche Punkt: zwölf Manipulationsversuche (heute
-    vierzehn, siehe unten), die alle
+    fünfzehn, siehe unten), die alle
     abgelehnt werden müssen. Sieben davon waren einmal ein echtes Loch — aus Review, aus
     eigenem Probing, und eines aus dem Zusammenstecken zweier fertiger Komponenten.
 
@@ -553,10 +554,11 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
     Ausgabe eines Befehls — bis auf die Prozessgrenze zwischen den Instanzen, die eine
     Deployment-Frage bleibt.
 
-    Aus fünf Angriffen sind vierzehn geworden: vier davon gehen über den Socket, weil der
+    Aus fünf Angriffen sind fünfzehn geworden: vier davon gehen über den Socket, weil der
     Eingang das Einzige ist, was ein Fremder erreicht — ein nicht registrierter Schlüssel,
     ein `tier` im Body, eine selbstgewählte Job-Kennung, eine Tür, die es nicht gibt. Die
-    übrigen zehn halten die Objekte, die ein Insider hätte; die letzten beiden sind der
+    übrigen elf halten die Objekte, die ein Insider hätte; einer davon versucht, mit dem
+    Prüfschlüssel des Gateways einen Handoff zu prägen, und die letzten beiden sind der
     Schreiber selbst, der den Anker zurückzusetzen versucht — einmal aus dem eigenen
     Speicher, einmal durch einen Neustart des Dienstes (Schritt 8).
 
@@ -591,17 +593,25 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
     sie schrieb jede Seite und lief ins CPU-Limit. Wieder eine Zusicherung, die ein anderer
     Pfad erfüllte als der geprüfte; gefunden, indem das Limit testweise entfernt wurde.
 
-20. **README-Quickstart**, den ein Fremder ohne Rückfragen befolgen kann. Am besten von
-    jemandem gegengelesen, der das Projekt nicht kennt.
+20. **README-Quickstart** mit dokumentiertem technischem Review: frischer Clone,
+    eigene virtuelle Umgebung, erfolgreiche Installation und Demo, erwartete letzte
+    Zeile und Exit-Code `0`; Unklarheiten werden festgehalten.
 
-    **Status: geschrieben, nicht gegengelesen.** Der Quickstart steht in `README.md`. Der
-    zweite Halbsatz dieses Schritts ist nicht erfüllt, solange niemand ohne
-    Projektkenntnis ihn befolgt hat; bis dahin gilt der Schritt als offen.
+    **Status: abgeschlossen für Commit
+    `d3378daf97af80e5bcd4f97b163b5bed95253329`.** Am 25.09.2026 liefen Clone,
+    venv-Erstellung, hash-gepinnte Installation und Demo unter Ubuntu 26.04 / WSL2 mit
+    Python 3.14.4 erfolgreich. Die erwartete PASS-Zeile mit 13/13 abgelehnten Angriffen
+    wurde exakt erreicht; beim vollständigen Durchlauf waren keine Rückfragen nötig.
+    Der Projektverantwortliche hat diesen technischen Review als Abnahme akzeptiert;
+    eine projektfremde Person und eine neue VM/WSL-Installation sind dafür keine
+    Voraussetzung. Das [Review-Protokoll](QUICKSTART-REVIEW.md) hält die Entscheidung,
+    die tatsächlich verwendete Umgebung und die Grenzen des Nachweises fest.
 
-    Was sich davon prüfen lässt, prüft die CI (Schritt 19). Für den Rest steht das
-    Protokoll in `docs/QUICKSTART-REVIEW.md`: wer, in welcher Umgebung, was
-    aufgeschrieben wird und wann der Schritt als erledigt gilt. **Offen ist die Person** —
-    sie muss benannt werden, und das kann kein Commit.
+    Der Nachweis deckt laut Protokoll keine Demo mit anderer Angriffszahl ab. Die Änderung
+    auf fünfzehn Angriffe (Schritt 8, Lebenszyklus des Ankers, zusammen mit dem
+    Handoff-Angriff aus der Ed25519-Umstellung) hat deshalb einen erneuten
+    Durchlauf nach denselben Kriterien, der im Protokoll steht. Seitdem führt die CI
+    denselben Quickstart bei jedem Push aus einer frischen Kopie aus (Schritt 19).
 
 21. **Tag `v0.1`** auf einem grünen, verifizierten Commit.
 

@@ -1,71 +1,79 @@
-# Quickstart-Gegenlesen (Roadmap Schritt 20)
+# Quickstart-Review (Roadmap Schritt 20)
 
-Schritt 20 verlangt, dass jemand **ohne Projektkenntnis** den Quickstart in `README.md`
-befolgt — ohne Rückfragen. Dieses Dokument ist das Protokoll dafür. Es ersetzt die
-Person nicht; es sorgt dafür, dass ihr Durchlauf etwas belegt.
+**Status: bestanden und als Abschluss von Schritt 20 akzeptiert.** Der Nachweis gilt
+für Commit `d3378daf97af80e5bcd4f97b163b5bed95253329` vom 25.09.2026.
 
-**Status: offen.** Gegenlesende Person: _noch nicht benannt._
+## Abnahmekriterien
 
-## Wer
+Der Projektverantwortliche hat am 25.09.2026 den ausgeführten technischen Review als
+Abnahme akzeptiert und die zusätzliche Bedingung einer realen Person ohne vorherige
+Projektkenntnis aufgehoben. Für diese Abnahme reichen der frische Clone und eine
+eigene virtuelle Umgebung in der vorhandenen WSL-Installation; eine neu installierte
+VM oder WSL-Distribution ist keine Voraussetzung.
 
-Jemand, der dieses Repository, seine Pull Requests und seine Dokumente noch nicht
-gesehen hat. Programmierkenntnisse sind nicht nötig, eine Kommandozeile bedienen schon.
-Wer am Projekt mitgearbeitet hat, zählt nicht — auch nicht, wer nur mitgelesen hat.
+Der Review muss weiterhin belegen:
 
-## Umgebung
+- Die dokumentierten Schritte für Clone, venv, Installation und Demo funktionieren.
+- Die Demo endet mit Exit-Code `0` und exakt der letzten Zeile aus der README.
+- Unklarheiten, benötigte Rückfragen, Hilfsmittel und Abweichungen werden festgehalten.
+- Commit, Umgebung und Ergebnis sind nachvollziehbar dokumentiert.
 
-Eine von beiden, frisch:
+## Durchlauf vom 25.09.2026
 
-- **Linux:** eine neue VM oder ein neuer Container mit einem aktuellen Ubuntu, in dem
-  dieses Repository noch nie geklont wurde.
-- **Windows mit WSL:** eine WSL-Distribution, die für den Test neu installiert wurde
-  (`wsl --install`, oder `wsl --unregister` einer alten Test-Distribution vorher).
-
-Nicht auf dem Rechner eines Projektbeteiligten, nicht in einem Verzeichnis, in dem schon
-etwas liegt.
-
-## Ablauf
-
-1. Die Person bekommt **nur** den Link auf das Repository und den Satz:
-   „Befolge den Quickstart in der README. Frag nichts; schreib auf, wo du hängst.“
-2. Sie liest ab `## Quickstart` (bzw. `### Windows: über WSL`) und tut, was dort steht.
-3. Niemand hilft. Eine Frage, die sie stellen würde, wird notiert, nicht beantwortet.
-4. Sie hört auf, wenn die Demo endet oder es nicht weitergeht.
-
-## Was aufgeschrieben wird
-
-| Punkt | Eintrag |
+| Punkt | Beobachtung |
 | --- | --- |
-| Datum, Person (Name oder Kürzel) | |
-| Umgebung (Distribution und Version, `python3 --version`) | |
-| Commit (`git rev-parse HEAD`) | |
-| Dauer vom Klonen bis zur letzten Zeile | |
-| Letzte Zeile der Ausgabe, wörtlich | |
-| Exit-Code (`echo $?` direkt danach) | |
-| Jede Stelle, an der gezögert, geraten oder nachgeschlagen wurde | |
-| Jede Frage, die gestellt worden wäre | |
-| Was `PASS` nach Verständnis der Person bedeutet — in eigenen Worten | |
+| Prüfer | Codex; Projektkontext war bereits vorhanden |
+| Betriebssystem | Ubuntu 26.04 LTS unter WSL2, x86_64; bestehende Installation |
+| Python / Git | Python 3.14.4 / Git 2.53.0 |
+| Ziel | Frischer Clone von `https://github.com/Kaancodm/GeniusNew.git` |
+| Geprüfter Commit | `d3378daf97af80e5bcd4f97b163b5bed95253329` |
+| Vorbereitung | Separates temporäres Verzeichnis, isoliertes Home, neue `.venv` |
+| Clone / venv / Installation / Demo | Alle vier Schritte mit Exit-Code `0` |
+| Installierte Pakete | `cryptography==50.0.1`, `cffi==2.1.1`, `pycparser==3.0`; Hash-Prüfung erfolgreich |
+| Dauer | Etwa 7 Sekunden vom Klonen bis zum Ende der Demo |
+| STDERR | Installation und Demo leer |
+| Rückfragen / Unklarheiten | Keine beim vollständigen Durchlauf |
+| Arbeitsbaum danach | `git status --short --untracked-files=all` leer; `.venv` ist ignoriert |
+| Installationsartefakte | `.venv` im Clone und pip-Cache im isolierten Home bleiben vorhanden |
 
-Die letzte Zeile zählt: Wer `PASS` für eine Produktionsfreigabe hält, hat den Abschnitt
-„Was `PASS` nicht bedeutet“ nicht verstanden, und das ist ein Befund über die README,
-nicht über die Person.
+Die ausgeführten README-Schritte:
 
-## Wann Schritt 20 erledigt ist
+```sh
+git clone https://github.com/Kaancodm/GeniusNew.git
+cd GeniusNew
+python3 -m venv .venv && . .venv/bin/activate
+python3 -m pip install --require-hashes -r requirements.txt
+./scripts/demo.sh
+```
 
-- Letzte Zeile gleich der in der README, Exit-Code `0`, **und**
-- keine Stelle, an der es ohne Raten nicht weiterging.
+Zur Messung und Protokollierung wurden zusätzlich die Ausgaben getrennt erfasst,
+die Exit-Codes unmittelbar gesichert und die Demo mit einem nicht erreichten
+120-Sekunden-Timeout ausgeführt. Bei pip wurde der optionale Versionscheck mit
+`--disable-pip-version-check` deaktiviert; `--require-hashes` blieb aktiv.
 
-Jeder andere Befund wird als Änderung an der README behoben, und der Durchlauf wird mit
-einer **neuen** Person wiederholt — wer den Quickstart einmal gesehen hat, ist kein
-Fremder mehr.
+Die letzte Zeile der Demo lautete wörtlich:
 
-Das ausgefüllte Protokoll kommt als Kommentar in den Pull Request, der Schritt 20 in
-`docs/ROADMAP-V01.md` auf erledigt setzt.
+```text
+PASS — job succeeded over HTTP, chain verified against the anchored head, 13/13 attacks refused.
+```
 
-## Was die CI davon schon abnimmt
+Ein vorausgehender Lauf hatte nur die Demo mit der vorhandenen Systemabhängigkeit
+ausgeführt. Nach dem zwischenzeitlichen Merge der Ed25519-Änderung wurde die aktuelle
+README erneut gelesen und der vollständige Quickstart in einem zweiten frischen Clone
+mit neuer venv durchgeführt. Nur dieser vollständige Durchlauf begründet die Abnahme.
 
-Ein Teil dessen, was ein Fremder erlebt, ist prüfbar und wird bei jedem Push geprüft
-(`.github/workflows/verify.yml`): die Demo läuft aus einer frischen Kopie der
-eingecheckten Dateien mit leerer Umgebung, und ihre letzte Zeile muss wörtlich in der
-README stehen; unter Windows muss sie mit einer `FAIL`-Zeile enden, die auf WSL verweist.
-Ob die README *verständlich* ist, prüft keine CI. Dafür ist dieser Schritt da.
+## Bedeutung und Gültigkeit
+
+`PASS` belegt hier den demonstrierten HTTP-Pfad, die Prüfung der Audit-Chain gegen den
+festgehaltenen Kopf und die Ablehnung der 13 konkreten Manipulationsversuche. Der
+Prüfer verstand die im README genannten Grenzen; der Review ist keine
+Produktionsfreigabe und kein Nachweis für die Verständlichkeit bei projektfremden
+Menschen. Die bekannten Sicherheitsgrenzen aus `../SECURITY.md` bleiben bestehen.
+
+Der Nachweis umfasst weder natives Windows noch macOS noch eine neue Betriebssystem-
+Installation. Auch ausgehender Netzwerkverkehr wurde nicht separat überwacht.
+
+Änderungen an den Quickstart-Befehlen, ihren Voraussetzungen, dem Demo-Pfad oder seiner
+erwarteten Ausgabe benötigen einen erneuten Durchlauf auf dem betreffenden Commit.
+Eine neue Demo mit anderer Angriffszahl ist nicht durch dieses Protokoll abgedeckt.
+CI und der Release-Tag aus Schritt 21 werden getrennt geprüft.
