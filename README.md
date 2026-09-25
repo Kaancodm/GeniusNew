@@ -91,8 +91,10 @@ CI läuft auf `ubuntu-latest`.
 
 Roadmap zu v0.1 (`docs/ROADMAP-V01.md`): Schritte 1–19 umgesetzt; der Audit-Anker
 aus Schritt 8 läuft in eigenem Prozess, sein Lebenszyklus liegt noch beim Dienst.
-Schritt 20 (Gegenlesen dieses Quickstarts durch jemanden ohne Projektkenntnis) ist
-offen, Schritt 21 (Tag `v0.1`) steht aus.
+Schritt 20 (technischer Quickstart-Review) ist nach den vom Projektverantwortlichen
+angepassten Abnahmekriterien abgeschlossen; der geprüfte Commit, die Umgebung und das
+Ergebnis stehen in [docs/QUICKSTART-REVIEW.md](docs/QUICKSTART-REVIEW.md).
+Schritt 21 (Tag `v0.1`) steht aus.
 
 Die Phasennummern in `docs/MIGRATION-MATRIX.md` zählen die Migration aus dem
 Altprojekt und sind nicht dieselben wie die Bauphasen hier.
