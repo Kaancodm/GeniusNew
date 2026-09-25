@@ -217,17 +217,18 @@ class DemoTest(unittest.TestCase):
     def test_the_demo_is_deterministic(self):
         """Two genuinely separate runs produce the same digests.
 
-        Uncached on purpose: comparing a memoized result with itself would pass
-        whatever the demo did. The listening port is masked because the kernel
-        picks it — everything a reader would diff is a digest, and those are
-        fixed by the fixed clock and the fixed job ids.
+        One side is always fresh: comparing a memoized result with itself would
+        pass whatever the demo did. The other may come from the memo, which is
+        itself the output of an earlier, separate run. The listening port is
+        masked because the kernel picks it — everything a reader would diff is
+        a digest, and those are fixed by the fixed clock and the fixed job ids.
         """
         import re
 
         def stable(output):
             return re.sub(r"127\.0\.0\.1:\d+", "127.0.0.1:PORT", output)
 
-        self.assertEqual(stable(run_uncached()[1]), stable(run_uncached()[1]))
+        self.assertEqual(stable(run()[1]), stable(run_uncached()[1]))
 
     def test_the_output_carries_the_evidence_not_the_content(self):
         """Every digest printed is 64 hex characters, and there are several."""
