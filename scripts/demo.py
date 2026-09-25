@@ -225,7 +225,7 @@ def build_attacks(service, url, api_key, request_text, records, head):
 
     fresh = ResultVerifier(verifier_id="verifier-2",
                            handoff_verifier=service.handoff_verifier,
-                           result_key=keys.result_key)
+                           worker_verifier=authority.verifier())
 
     return [
         # --- what a stranger at the socket can try ---------------------------
@@ -253,6 +253,10 @@ def build_attacks(service, url, api_key, request_text, records, head):
         ("Mint a handoff with the gateway's key",
          lambda: issue({"text": "x"}, subject="subject-demo", job_id="job-demo-minted",
                        policy=policy, signer=service.gateway._handoff_verifier, now=NOW)),
+        ("Sign a result with the verifier's key",
+         lambda: produce({"text": "x"}, handoff=handoff, status="SUCCEEDED",
+                         reason_code="WORK_COMPLETED",
+                         authority=service.verifier._worker_verifier, now=NOW)),
         ("Swap the payload after validation", swap_payload),
         ("Dispatch without a gateway permit",
          lambda: service.orchestrator._workers["worker-demo"].dispatch(

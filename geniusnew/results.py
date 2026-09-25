@@ -39,13 +39,17 @@ same reason: a field on a boundary between trust domains is somewhere to put
 things that do not belong there, and an uppercase *shape* is not a closed set —
 sixty characters of `[A-Z0-9_]` is sixty characters of base32.
 
+## Who can sign and who can only check
+
+The signature is Ed25519 (result version 2). `WorkerAuthority` holds the
+private key, derived from the result key under its own label, and signs.
+`WorkerVerifier` holds the 32-byte public key and has no signing method; it is
+all the accepting instance is given. With the HMAC of version 1, whatever could
+verify a result could also forge one, so the independence required by step 14
+was organisational only. Now it is cryptographic.
+
 ## What this does not do
 
-- **HMAC is symmetric.** Anything that can verify a result could also sign one,
-  so `accept` is not cryptographically distinguishable from `produce`. The
-  independence required by step 14 is organisational here, not cryptographic.
-  A private signing key against a public verification key needs a primitive
-  outside the standard library and is a dependency decision.
 - **One worker key, not one per worker.** `worker_agent_id` is inside the signed
   body, so a result names its producer and that name cannot be edited in
   flight. With a single shared key, however, one worker can still forge
@@ -65,9 +69,16 @@ import hmac
 import re
 from typing import Any
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (Ed25519PrivateKey,
+                                                              Ed25519PublicKey)
+
 from .contracts import ContractError, Handoff, canonical, decode_wire
 
-_RESULT_VERSION = "geniusnew-result-v1"
+_RESULT_VERSION = "geniusnew-result-v2"
+_SIGNING_LABEL = b"geniusnew/result-signing/ed25519/v1"
+_SIGNATURE = re.compile(r"\A[0-9a-f]{128}\Z")
 _SUCCEEDED = "SUCCEEDED"
 _FAILED = "FAILED"
 _STATUSES = frozenset({_SUCCEEDED, _FAILED})
@@ -164,6 +175,35 @@ def handoff_digest(handoff: Any) -> str:
     return hashlib.sha256(handoff.to_bytes()).hexdigest()
 
 
+class WorkerVerifier:
+    """The public half of the worker authority: it checks results and signs none.
+
+    The accepting instance is given this and nothing else. It holds a 32-byte
+    Ed25519 public key and has no signing method, so taking a result no longer
+    means being able to make one.
+    """
+
+    def __init__(self, *, public_key: bytes) -> None:
+        if type(public_key) is not bytes or len(public_key) != 32:
+            _fail("public_key must be 32 bytes")
+        try:
+            self._key = Ed25519PublicKey.from_public_bytes(public_key)
+        except ValueError:
+            raise ContractError("public_key is not an Ed25519 public key") from None
+        self._public_key = public_key
+
+    @property
+    def public_key(self) -> bytes:
+        return self._public_key
+
+    def verifies(self, message: bytes, signature: bytes) -> bool:
+        try:
+            self._key.verify(signature, message)
+        except InvalidSignature:
+            return False
+        return True
+
+
 class WorkerAuthority:
     """Holds the result-signing key, which is **not** the handoff integrity key.
 
@@ -191,18 +231,34 @@ class WorkerAuthority:
             if hmac.compare_digest(result_key, integrity_key):
                 _fail("result_key must not be the handoff integrity key")
         self._result_key = result_key
+        seed = hmac.new(result_key, _SIGNING_LABEL, hashlib.sha256).digest()
+        self._signing_key = Ed25519PrivateKey.from_private_bytes(seed)
+        self._verifier = WorkerVerifier(public_key=self._signing_key.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw))
 
     @property
     def result_key(self) -> bytes:
         return self._result_key
 
+    def verifier(self) -> WorkerVerifier:
+        return self._verifier
+
     def sign(self, body: dict[str, Any]) -> str:
-        return hmac.new(self._result_key, canonical(body), hashlib.sha256).hexdigest()
+        return self._signing_key.sign(canonical(body)).hex()
 
 
 def _authority(value: Any) -> WorkerAuthority:
     if not isinstance(value, WorkerAuthority):
         _fail("authority must be a WorkerAuthority")
+    return value
+
+
+def _verifier(value: Any) -> WorkerVerifier:
+    """Accept the authority too, for callers that hold it anyway, and use its public half."""
+    if isinstance(value, WorkerAuthority):
+        return value.verifier()
+    if not isinstance(value, WorkerVerifier):
+        _fail("verifier must be a WorkerVerifier")
     return value
 
 
@@ -296,7 +352,8 @@ def produce(output: Any, *, handoff: Handoff, status: str, reason_code: str,
     return wire
 
 
-def accept(wire: Any, *, handoff: Handoff, authority: WorkerAuthority, now: int) -> Result:
+def accept(wire: Any, *, handoff: Handoff, verifier: WorkerVerifier | WorkerAuthority,
+           now: int) -> Result:
     """Take a result only if it answers this handoff, unaltered and in time.
 
     Raises `ContractError` on the first problem found, so a caller that treats
@@ -304,7 +361,7 @@ def accept(wire: Any, *, handoff: Handoff, authority: WorkerAuthority, now: int)
     """
     if not isinstance(handoff, Handoff):
         _fail("handoff is invalid")
-    key_holder = _authority(authority)
+    verifier = _verifier(verifier)
     now = _integer(now, "now")
     value = decode_wire(wire, keys=_RESULT_KEYS, noun="result")
 
@@ -315,7 +372,8 @@ def accept(wire: Any, *, handoff: Handoff, authority: WorkerAuthority, now: int)
     produced_at = _integer(value["produced_at"], "produced_at")
 
     signed = {key: field_value for key, field_value in value.items() if key != "signature"}
-    if not hmac.compare_digest(value["signature"], key_holder.sign(signed)):
+    if not _SIGNATURE.match(value["signature"]) or not verifier.verifies(
+            canonical(signed), bytes.fromhex(value["signature"])):
         _fail("result signature is invalid")
 
     if value["version"] != _RESULT_VERSION:

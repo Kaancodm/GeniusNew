@@ -1,8 +1,8 @@
 import unittest
 
 from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, issue, validate
-from geniusnew.results import (Result, WorkerAuthority, accept, handoff_digest,
-                               produce)
+from geniusnew.results import (Result, WorkerAuthority, WorkerVerifier, accept,
+                               handoff_digest, produce)
 
 # Zero-entropy and self-describing, so no scanner mistakes it for a credential.
 # Its only job is to be distinctive enough that finding it somewhere it should
@@ -59,7 +59,7 @@ class ResultFixture:
         return accept(
             self.wire() if wire is DEFAULT else wire,
             handoff=self.handoff if handoff is DEFAULT else handoff,
-            authority=self.authority if authority is DEFAULT else authority,
+            verifier=self.authority if authority is DEFAULT else authority,
             now=now)
 
 
@@ -89,6 +89,50 @@ class ResultContractTest(ResultFixture, unittest.TestCase):
         with self.assertRaises(ContractError):
             self.taken(self.wire(authority=self.other))
 
+    def test_the_public_half_accepts_and_cannot_sign(self):
+        verifier = self.authority.verifier()
+        self.assertTrue(self.taken(authority=verifier).succeeded)
+        self.assertFalse(hasattr(verifier, 'sign'))
+        self.assertEqual(len(verifier.public_key), 32)
+        self.assertNotIn(self.authority.result_key, vars(verifier).values())
+        with self.assertRaisesRegex(ContractError, 'authority must be a WorkerAuthority'):
+            self.wire(authority=verifier)
+        for key in (b'', b'x' * 31, b'x' * 33, 'x' * 32, None):
+            with self.subTest(key=repr(key)[:12]), self.assertRaisesRegex(
+                    ContractError, 'public_key must be 32 bytes'):
+                WorkerVerifier(public_key=key)
+        for bad in (None, 'verifier', self.authority.result_key):
+            with self.subTest(verifier=type(bad)), self.assertRaisesRegex(
+                    ContractError, 'verifier must be a WorkerVerifier'):
+                self.taken(authority=bad)
+
+    def test_a_result_signed_with_hmac_is_refused(self):
+        """Version 1 was HMAC. A correctly MAC'd body is not a signed one."""
+        import hashlib
+        import hmac
+        import json
+        from geniusnew.contracts import canonical
+        decoded = json.loads(self.wire())
+        body = {k: v for k, v in decoded.items() if k != 'signature'}
+        for version in (decoded['version'], 'geniusnew-result-v1'):
+            body['version'] = version
+            decoded = {**body, 'signature': hmac.new(
+                b'a-separate-result-key-of-32bytes!', canonical(body), hashlib.sha256).hexdigest()}
+            with self.subTest(version=version), self.assertRaisesRegex(
+                    ContractError, 'result signature is invalid'):
+                self.taken(canonical(decoded))
+
+    def test_a_malformed_signature_is_refused_before_it_is_decoded(self):
+        import json
+        from geniusnew.contracts import canonical
+        decoded = json.loads(self.wire())
+        good = decoded['signature']
+        for signature in ('0' * 64, 'zz' * 64, good.upper(), good[:-2], good + '00'):
+            with self.subTest(signature=signature[:8]):
+                decoded['signature'] = signature
+                with self.assertRaisesRegex(ContractError, 'result signature is invalid'):
+                    self.taken(canonical(decoded))
+
     def test_the_handoff_key_cannot_be_used_as_a_result_key(self):
         """Signing results with the handoff key would let a worker authorize itself."""
         padded = b'phase-2-test-integrity-key-32bytes-padding-to-thirty-two-bytes'
@@ -104,7 +148,7 @@ class ResultContractTest(ResultFixture, unittest.TestCase):
         original = self.wire()
         decoded = json.loads(original)
         replacements = {
-            'version': 'geniusnew-result-v2',
+            'version': 'geniusnew-result-v3',
             'job_id': 'job-other',
             'worker_agent_id': 'worker-other',
             'handoff_sha256': 'a' * 64,
@@ -428,7 +472,7 @@ class UncoveredRefusalsTest(ResultFixture, unittest.TestCase):
     # --- fields whose own check sits behind the signature check --------------
 
     def test_a_correctly_signed_wire_with_a_wrong_version_is_refused(self):
-        for version in ('geniusnew-result-v2', 'geniusnew-handoff-v1', 'v1', 'x'):
+        for version in ('geniusnew-result-v1', 'geniusnew-result-v3', 'geniusnew-handoff-v2', 'x'):
             with self.subTest(version=version):
                 with self.assertRaisesRegex(ContractError, 'version'):
                     self.taken(self.resigned(version=version))

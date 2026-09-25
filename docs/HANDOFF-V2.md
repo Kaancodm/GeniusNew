@@ -77,5 +77,5 @@ aktuellen Policy abweicht.
 
 Approval-Token mit Scope und Einmalverbrauch, Gateway-Permits, Worker-Ausführung,
 Prozessisolation und Ergebnisvalidierung sind inzwischen als getrennte Grenzen im
-Repository implementiert. Die Ergebnissignatur ist noch HMAC und folgt als eigener
-Schritt; persistente Audit-/Deployment-Infrastruktur bleibt eine spätere Phase.
+Repository implementiert. Die Ergebnissignatur ist ebenfalls Ed25519 (Ergebnis-Version 2);
+persistente Audit-/Deployment-Infrastruktur bleibt eine spätere Phase.

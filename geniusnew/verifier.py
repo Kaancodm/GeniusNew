@@ -30,11 +30,12 @@ of service built out of the anti-replay rule.
 
 ## What it deliberately cannot do
 
-The result HMAC is symmetric, so holding the key to verify is holding the key
-to sign. The independence here is a separate instance and a separate API
-boundary, not a cryptographic one; an asymmetric result signature is the
-dependency decision noted against step 8 and it would change this file's
-constructor, nothing else.
+It cannot sign a result, and since result version 2 that is cryptographic
+rather than organisational: it holds the public half of the worker's Ed25519
+key (`WorkerVerifier`) and the public half of the handoff key, and refuses to be
+constructed with either private half. With the HMAC of version 1, holding the
+key to verify was holding the key to sign. As predicted when that was written,
+closing it changed this file's constructor and nothing else.
 
 For an approval-bound job it is weaker still. The wire keeps `approval_state:
 PENDING_APPROVAL` forever — consuming the approval does not rewrite it — so this
@@ -54,7 +55,7 @@ from threading import Lock
 from typing import Any
 
 from .contracts import ContractError, HandoffVerifier, Policy, validate, validate_pending
-from .results import Result, WorkerAuthority, accept as accept_result, handoff_digest
+from .results import Result, WorkerVerifier, accept as accept_result, handoff_digest
 
 _VERIFIER_ID = re.compile(r"\A[a-z0-9][a-z0-9-]{0,62}\Z")
 _DIGEST = re.compile(r"\A[0-9a-f]{64}\Z")
@@ -157,15 +158,17 @@ class ResultVerifier:
     """Takes results for jobs it did not request and did not run."""
 
     def __init__(self, *, verifier_id: str, handoff_verifier: HandoffVerifier,
-                 result_key: bytes) -> None:
+                 worker_verifier: WorkerVerifier) -> None:
         if type(verifier_id) is not str or not _VERIFIER_ID.match(verifier_id):
             _fail("verifier_id must be a lowercase identifier of at most 63 characters")
         # Exactly the public half: this checks handoffs, it never issues one.
         if type(handoff_verifier) is not HandoffVerifier:
             _fail("handoff_verifier must be a HandoffVerifier")
-        # It no longer holds the handoff integrity key, so it cannot compare the
-        # result key against it. `keys.derive_keys` is what makes them differ.
-        self._authority = WorkerAuthority(result_key=result_key)
+        # And the public half of the worker's key: it takes results, it cannot
+        # sign one. Handed the WorkerAuthority, it could forge what it accepts.
+        if type(worker_verifier) is not WorkerVerifier:
+            _fail("worker_verifier must be a WorkerVerifier")
+        self._worker_verifier = worker_verifier
         self._verifier_id = verifier_id
         self._handoff_verifier = handoff_verifier
         self._accepted: set[str] = set()
@@ -255,7 +258,7 @@ class ResultVerifier:
     def _result(self, result_wire: Any, *, handoff, now: int) -> Result:
         try:
             return accept_result(result_wire, handoff=handoff,
-                                 authority=self._authority, now=now)
+                                 verifier=self._worker_verifier, now=now)
         except ContractError as refusal:
             raise Rejected(str(refusal), reason_code="RESULT_NOT_VALID",
                            occurred_at=now) from None

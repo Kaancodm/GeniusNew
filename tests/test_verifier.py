@@ -41,12 +41,13 @@ class Fixture:
                       ('summarize', 'translate'), ('isolated',), (grant,))
 
     def verifier_for(self, *, verifier_id='verifier-1', handoff_verifier=DEFAULT,
-                     result_key=DEFAULT):
+                     worker_verifier=DEFAULT):
         return ResultVerifier(
             verifier_id=verifier_id,
             handoff_verifier=(self.signer.verifier() if handoff_verifier is DEFAULT
                               else handoff_verifier),
-            result_key=self.keys.result_key if result_key is DEFAULT else result_key)
+            worker_verifier=(self.worker_authority.verifier() if worker_verifier is DEFAULT
+                             else worker_verifier))
 
     def issue(self, *, policy=DEFAULT, job_id='job-demo', text='the quick brown fox',
               now=100):
@@ -75,7 +76,7 @@ class Fixture:
         handoff = self.handoff if handoff is DEFAULT else handoff
         authority = self.worker_authority if authority is DEFAULT else authority
         body = {
-            'version': 'geniusnew-result-v1',
+            'version': 'geniusnew-result-v2',
             'job_id': handoff.job_id,
             'worker_agent_id': handoff.worker_agent_id,
             'handoff_sha256': handoff_digest(handoff),
@@ -212,7 +213,7 @@ class ResultVerifierTest(Fixture, unittest.TestCase):
         wire = self.result_for()
         for _ in range(2):
             self.assertTrue(accept(wire, handoff=self.handoff,
-                                   authority=self.worker_authority, now=120).succeeded)
+                                   verifier=self.worker_authority, now=120).succeeded)
 
     def test_a_second_different_result_for_one_handoff_is_refused(self):
         self.take(self.result_for())
@@ -374,22 +375,21 @@ class ResultVerifierTest(Fixture, unittest.TestCase):
                                approval_token=granted.token)
         return permit.approval_record_hash
 
-    # --- what it cannot do, held open ---------------------------------------
+    # --- what it cannot do ---------------------------------------------------
 
-    def test_the_symmetric_key_means_this_instance_could_also_sign(self):
-        """Pinned open rather than claimed away.
+    def test_this_instance_cannot_sign_the_results_it_takes(self):
+        """Closed after v0.1; until then a test pinned it open.
 
-        With HMAC, holding the key to verify is holding the key to sign. The
-        independence of this step is a separate instance and API boundary, not
-        a cryptographic one, and an asymmetric result signature is the
-        dependency decision recorded against step 8.
+        With HMAC, holding the key to verify was holding the key to sign, so
+        this instance could have forged the result it then accepted. It now
+        holds the worker's public key only: no private key, no result key, no
+        method that signs.
         """
-        own = WorkerAuthority(result_key=self.keys.result_key,
-                              integrity_key=self.keys.integrity_key)
-        forged = produce({'text': 'never ran'}, handoff=self.handoff,
-                         status='SUCCEEDED', reason_code='WORK_COMPLETED',
-                         authority=own, now=110)
-        self.assertTrue(self.take(forged).succeeded)
+        held = list(vars(self.verifier).values())
+        self.assertFalse(any(isinstance(value, WorkerAuthority) for value in held))
+        self.assertNotIn(self.keys.result_key, held)
+        self.assertFalse(hasattr(self.verifier._worker_verifier, 'sign'))
+        self.assertEqual(len(self.verifier._worker_verifier.public_key), 32)
 
     # --- decisions have to be auditable -------------------------------------
 
@@ -444,10 +444,12 @@ class ResultVerifierTest(Fixture, unittest.TestCase):
             with self.subTest(key=repr(handoff_verifier)[:20]):
                 with self.assertRaisesRegex(ContractError, 'handoff_verifier'):
                     self.verifier_for(handoff_verifier=handoff_verifier)
-        for result_key in (b'too-short', None, 'x' * 32, 42):
-            with self.subTest(key=repr(result_key)[:20]):
-                with self.assertRaisesRegex(ContractError, 'result_key'):
-                    self.verifier_for(result_key=result_key)
+        # So is the worker authority: holding it, the verifier could forge the
+        # results it accepts.
+        for worker_verifier in (b'x' * 32, None, 'x' * 32, 42, self.worker_authority):
+            with self.subTest(key=repr(worker_verifier)[:20]):
+                with self.assertRaisesRegex(ContractError, 'worker_verifier'):
+                    self.verifier_for(worker_verifier=worker_verifier)
 
     def test_the_verifier_holds_nothing_that_can_issue_a_handoff(self):
         """A verifier holding the minting key could authorize the work it takes.
@@ -456,7 +458,7 @@ class ResultVerifierTest(Fixture, unittest.TestCase):
         the public half, and neither the signer nor the key it derives from is
         anywhere in it.
         """
-        held = list(vars(self.verifier).values()) + list(vars(self.verifier._authority).values())
+        held = list(vars(self.verifier).values())
         self.assertFalse(any(isinstance(value, HandoffSigner) for value in held))
         self.assertNotIn(self.keys.integrity_key, held)
         self.assertFalse(hasattr(self.verifier._handoff_verifier, 'sign'))
