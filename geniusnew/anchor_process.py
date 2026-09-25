@@ -8,9 +8,9 @@ two things — commit this signed head over these records, and what is committed
 and there is no message that resets, rewinds or overwrites anything.
 
 The child runs the existing `AuditAnchor` unchanged. It receives records as
-data, rebuilds them with its own `AuditAuthority`, and applies the same
-verification and the same extension rule the in-process anchor always applied,
-so this module adds a boundary and no new chain logic.
+data, rebuilds them for checking, and applies the same verification and the
+same extension rule the in-process anchor always applied, so this module adds a
+boundary and no new chain logic.
 
 ## What the boundary is, and is not
 
@@ -22,9 +22,9 @@ means running it under a different operating-system user and, for restarts,
 persistence; both are deployment decisions `docs/ROADMAP-V01.md` leaves past
 v0.1, and `SECURITY.md` lists the gap.
 
-The child holds the audit key, because verifying a head needs it and HMAC is
-symmetric. That does not weaken the anchor: it never writes the log, and what
-it protects against is a writer that already holds the same key.
+The child holds only the audit **public** key. Heads are Ed25519-signed, so
+checking one needs nothing that could make one: the anchor can refuse a forged
+head but cannot forge one itself, and nothing that reaches its memory can.
 
 ## Failing closed
 
@@ -47,7 +47,7 @@ from threading import Lock
 from typing import Any, BinaryIO, Iterable
 import weakref
 
-from .audit import AuditAuthority, AuditEvent
+from .audit import AuditAuthority, AuditEvent, AuditVerifier, rehydrate_event
 from .audit_chain import (AuditAnchor, AuditHead, AuditRecord, _bounded_chain, _count,
                           _digest)
 from .contracts import ContractError, canonical
@@ -63,11 +63,6 @@ _REPLY_SECONDS = 30.0
 
 _HEAD_KEYS = frozenset({"count", "head_hash", "signature", "version"})
 _RECORD_KEYS = frozenset({"event", "index", "previous_hash", "record_hash"})
-_EVENT_KEYS = frozenset({
-    "action", "actor", "constitution_version", "decision", "handoff_sha256",
-    "job_id", "occurred_at", "payload_sha256", "policy_version", "reason_code",
-    "subject", "trace_id",
-})
 
 
 def _fail(message: str) -> None:
@@ -103,16 +98,16 @@ def _frame(message: dict[str, Any], limit: int) -> bytes:
 
 # --- the child ---------------------------------------------------------------
 
-def _authority_from(init: dict[str, Any]) -> AuditAuthority:
-    if set(init) != {"audit_key", "kind"} or init["kind"] != "init":
+def _verifier_from(init: dict[str, Any]) -> AuditVerifier:
+    if set(init) != {"kind", "public_key"} or init["kind"] != "init":
         _fail("anchor process expected an init message")
-    if type(init["audit_key"]) is not str:
-        _fail("anchor audit_key must be hex")
+    if type(init["public_key"]) is not str:
+        _fail("anchor public_key must be hex")
     try:
-        key = bytes.fromhex(init["audit_key"])
+        key = bytes.fromhex(init["public_key"])
     except ValueError:
         key = b""
-    return AuditAuthority(audit_key=key)
+    return AuditVerifier(public_key=key)
 
 
 def _head(value: Any) -> AuditHead:
@@ -121,25 +116,15 @@ def _head(value: Any) -> AuditHead:
     return AuditHead(value["version"], value["count"], value["head_hash"], value["signature"])
 
 
-def _record(value: Any, authority: AuditAuthority) -> AuditRecord:
+def _record(value: Any) -> AuditRecord:
     """Rebuild a record so the unchanged chain checks can run over it.
 
-    The actor is re-minted by this process's own authority: an actor is proof
-    that the audit authority stood behind an event, and a string off a pipe is
-    not that proof until someone holding the key has said so.
+    Its event's attribution is not proven by rebuilding it; it is proven by the
+    signed head the commit is checked against, which covers every record.
     """
     if not isinstance(value, dict) or set(value) != _RECORD_KEYS:
         _fail("anchor request carries a malformed record")
-    event = value["event"]
-    if not isinstance(event, dict) or set(event) != _EVENT_KEYS:
-        _fail("anchor request carries a malformed event")
-    actor = event["actor"]
-    if type(actor) is not str or actor.count(":") != 1:
-        _fail("anchor request carries a malformed actor")
-    component, instance_id = actor.split(":")
-    fields = {name: event[name] for name in _EVENT_KEYS - {"actor"}}
-    return AuditRecord(value["index"],
-                       AuditEvent(actor=authority.actor(component, instance_id), **fields),
+    return AuditRecord(value["index"], rehydrate_event(value["event"]),
                        value["previous_hash"], value["record_hash"])
 
 
@@ -149,7 +134,7 @@ def _committed(state: tuple[int, str]) -> dict[str, Any]:
 
 
 def _handle(message: dict[str, Any], anchor: AuditAnchor,
-            authority: AuditAuthority) -> dict[str, Any]:
+            verifier: AuditVerifier) -> dict[str, Any]:
     """Answer one request. There is deliberately no third kind."""
     if message.get("kind") == "committed" and set(message) == {"kind"}:
         return _committed(anchor.committed)
@@ -158,8 +143,8 @@ def _handle(message: dict[str, Any], anchor: AuditAnchor,
     head = _head(message["head"])
     if not isinstance(message["records"], list):
         _fail("anchor request records must be a list")
-    records = [_record(value, authority) for value in message["records"]]
-    return _committed(anchor.commit(head, records, authority=authority))
+    records = [_record(value) for value in message["records"]]
+    return _committed(anchor.commit(head, records, authority=verifier))
 
 
 def _read_frame(stream: BinaryIO) -> bytes | None:
@@ -179,7 +164,7 @@ def _serve(requests: BinaryIO, replies: BinaryIO) -> int:
     if data is None:
         return 1
     try:
-        authority = _authority_from(_decode(data, "anchor init"))
+        verifier = _verifier_from(_decode(data, "anchor init"))
     except ContractError:
         return 1
     anchor = AuditAnchor()
@@ -187,7 +172,7 @@ def _serve(requests: BinaryIO, replies: BinaryIO) -> int:
     replies.flush()
     while (data := _read_frame(requests)) is not None:
         try:
-            reply = _handle(_decode(data, "anchor request"), anchor, authority)
+            reply = _handle(_decode(data, "anchor request"), anchor, verifier)
         except ContractError as refusal:
             reply = {"kind": "refused", "message": str(refusal)[:_MAX_REFUSAL_CHARS]}
         replies.write(_frame(reply, _MAX_REPLY_BYTES))
@@ -255,9 +240,10 @@ class AnchorProcess(AuditAnchor):
     again: a second process would be a silent reset.
     """
 
-    def __init__(self, *, audit_key: bytes) -> None:
-        AuditAuthority(audit_key=audit_key)
-        self._audit_key = audit_key
+    def __init__(self, *, verifier: AuditVerifier) -> None:
+        if not isinstance(verifier, AuditVerifier):
+            _fail("verifier must be an AuditVerifier")
+        self._verifier = verifier
         self._lock = Lock()
         self._process: subprocess.Popen[bytes] | None = None
         self._closed = False
@@ -286,7 +272,8 @@ class AnchorProcess(AuditAnchor):
             bufsize=0, close_fds=True, env=_minimal_environment(),
         )
         self._close = weakref.finalize(self, _stop, self._process)
-        init = _frame({"audit_key": self._audit_key.hex(), "kind": "init"}, _MAX_REQUEST_BYTES)
+        init = _frame({"kind": "init", "public_key": self._verifier.public_key.hex()},
+                      _MAX_REQUEST_BYTES)
         _state(_decode(_send(self._process, init), "anchor reply"))
         return self._process
 
@@ -295,7 +282,7 @@ class AnchorProcess(AuditAnchor):
         return self._exchange({"kind": "committed"})
 
     def commit(self, head: AuditHead, records: Iterable[AuditRecord], *,
-               authority: AuditAuthority) -> tuple[int, str]:
+               authority: AuditAuthority | AuditVerifier) -> tuple[int, str]:
         """Send a head and its chain; the child verifies with its own authority.
 
         `authority` is accepted for the base signature and not sent: the key

@@ -38,13 +38,17 @@ GeniusNew wird Zero-Trust aufgebaut. Sicherheitsrelevante Identität, Rechte, Po
 
 ## Quickstart
 
-Voraussetzungen: Linux, Python 3.11 oder neuer, `git`. Keine Abhängigkeiten. Nach dem
-Klonen kein Internetzugriff — der HTTP-Eingang lauscht nur auf `127.0.0.1` —, und nichts
-bleibt auf der Platte zurück außer temporären Verzeichnissen, die wieder verschwinden.
+Voraussetzungen: Linux, Python 3.11 oder neuer, `git`. Eine einzige Abhängigkeit,
+`cryptography` für die Ed25519-Signatur der Audit-Köpfe, exakt gepinnt und mit den Hashes
+aller veröffentlichten Dateien in `requirements.txt`. Nach der Installation kein
+Internetzugriff — der HTTP-Eingang lauscht nur auf `127.0.0.1` —, und nichts bleibt auf
+der Platte zurück außer temporären Verzeichnissen, die wieder verschwinden.
 
 ```sh
 git clone https://github.com/Kaancodm/GeniusNew.git
 cd GeniusNew
+python3 -m venv .venv && . .venv/bin/activate
+python3 -m pip install --require-hashes -r requirements.txt
 ./scripts/demo.sh
 ```
 
@@ -74,8 +78,9 @@ kein Schlüsselmaterial. `tests/test_demo.py` prüft das mit Kanarienwerten.
 **Was `PASS` nicht bedeutet:** keine Produktionsfreigabe und kein Sicherheitsnachweis
 für einen echten Betrieb. Außer Worker und Audit-Anker sind die Instanzen getrennte
 Objekte in einem Prozess; die Worker-Isolation ist eine Prozessgrenze, keine microVM;
-der Anker wird vom Dienst gestartet und hält nur Speicher; die Signaturen sind HMAC und
-damit symmetrisch. Die bekannten Grenzen stehen einzeln in `SECURITY.md`.
+der Anker wird vom Dienst gestartet und hält nur Speicher; Handoff- und
+Ergebnissignaturen sind noch HMAC und damit symmetrisch (Audit-Köpfe sind Ed25519). Die
+bekannten Grenzen stehen einzeln in `SECURITY.md`.
 
 **Andere Betriebssysteme:** Die Worker-Isolation braucht POSIX-Ressourcenlimits. Unter
 Windows verweigert sie die Ausführung (fail closed), die Demo erreicht dort kein `PASS`.
@@ -122,9 +127,11 @@ Siehe:
 
 ## Lokale Prüfung
 
-Dieselben zwei Schritte wie die CI (`.github/workflows/verify.yml`):
+Dieselben Schritte wie die CI (`.github/workflows/verify.yml`), in der venv aus dem
+Quickstart:
 
 ```sh
+python3 -m pip install --require-hashes -r requirements.txt
 python3 -m unittest discover -s tests -v
 python3 scripts/refusals.py
 ```

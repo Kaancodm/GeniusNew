@@ -249,7 +249,7 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
     )
     # Started last, so a refusal above cannot leave a process behind.
     if anchor is None:
-        anchor = AnchorProcess(audit_key=keys.audit_key)
+        anchor = AnchorProcess(verifier=audit.verifier())
     return Service(
         entry=entry, orchestrator=orchestrator, gateway=gateway,
         verifier=verifier, audit=audit, chain=chain, anchor=anchor,

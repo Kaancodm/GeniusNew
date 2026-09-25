@@ -1,8 +1,10 @@
 """Roadmap step 8: the anchor in a process the writer cannot reach into."""
 
 import io
+import json
 import os
 import unittest
+import unittest.mock
 
 from geniusnew import anchor_process
 from geniusnew.anchor_process import AnchorProcess
@@ -50,7 +52,7 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
 
     def setUp(self):
         super().setUp()
-        self.anchor = AnchorProcess(audit_key=AUDIT_KEY)
+        self.anchor = AnchorProcess(verifier=self.authority.verifier())
         self.addCleanup(self.anchor.close)
 
     def test_a_commit_is_held_by_the_child_and_verified_against(self):
@@ -69,6 +71,23 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
             verify(shorter, resigned, authority=self.authority, anchor=self.anchor)
         with self.assertRaisesRegex(ContractError, 'anchor already committed 5 records'):
             self.anchor.commit(resigned, shorter, authority=self.authority)
+
+    def test_the_child_is_given_the_public_key_and_nothing_else(self):
+        """With HMAC the anchor had to hold the key that signs. Now it cannot."""
+        sent = []
+        real_send = anchor_process._send
+
+        def spy(process, frame_bytes):
+            sent.append(frame_bytes[4:])
+            return real_send(process, frame_bytes)
+
+        with unittest.mock.patch.object(anchor_process, '_send', side_effect=spy):
+            self.anchor.committed
+        init = json.loads(sent[0])
+        self.assertEqual(init, {'kind': 'init',
+                                'public_key': self.authority.verifier().public_key.hex()})
+        self.assertFalse(any(isinstance(value, AuditAuthority)
+                             for value in vars(self.anchor).values()))
 
     def test_the_writer_cannot_rewind_it_from_its_own_memory(self):
         self.anchor.commit(self.head, self.records, authority=self.authority)
@@ -105,7 +124,7 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
 
     def test_a_closed_anchor_does_not_start_again(self):
         """Starting on first use must not become starting on any use: that is a reset."""
-        unused = AnchorProcess(audit_key=AUDIT_KEY)
+        unused = AnchorProcess(verifier=self.authority.verifier())
         unused.close()
         with self.assertRaisesRegex(ContractError, 'anchor process is unreachable'):
             unused.committed
@@ -119,7 +138,7 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
         """
         self.anchor.commit(self.head, self.records, authority=self.authority)
         self.anchor.close()
-        restarted = AnchorProcess(audit_key=AUDIT_KEY)
+        restarted = AnchorProcess(verifier=self.authority.verifier())
         self.addCleanup(restarted.close)
         shorter, resigned = self.truncated()
         self.assertEqual(verify(shorter, resigned, authority=self.authority,
@@ -135,9 +154,12 @@ class InProcessAnchorTest(ChainFixture, unittest.TestCase):
         shorter, resigned = self.truncated()
         self.assertEqual(verify(shorter, resigned, authority=self.authority, anchor=anchor), 4)
 
-    def test_a_short_key_is_refused_before_a_process_starts(self):
-        with self.assertRaisesRegex(ContractError, 'audit_key'):
-            AnchorProcess(audit_key=b'short')
+    def test_only_the_public_half_starts_an_anchor(self):
+        """Handing it the authority would put the signing key back in its reach."""
+        for wrong in (self.authority, AUDIT_KEY, None):
+            with self.subTest(wrong=type(wrong).__name__):
+                with self.assertRaisesRegex(ContractError, 'verifier must be an AuditVerifier'):
+                    AnchorProcess(verifier=wrong)
 
 
 def frame(message):
@@ -160,7 +182,7 @@ class ChildProtocolTest(ChainFixture, unittest.TestCase):
         self.anchor = AuditAnchor()
 
     def handle(self, message):
-        return anchor_process._handle(message, self.anchor, self.authority)
+        return anchor_process._handle(message, self.anchor, self.authority.verifier())
 
     def commit_message(self, **overrides):
         message = {
@@ -217,17 +239,22 @@ class ChildProtocolTest(ChainFixture, unittest.TestCase):
     def test_init_must_carry_a_usable_key(self):
         cases = [
             ('expected an init message', {'kind': 'init'}),
-            ('expected an init message', {'audit_key': AUDIT_KEY.hex(), 'kind': 'commit'}),
-            ('must be hex', {'audit_key': 7, 'kind': 'init'}),
-            ('at least 32 bytes', {'audit_key': 'zz', 'kind': 'init'}),
+            ('expected an init message', {'audit_key': AUDIT_KEY.hex(), 'kind': 'init'}),
+            ('expected an init message', {'kind': 'commit', 'public_key': self.public_hex()}),
+            ('must be hex', {'kind': 'init', 'public_key': 7}),
+            ('32 bytes', {'kind': 'init', 'public_key': 'zz'}),
+            ('32 bytes', {'kind': 'init', 'public_key': self.public_hex()[:-2]}),
         ]
         for message, init in cases:
-            with self.subTest(message=message):
+            with self.subTest(message=message, init=sorted(init)):
                 with self.assertRaisesRegex(ContractError, message):
-                    anchor_process._authority_from(init)
-        authority = anchor_process._authority_from({'audit_key': AUDIT_KEY.hex(),
-                                                    'kind': 'init'})
-        self.assertEqual(authority.audit_key, AUDIT_KEY)
+                    anchor_process._verifier_from(init)
+        verifier = anchor_process._verifier_from({'kind': 'init',
+                                                  'public_key': self.public_hex()})
+        self.assertEqual(verifier.public_key, self.authority.verifier().public_key)
+
+    def public_hex(self):
+        return self.authority.verifier().public_key.hex()
 
     def test_only_exact_canonical_objects_are_read(self):
         for data in (b'{"kind": "committed"}', b'{"kind":"a","kind":"b"}',
@@ -252,7 +279,7 @@ class ChildProtocolTest(ChainFixture, unittest.TestCase):
                     anchor_process._state(reply)
 
     def test_the_serve_loop_answers_each_frame_and_stops_at_a_torn_one(self):
-        requests = (frame({'audit_key': AUDIT_KEY.hex(), 'kind': 'init'})
+        requests = (frame({'kind': 'init', 'public_key': self.public_hex()})
                     + frame(self.commit_message()) + frame({'kind': 'reset'})
                     + frame({'kind': 'committed'}) + b'\x00\x00')
         out = io.BytesIO()

@@ -392,13 +392,11 @@ class UncoveredRefusalsTest(ChainFixture, unittest.TestCase):
         version is what keeps an audit head from being read as some other
         signed structure, so it has to be checked rather than assumed.
         """
-        import hashlib, hmac
         from geniusnew.contracts import canonical
         head_hash = self.chain.records[-1].record_hash
-        for version in ('geniusnew-audit-head-v2', 'geniusnew-handoff-v1', 'v1', ''):
+        for version in ('geniusnew-audit-head-v1', 'geniusnew-handoff-v1', 'v1', ''):
             body = {'count': 5, 'head_hash': head_hash, 'version': version}
-            signature = hmac.new(self.authority.audit_key, canonical(body),
-                                 hashlib.sha256).hexdigest()
+            signature = self.authority.sign(canonical(body)).hex()
             forged = AuditHead(version, 5, head_hash, signature)
             with self.subTest(version=version):
                 with self.assertRaisesRegex(ContractError, 'version'):
@@ -537,6 +535,61 @@ class UncoveredRefusalsTest(ChainFixture, unittest.TestCase):
                 with self.assertRaisesRegex(ContractError, 'must be an AuditAnchor'):
                     verify(self.chain.records, head, authority=self.authority,
                            anchor=anchor)
+
+
+class AsymmetricHeadTest(ChainFixture, unittest.TestCase):
+    """Ed25519: whoever checks a head holds nothing that could make one."""
+
+    def test_the_public_half_verifies_a_head(self):
+        head = self.chain.head(self.authority)
+        verifier = self.authority.verifier()
+        self.assertEqual(verify(self.chain.records, head, authority=verifier), 5)
+        anchor = AuditAnchor()
+        self.assertEqual(anchor.commit(head, self.chain.records, authority=verifier),
+                         (5, head.head_hash))
+
+    def test_the_public_half_cannot_sign(self):
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        verifier = self.authority.verifier()
+        self.assertFalse(hasattr(verifier, 'sign'))
+        self.assertFalse(any(isinstance(value, (Ed25519PrivateKey, AuditAuthority))
+                             for value in vars(verifier).values()))
+        with self.assertRaisesRegex(ContractError, 'authority must be an AuditAuthority'):
+            sign_head(count=5, head_hash=self.chain.records[-1].record_hash,
+                      authority=verifier)
+
+    def test_a_version_one_hmac_head_is_refused(self):
+        """The format a holder of the old symmetric key could still produce."""
+        import hashlib, hmac
+        from geniusnew.contracts import canonical
+        head_hash = self.chain.records[-1].record_hash
+        body = {'count': 5, 'head_hash': head_hash, 'version': 'geniusnew-audit-head-v2'}
+        mac = hmac.new(b'a-separate-audit-key-of-32-bytes!', canonical(body),
+                       hashlib.sha256).hexdigest()
+        with self.assertRaisesRegex(ContractError, 'signature does not verify'):
+            verify(self.chain.records, AuditHead('geniusnew-audit-head-v2', 5, head_hash, mac),
+                   authority=self.authority.verifier())
+
+    def test_a_signature_for_another_body_does_not_transfer(self):
+        head = self.chain.head(self.authority)
+        shorter = self.chain.records[:4]
+        moved = AuditHead(head.version, 4, shorter[-1].record_hash, head.signature)
+        with self.assertRaisesRegex(ContractError, 'signature does not verify'):
+            verify(shorter, moved, authority=self.authority.verifier())
+
+    def test_only_bytes_are_signed_and_only_verifiers_or_authorities_check(self):
+        with self.assertRaisesRegex(ContractError, 'message must be bytes'):
+            self.authority.sign('text')
+        head = self.chain.head(self.authority)
+        with self.assertRaisesRegex(ContractError, 'AuditAuthority or an AuditVerifier'):
+            verify(self.chain.records, head, authority=object())
+
+    def test_a_verifier_needs_a_real_public_key(self):
+        from geniusnew.audit import AuditVerifier
+        for key in (b'', b'x' * 31, 'not-bytes', None):
+            with self.subTest(key=repr(key)[:12]):
+                with self.assertRaisesRegex(ContractError, '32 bytes'):
+                    AuditVerifier(public_key=key)
 
 
 if __name__ == '__main__':
