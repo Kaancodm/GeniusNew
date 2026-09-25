@@ -219,6 +219,15 @@ class IsolationLimitsTest(unittest.TestCase):
                 DeterministicSummarizer(), authority=authority, limits="not-limits"
             )
 
+    def test_only_linux_counts_as_able_to_apply_the_limits(self):
+        """macOS has `resource` but refuses the address-space limit; see the docstring."""
+        for platform in ("darwin", "win32", "freebsd14"):
+            with self.subTest(platform=platform):
+                with patch.object(isolation_module.sys, "platform", platform):
+                    self.assertFalse(isolation_module._resource_supported())
+        with patch.object(isolation_module.sys, "platform", "linux"):
+            self.assertTrue(isolation_module._resource_supported())
+
     def test_runner_fails_closed_without_resource_limits(self):
         authority = WorkerAuthority(result_key=b"a-separate-result-key-of-32bytes!")
         with patch.object(isolation_module, "_resource_supported", return_value=False):

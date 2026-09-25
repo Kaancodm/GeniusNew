@@ -570,9 +570,16 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
     Deshalb läuft die CI auf drei Systemen, jedes mit der Aussage, die dort gilt:
     `ubuntu-latest` führt Suite, Refusal-Guard und den Quickstart aus einer frischen
     Kopie mit leerer Umgebung aus, und die letzte Zeile muss wörtlich in der README
-    stehen; `macos-latest` führt Suite und Demo aus; `windows-latest` verlangt, dass die
-    Demo mit Exit-Code 1 und einer `FAIL`-Zeile endet, die auf WSL verweist (fail
-    closed). Unter Windows läuft die Demo in WSL; die README beschreibt den Weg.
+    stehen; `windows-latest` verlangt, dass die Demo mit Exit-Code 1 und einer
+    `FAIL`-Zeile endet, die auf WSL verweist (fail closed). Unter Windows läuft die Demo
+    in WSL; die README beschreibt den Weg.
+
+    macOS war „nicht getestet“. Der erste Lauf auf `macos-latest` hat es beantwortet:
+    jeder isolierte Worker endete dort mit `ISOLATION_VIOLATED`, auch der
+    Referenz-Worker, weil macOS das Adressraum-Limit ablehnt. Die Isolation verweigert
+    macOS seitdem beim Aufbau statt einmal pro Job. Der macOS-Job hält fest, was dort
+    gilt: die Ursache (das Limit wird abgelehnt — wird es eines Tages angenommen, wird
+    der Job rot), dass der Anker läuft, und dass die Demo mit `FAIL` endet.
 
     Die Isolation behauptet auch ein Speicherlimit. Bisher belegte ein Test nur, dass der
     Wert im Kind ankommt; `test_memory_past_the_limit_is_refused_not_granted` verlangt

@@ -109,6 +109,15 @@ class _RemoteWorkerFailed(Exception):
 
 
 def _resource_supported() -> bool:
+    """Whether the child can apply the limits below. Linux only.
+
+    Windows has no `resource` module. macOS has one but refuses the
+    address-space limit the child sets, so on macos-latest every isolated run,
+    the reference worker's included, ended ISOLATION_VIOLATED. Refusing here
+    says so when the runner is built instead of once per job.
+    """
+    if not sys.platform.startswith("linux"):
+        return False
     try:
         import resource  # noqa: F401
     except ImportError:

@@ -103,10 +103,14 @@ Im Linux-Dateisystem (`~`) klonen, nicht unter `/mnt/c`: dort ist es deutlich la
 Das aktuelle Ubuntu bringt Python 3.12 mit. `.gitattributes` hält Skripte auf
 LF-Zeilenenden, sodass auch ein mit Git für Windows geklontes Verzeichnis startet.
 
-### macOS
+### macOS: nicht unterstützt (fail closed)
 
-Die CI führt Suite und Demo auf `macos-latest` aus. Maßgeblich ist das Ergebnis dieses
-Jobs, nicht dieser Satz.
+Auf `macos-latest` endete in der CI jeder isolierte Worker mit `ISOLATION_VIOLATED`, auch
+der Referenz-Worker: macOS lehnt das Adressraum-Limit ab, das die Isolation setzt. Die
+Isolation verweigert macOS deshalb schon beim Aufbau, und die Demo endet dort wie unter
+Windows mit einer `FAIL`-Zeile und Exit-Code `1`. Der Audit-Anker läuft auf macOS. Die
+CI hält alle drei Aussagen auf `macos-latest` fest, die Ursache eingeschlossen. Unter
+macOS die Demo in einer Linux-VM oder einem Linux-Container ausführen.
 
 ## Aktueller Stand
 

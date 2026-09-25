@@ -39,10 +39,10 @@ this no longer resets what the anchor committed.
 
 ## Where it runs
 
-Linux, and so WSL. Worker isolation needs POSIX resource limits and the anchor
-a Unix socket; a host without them gets a plain `FAIL` naming the reason and
-where to run it instead, not a traceback — the refusal itself is the service's
-(fail closed).
+Linux, and so WSL. Worker isolation needs resource limits it can apply, which
+Windows lacks and macOS refuses, and the anchor a Unix socket; a host without
+them gets a plain `FAIL` naming the reason and where to run it instead, not a
+traceback — the refusal itself is the service's (fail closed).
 """
 
 from __future__ import annotations
@@ -89,9 +89,9 @@ def unsupported_host() -> str | None:
     """Why this host cannot run the demo, or None if it can."""
     if _resource_supported() and hasattr(socket, "AF_UNIX"):
         return None
-    return ("this host has no POSIX resource limits or Unix sockets, so worker "
-            "isolation and the audit anchor refuse to run (fail closed). "
-            "On Windows, run the demo inside WSL: wsl ./scripts/demo.sh")
+    return ("this host cannot apply the resource limits worker isolation needs, "
+            "so the service refuses to run (fail closed). Run the demo on Linux; "
+            "on Windows inside WSL: wsl ./scripts/demo.sh")
 
 
 def main(root_secret: bytes, request_text: str, api_key: bytes = API_KEY) -> int:

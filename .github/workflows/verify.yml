@@ -31,7 +31,9 @@ jobs:
           (cd "$fresh" && env -i PATH="$PATH" ./scripts/demo.sh) | tee "$RUNNER_TEMP/demo.out"
           grep -qxF -- "$(tail -n 1 "$RUNNER_TEMP/demo.out")" README.md
 
-  # The runner is the macOS machine: the same suite, demo included.
+  # The runner is the macOS machine. The full suite ran here once: every
+  # isolated worker ended ISOLATION_VIOLATED, so the isolation now refuses
+  # macOS when it is built. This job holds what is true here instead.
   macos:
     runs-on: macos-latest
     steps:
@@ -39,10 +41,29 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Run contract tests
-        run: python -m unittest discover -s tests -v
-      - name: Run the quickstart
-        run: ./scripts/demo.sh
+      # Held open: the reason, not just the outcome. If macOS starts accepting
+      # the limit, this fails and the refusal can be revisited.
+      - name: macOS refuses the address-space limit the isolation sets
+        run: |
+          python - <<'EOF'
+          import resource, sys
+          try:
+              resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024,) * 2)
+          except (ValueError, OSError) as refusal:
+              print(f"RLIMIT_AS refused: {refusal!r}")
+              sys.exit(0)
+          sys.exit("RLIMIT_AS was accepted here; revisit the macOS refusal")
+          EOF
+      - name: The audit anchor runs here
+        run: python -m unittest discover -s tests -p test_anchor_process.py -v
+      - name: The demo fails closed and points to Linux
+        run: |
+          status=0
+          python scripts/demo.py > demo.out 2>&1 || status=$?
+          cat demo.out
+          test "$status" -eq 1
+          test "$(wc -l < demo.out)" -eq 1
+          grep -q "^FAIL .*fail closed.*Linux" demo.out
 
   # No POSIX resource limits, so the worker isolation refuses to run. This
   # holds that refusal in place: exit code 1, a FAIL line that says why and
