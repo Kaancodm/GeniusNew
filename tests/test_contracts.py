@@ -266,6 +266,14 @@ class UncoveredRefusalsTest(ContractsFixture, unittest.TestCase):
                     ContractError, 'verifier must be a HandoffVerifier'):
                 self.check(self.issue(), verifier=bad)
 
+    def test_the_signer_signs_only_bytes(self):
+        """A str or dict would be encoded some other way than the wire it claims."""
+        self.assertEqual(len(self.key.sign(b'message')), 64)
+        for message in ('message', {'text': 'x'}, None, bytearray(b'message')):
+            with self.subTest(message=type(message)), self.assertRaisesRegex(
+                    ContractError, 'message must be bytes'):
+                self.key.sign(message)
+
     def test_a_handoff_signed_with_hmac_is_refused(self):
         """Version 1 was HMAC. A v1-shaped handoff, correctly MAC'd, is not a v2 one."""
         body = json.loads(self.issue())
