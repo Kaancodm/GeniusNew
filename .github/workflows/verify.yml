@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  contracts:
+  tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,5 +19,51 @@ jobs:
           python-version: '3.11'
       - name: Run contract tests
         run: python -m unittest discover -s tests -v
+
+  guarded:
+    runs-on: ubuntu-latest
+    outputs:
+      modules: ${{ steps.list.outputs.modules }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # Read from the guard itself, so the matrix cannot drift from GUARDED.
+      - id: list
+        run: >-
+          echo "modules=$(python -c 'import json; from scripts.refusals import GUARDED;
+          print(json.dumps(list(GUARDED)))')" >> "$GITHUB_OUTPUT"
+
+  refusals:
+    needs: guarded
+    runs-on: ubuntu-latest
+    name: refusals (${{ matrix.module }})
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.guarded.outputs.modules) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
       - name: Every refusal must have a test that notices its removal
-        run: python scripts/refusals.py
+        env:
+          MODULE: ${{ matrix.module }}
+        run: python scripts/refusals.py "$MODULE"
+
+  # The check name branch protection may require. A skipped job counts as
+  # passing there, so this runs always and demands success from both.
+  contracts:
+    needs: [tests, refusals]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tests and every refusal check passed
+        env:
+          TESTS: ${{ needs.tests.result }}
+          REFUSALS: ${{ needs.refusals.result }}
+        run: |
+          echo "tests=$TESTS refusals=$REFUSALS"
+          test "$TESTS" = success && test "$REFUSALS" = success
