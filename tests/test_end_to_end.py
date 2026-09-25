@@ -22,7 +22,7 @@ import urllib.request
 from geniusnew import wiring
 
 from geniusnew.anchor_process import AnchorProcess
-from geniusnew.audit_chain import sign_head, verify
+from geniusnew.audit_chain import AuditAnchor, sign_head, verify
 from geniusnew.contracts import ContractError, Grant, Policy
 from geniusnew.http_entry import serve
 from geniusnew.isolation import IsolatedWorkerRunner
@@ -168,6 +168,35 @@ class EndToEndTest(Fixture, unittest.TestCase):
     def test_default_composition_anchors_in_its_own_process(self):
         self.assertIsInstance(self.service.anchor, AnchorProcess)
         self.assertNotEqual(self.service.anchor.pid, os.getpid())
+
+    def test_a_rebuilt_service_resumes_the_anchor_from_its_state_file(self):
+        """A restart of the whole service, not only of the anchor."""
+        import tempfile
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = os.path.join(directory.name, 'anchor.state')
+        options = dict(root_secret=ROOT_SECRET, policy=self.policy_for(),
+                       api_keys={API_KEY: 'subject-demo'},
+                       workers=(DeterministicSummarizer(),), clock=lambda: self.clock[0],
+                       anchor_state=path)
+        first = build(**options)
+        self.addCleanup(first.close)
+        server = serve(first.entry)
+        thread = threading.Thread(target=server.serve_forever,
+                                  kwargs={'poll_interval': 0.01}, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        host, port = server.server_address
+        self.assertEqual(self.post(url=f'http://{host}:{port}/jobs')[0], 202)
+        head = first.head()
+        first.close()
+        rebuilt = build(**options)
+        self.addCleanup(rebuilt.close)
+        self.assertEqual(rebuilt.anchor.committed, (head.count, head.head_hash))
+        with self.assertRaisesRegex(ContractError, 'anchor_state configures the default anchor'):
+            build(**options, anchor=AuditAnchor())
 
     def test_gateway_refusal_is_audited_after_handoff_issue(self):
         ticks = iter((self.clock[0], self.clock[0] + 1))

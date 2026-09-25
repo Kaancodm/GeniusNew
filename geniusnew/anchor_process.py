@@ -16,11 +16,23 @@ boundary and no new chain logic.
 
 It is a memory boundary: the anchored count and hash are not objects the writer
 can reach. It is **not** a lifecycle boundary. The service starts this process,
-so it can also end it, and the commitments live in memory only — a restarted
-anchor starts at zero. Keeping the anchor alive independently of the writer
-means running it under a different operating-system user and, for restarts,
-persistence; both are deployment decisions `docs/ROADMAP-V01.md` leaves past
-v0.1, and `SECURITY.md` lists the gap.
+so it can also end it.
+
+## Surviving a restart
+
+Given a `state_path`, the child appends every head that moves it forward to that
+file — one canonical signed head per line, flushed and fsynced before it
+answers — and a restarted child resumes from the last one. On start it checks
+every line against the public key and requires the counts to rise strictly; a
+forged, reordered or torn line stops it from starting at all, because starting
+at zero instead would be the silent reset persistence is there to prevent. A
+write that fails ends the child, so memory never runs ahead of the file.
+
+What the file cannot stop is a rollback by someone who can write it. Every
+line is a genuinely signed head, so the same operating-system user can cut the
+file back to an older one and the anchor will resume from there. Closing that
+means running the anchor under another user or outside this host, which is
+deployment; `SECURITY.md` lists it and a test holds it open.
 
 The child holds only the audit **public** key. Heads are Ed25519-signed, so
 checking one needs nothing that could make one: the anchor can refuse a forged
@@ -49,7 +61,7 @@ import weakref
 
 from .audit import AuditAuthority, AuditEvent, AuditVerifier, rehydrate_event
 from .audit_chain import (AuditAnchor, AuditHead, AuditRecord, _bounded_chain, _count,
-                          _digest)
+                          _digest, _verify_head)
 from .contracts import ContractError, canonical
 from .isolation import _minimal_environment
 
@@ -62,6 +74,7 @@ _MAX_REFUSAL_CHARS = 512
 _REPLY_SECONDS = 30.0
 
 _HEAD_KEYS = frozenset({"count", "head_hash", "signature", "version"})
+_MAX_STATE_BYTES = 16 * 1024 * 1024
 _RECORD_KEYS = frozenset({"event", "index", "previous_hash", "record_hash"})
 
 
@@ -71,6 +84,10 @@ def _fail(message: str) -> None:
 
 class _Unreachable(Exception):
     """The child did not answer as a well-behaved anchor process would."""
+
+
+class _Refused(Exception):
+    """The child answered its start with a refusal, such as an unusable state file."""
 
 
 def _decode(data: bytes, noun: str) -> dict[str, Any]:
@@ -147,6 +164,52 @@ def _handle(message: dict[str, Any], anchor: AuditAnchor,
     return _committed(anchor.commit(head, records, authority=verifier))
 
 
+def _head_line(head: AuditHead) -> bytes:
+    return canonical({"count": head.count, "head_hash": head.head_hash,
+                      "signature": head.signature, "version": head.version}) + b"\n"
+
+
+def _load(path: str | None, verifier: AuditVerifier) -> AuditAnchor:
+    """The anchor as the state file left it, or a fresh one if there is none yet.
+
+    Every line is checked, not only the last: a file whose history does not
+    hold together is not one to resume from, whatever its final line says.
+    """
+    if path is None:
+        return AuditAnchor()
+    try:
+        with open(path, "rb") as stream:
+            data = stream.read(_MAX_STATE_BYTES + 1)
+    except FileNotFoundError:
+        return AuditAnchor()
+    except OSError:
+        _fail("anchor state file cannot be read")
+    if len(data) > _MAX_STATE_BYTES:
+        _fail("anchor state file is too large")
+    if not data:
+        return AuditAnchor()
+    if not data.endswith(b"\n"):
+        _fail("anchor state file ends in a torn line")
+    head = None
+    for line in data[:-1].split(b"\n"):
+        current = _head(_decode(line, "anchor state line"))
+        _verify_head(current, authority=verifier)
+        if head is not None and current.count <= head.count:
+            _fail("anchor state file does not rise strictly")
+        head = current
+    return AuditAnchor.resumed(head, authority=verifier)
+
+
+def _append(path: str, head: AuditHead) -> None:
+    """Durably record a head before the commit is answered."""
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    try:
+        _write_all(fd, _head_line(head))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _read_frame(stream: BinaryIO) -> bytes | None:
     header = stream.read(4)
     if len(header) != 4:
@@ -158,7 +221,11 @@ def _read_frame(stream: BinaryIO) -> bytes | None:
     return data if len(data) == size else None
 
 
-def _serve(requests: BinaryIO, replies: BinaryIO) -> int:
+def _refusal(refusal: ContractError) -> dict[str, Any]:
+    return {"kind": "refused", "message": str(refusal)[:_MAX_REFUSAL_CHARS]}
+
+
+def _serve(requests: BinaryIO, replies: BinaryIO, state_path: str | None = None) -> int:
     """Serve until the writer closes the pipe. A torn frame ends the process."""
     data = _read_frame(requests)
     if data is None:
@@ -167,14 +234,31 @@ def _serve(requests: BinaryIO, replies: BinaryIO) -> int:
         verifier = _verifier_from(_decode(data, "anchor init"))
     except ContractError:
         return 1
-    anchor = AuditAnchor()
+    try:
+        anchor = _load(state_path, verifier)
+    except ContractError as refusal:
+        # Answered, not just exited: the writer should learn why it has no
+        # anchor, and starting at zero instead would be the silent reset.
+        replies.write(_frame(_refusal(refusal), _MAX_REPLY_BYTES))
+        replies.flush()
+        return 1
     replies.write(_frame(_committed(anchor.committed), _MAX_REPLY_BYTES))
     replies.flush()
     while (data := _read_frame(requests)) is not None:
+        before = anchor.committed
         try:
-            reply = _handle(_decode(data, "anchor request"), anchor, verifier)
+            message = _decode(data, "anchor request")
+            reply = _handle(message, anchor, verifier)
         except ContractError as refusal:
-            reply = {"kind": "refused", "message": str(refusal)[:_MAX_REFUSAL_CHARS]}
+            reply = _refusal(refusal)
+        if state_path is not None and anchor.committed != before:
+            # Only a commit moves the anchor, so `message` is one with a head.
+            try:
+                _append(state_path, _head(message["head"]))
+            except OSError:
+                # Memory has moved and the file has not. Ending here leaves
+                # the file as the truth a restart resumes from.
+                return 2
         replies.write(_frame(reply, _MAX_REPLY_BYTES))
         replies.flush()
     return 0
@@ -182,10 +266,10 @@ def _serve(requests: BinaryIO, replies: BinaryIO) -> int:
 
 # --- the writer's side -------------------------------------------------------
 
-def _write_all(stream: BinaryIO, data: bytes) -> None:
+def _write_all(fd: int, data: bytes) -> None:
     view = memoryview(data)
     while view:
-        written = os.write(stream.fileno(), view)
+        written = os.write(fd, view)
         view = view[written:]
 
 
@@ -240,17 +324,25 @@ class AnchorProcess(AuditAnchor):
     again: a second process would be a silent reset.
     """
 
-    def __init__(self, *, verifier: AuditVerifier) -> None:
+    def __init__(self, *, verifier: AuditVerifier,
+                 state_path: str | os.PathLike[str] | None = None) -> None:
         if not isinstance(verifier, AuditVerifier):
             _fail("verifier must be an AuditVerifier")
+        if state_path is not None:
+            # Absolute, because the child resolves it, not the caller.
+            if isinstance(state_path, os.PathLike):
+                state_path = os.fspath(state_path)
+            if type(state_path) is not str or not os.path.isabs(state_path):
+                _fail("state_path must be an absolute path")
         self._verifier = verifier
+        self._state_path = state_path
         self._lock = Lock()
         self._process: subprocess.Popen[bytes] | None = None
         self._closed = False
         self._close = lambda: None
 
     def close(self) -> None:
-        """End the anchor process. Everything it committed is gone with it."""
+        """End the anchor process. Without a state file, what it committed goes too."""
         with self._lock:
             self._closed = True
             self._close()
@@ -266,15 +358,21 @@ class AnchorProcess(AuditAnchor):
             if self._process is None:
                 raise _Unreachable()
             return self._process
+        command = [sys.executable, "-m", "geniusnew.anchor_process"]
+        if self._state_path is not None:
+            command.append(self._state_path)
         self._process = subprocess.Popen(
-            [sys.executable, "-m", "geniusnew.anchor_process"],
+            command,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             bufsize=0, close_fds=True, env=_minimal_environment(),
         )
         self._close = weakref.finalize(self, _stop, self._process)
         init = _frame({"kind": "init", "public_key": self._verifier.public_key.hex()},
                       _MAX_REQUEST_BYTES)
-        _state(_decode(_send(self._process, init), "anchor reply"))
+        try:
+            _state(_decode(_send(self._process, init), "anchor reply"))
+        except ContractError as refusal:
+            raise _Refused(str(refusal)) from None
         return self._process
 
     @property
@@ -307,6 +405,9 @@ class AnchorProcess(AuditAnchor):
         with self._lock:
             try:
                 reply = _send(self._started(), frame)
+            except _Refused as refusal:
+                self._close()
+                _fail(f"anchor process refused to start: {refusal}")
             except (_Unreachable, OSError, ValueError):
                 # ValueError covers pipes already closed and, being its base
                 # class, a ContractError from a malformed init reply. Either
@@ -319,7 +420,7 @@ class AnchorProcess(AuditAnchor):
 
 
 def _send(process: subprocess.Popen[bytes], frame: bytes) -> bytes:
-    _write_all(process.stdin, frame)
+    _write_all(process.stdin.fileno(), frame)
     deadline = time.monotonic() + _REPLY_SECONDS
     size = int.from_bytes(_read_exact(process.stdout, 4, deadline), "big")
     if size > _MAX_REPLY_BYTES:
@@ -328,4 +429,5 @@ def _send(process: subprocess.Popen[bytes], frame: bytes) -> bytes:
 
 
 if __name__ == "__main__":
-    raise SystemExit(_serve(sys.stdin.buffer, sys.stdout.buffer))
+    raise SystemExit(_serve(sys.stdin.buffer, sys.stdout.buffer,
+                            sys.argv[1] if len(sys.argv) > 1 else None))

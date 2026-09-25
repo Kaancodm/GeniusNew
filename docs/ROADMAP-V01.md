@@ -115,6 +115,13 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    Nutzer zu betreiben und zu persistieren; beides ist Deployment bzw. Persistenz und
    damit außerhalb von v0.1. Ein Test hält die Grenze offen.
 
+   **Nach v0.1: Persistenz.** Mit `state_path` (im Dienst `anchor_state`) hängt der Anker
+   jeden Kopf, der ihn vorwärts bewegt, signiert und mit fsync an eine Datei an und setzt
+   nach einem Neustart beim letzten fort. Beim Start prüft er jede Zeile mit dem Public
+   Key und verlangt streng steigende Zählstände; sonst startet er nicht. Offen bleibt
+   der andere Nutzer: Wer die Datei schreiben kann, kann sie auf einen älteren, gültig
+   signierten Kopf zurückschneiden. Ein Test hält das offen.
+
    **Entscheidung zu HMAC:** blieb für v0.1. Nach v0.1 sind **Audit-Köpfe Ed25519**:
    `AuditAuthority` signiert, `AuditVerifier` hält nur den öffentlichen Schlüssel, und der
    Anker-Prozess bekommt nur diesen. Damit ist die Schlüsselfrage dieses Schritts für die
