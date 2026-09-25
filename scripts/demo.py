@@ -60,6 +60,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from geniusnew.anchor_process import AnchorClient, start  # noqa: E402
+from geniusnew.audit import AuditAuthority  # noqa: E402
 from geniusnew.audit_chain import sign_head, verify  # noqa: E402
 from geniusnew.contracts import ContractError, Grant, Policy, validate  # noqa: E402
 from geniusnew.http_entry import serve  # noqa: E402
@@ -101,8 +102,10 @@ def main(root_secret: bytes, request_text: str, api_key: bytes = API_KEY) -> int
         return 1
     with tempfile.TemporaryDirectory(prefix="geniusnew-anchor-") as directory:
         # The operator's part: the anchor is started here, outside the service,
-        # and only this handle can stop it. The service gets the path.
-        anchor = start(audit_key=derive_keys(root_secret).audit_key,
+        # and only this handle can stop it. It gets the public key; the
+        # service gets the path.
+        audit = AuditAuthority(audit_key=derive_keys(root_secret).audit_key)
+        anchor = start(verifier=audit.verifier(),
                        socket_path=os.path.join(directory, "anchor.sock"))
         try:
             return demonstrate(root_secret, request_text, api_key, anchor)

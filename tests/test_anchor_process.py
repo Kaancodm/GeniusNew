@@ -2,10 +2,12 @@
 
 import gc
 import io
+import json
 import os
 import socket
 import tempfile
 import unittest
+import unittest.mock
 
 from geniusnew import anchor_process
 from geniusnew.anchor_process import AnchorClient, start
@@ -48,13 +50,14 @@ class ChainFixture:
                                   authority=self.authority)
 
 
-def started_anchor(test, audit_key=AUDIT_KEY, directory=None):
+def started_anchor(test, directory=None):
     """Start an anchor the way an operator would: outside any service."""
     if directory is None:
         holder = tempfile.TemporaryDirectory(prefix='geniusnew-anchor-')
         test.addCleanup(holder.cleanup)
         directory = holder.name
-    handle = start(audit_key=audit_key, socket_path=os.path.join(directory, 'anchor.sock'))
+    verifier = AuditAuthority(audit_key=AUDIT_KEY).verifier()
+    handle = start(verifier=verifier, socket_path=os.path.join(directory, 'anchor.sock'))
     test.addCleanup(handle.stop)
     return handle
 
@@ -83,6 +86,24 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
             verify(shorter, resigned, authority=self.authority, anchor=self.anchor)
         with self.assertRaisesRegex(ContractError, 'anchor already committed 5 records'):
             self.anchor.commit(resigned, shorter, authority=self.authority)
+
+    def test_the_anchor_is_given_the_public_key_and_nothing_else(self):
+        """With HMAC the anchor had to hold the key that signs. Now it cannot."""
+        sent = []
+        real_write_all = anchor_process._write_all
+
+        def spy(stream, data):
+            sent.append(data[4:])
+            return real_write_all(stream, data)
+
+        with tempfile.TemporaryDirectory() as directory:
+            with unittest.mock.patch.object(anchor_process, '_write_all', side_effect=spy):
+                handle = start(verifier=self.authority.verifier(),
+                               socket_path=os.path.join(directory, 'anchor.sock'))
+            handle.stop()
+        self.assertEqual([json.loads(data) for data in sent],
+                         [{'kind': 'init',
+                           'public_key': self.authority.verifier().public_key.hex()}])
 
     def test_the_writer_cannot_rewind_it_from_its_own_memory(self):
         self.anchor.commit(self.head, self.records, authority=self.authority)
@@ -147,7 +168,7 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
         """A second anchor on the same path would be a silent reset."""
         self.anchor.commit(self.head, self.records, authority=self.authority)
         with self.assertRaisesRegex(ContractError, 'anchor process did not start'):
-            start(audit_key=AUDIT_KEY, socket_path=self.handle.socket_path)
+            start(verifier=self.authority.verifier(), socket_path=self.handle.socket_path)
         self.assertEqual(self.anchor.committed, (5, self.head.head_hash))
 
     def test_stopping_it_removes_its_socket_and_the_client_fails_closed(self):
@@ -180,9 +201,12 @@ class InProcessAnchorTest(ChainFixture, unittest.TestCase):
         shorter, resigned = self.truncated()
         self.assertEqual(verify(shorter, resigned, authority=self.authority, anchor=anchor), 4)
 
-    def test_a_short_key_is_refused_before_a_process_starts(self):
-        with self.assertRaisesRegex(ContractError, 'audit_key'):
-            start(audit_key=b'short', socket_path='/nonexistent/anchor.sock')
+    def test_only_the_public_half_starts_an_anchor(self):
+        """Handing it the authority would put the signing key back in its reach."""
+        for wrong in (self.authority, AUDIT_KEY, None):
+            with self.subTest(wrong=type(wrong).__name__):
+                with self.assertRaisesRegex(ContractError, 'verifier must be an AuditVerifier'):
+                    start(verifier=wrong, socket_path='/nonexistent/anchor.sock')
 
     def test_the_socket_path_must_be_absolute(self):
         for path in ('anchor.sock', None, b'/tmp/anchor.sock'):
@@ -190,7 +214,7 @@ class InProcessAnchorTest(ChainFixture, unittest.TestCase):
                 with self.assertRaisesRegex(ContractError, 'absolute path'):
                     AnchorClient(path)
         with self.assertRaisesRegex(ContractError, 'absolute path'):
-            start(audit_key=AUDIT_KEY, socket_path='anchor.sock')
+            start(verifier=self.authority.verifier(), socket_path='anchor.sock')
 
 
 def frame(message):
@@ -213,7 +237,7 @@ class ChildProtocolTest(ChainFixture, unittest.TestCase):
         self.anchor = AuditAnchor()
 
     def handle(self, message):
-        return anchor_process._handle(message, self.anchor, self.authority)
+        return anchor_process._handle(message, self.anchor, self.authority.verifier())
 
     def commit_message(self, **overrides):
         message = {
@@ -270,17 +294,22 @@ class ChildProtocolTest(ChainFixture, unittest.TestCase):
     def test_init_must_carry_a_usable_key(self):
         cases = [
             ('expected an init message', {'kind': 'init'}),
-            ('expected an init message', {'audit_key': AUDIT_KEY.hex(), 'kind': 'commit'}),
-            ('must be hex', {'audit_key': 7, 'kind': 'init'}),
-            ('at least 32 bytes', {'audit_key': 'zz', 'kind': 'init'}),
+            ('expected an init message', {'audit_key': AUDIT_KEY.hex(), 'kind': 'init'}),
+            ('expected an init message', {'kind': 'commit', 'public_key': self.public_hex()}),
+            ('must be hex', {'kind': 'init', 'public_key': 7}),
+            ('32 bytes', {'kind': 'init', 'public_key': 'zz'}),
+            ('32 bytes', {'kind': 'init', 'public_key': self.public_hex()[:-2]}),
         ]
         for message, init in cases:
-            with self.subTest(message=message):
+            with self.subTest(message=message, init=sorted(init)):
                 with self.assertRaisesRegex(ContractError, message):
-                    anchor_process._authority_from(init)
-        authority = anchor_process._authority_from({'audit_key': AUDIT_KEY.hex(),
-                                                    'kind': 'init'})
-        self.assertEqual(authority.audit_key, AUDIT_KEY)
+                    anchor_process._verifier_from(init)
+        verifier = anchor_process._verifier_from({'kind': 'init',
+                                                  'public_key': self.public_hex()})
+        self.assertEqual(verifier.public_key, self.authority.verifier().public_key)
+
+    def public_hex(self):
+        return self.authority.verifier().public_key.hex()
 
     def test_only_exact_canonical_objects_are_read(self):
         for data in (b'{"kind": "committed"}', b'{"kind":"a","kind":"b"}',
@@ -310,7 +339,7 @@ class ChildProtocolTest(ChainFixture, unittest.TestCase):
         with server, client:
             client.sendall(data)
             client.shutdown(socket.SHUT_WR)
-            anchor_process._serve_connection(server, self.anchor, self.authority)
+            anchor_process._serve_connection(server, self.anchor, self.authority.verifier())
             server.close()
             return client.makefile('rb').read()
 

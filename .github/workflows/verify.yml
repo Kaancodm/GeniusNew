@@ -17,18 +17,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Install the pinned dependency
+        run: python -m pip install --require-hashes -r requirements.txt
       - name: Run contract tests
         run: python -m unittest discover -s tests -v
       # What a stranger has: the committed files, nothing cached, no
-      # environment. The last line must be the one README.md tells them to
-      # expect, word for word.
+      # environment, and the README's steps — a venv, the pinned install, the
+      # demo. The last line must be the one README.md tells them to expect,
+      # word for word.
       - name: Quickstart from a fresh copy with an empty environment
         shell: bash
         run: |
           fresh="$RUNNER_TEMP/fresh"
           mkdir "$fresh"
           git archive HEAD | tar -x -C "$fresh"
-          (cd "$fresh" && env -i PATH="$PATH" ./scripts/demo.sh) | tee "$RUNNER_TEMP/demo.out"
+          (cd "$fresh" && env -i PATH="$PATH" sh -ec '
+            python3 -m venv .venv && . .venv/bin/activate
+            python3 -m pip install -q --require-hashes -r requirements.txt
+            ./scripts/demo.sh') | tee "$RUNNER_TEMP/demo.out"
           grep -qxF -- "$(tail -n 1 "$RUNNER_TEMP/demo.out")" README.md
 
   # The runner is the macOS machine. The full suite ran here once: every
@@ -54,6 +60,8 @@ jobs:
               sys.exit(0)
           sys.exit("RLIMIT_AS was accepted here; revisit the macOS refusal")
           EOF
+      - name: Install the pinned dependency
+        run: python -m pip install --require-hashes -r requirements.txt
       - name: The audit anchor runs here
         run: python -m unittest discover -s tests -p test_anchor_process.py -v
       - name: The demo fails closed and points to Linux
@@ -75,6 +83,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Install the pinned dependency
+        run: python -m pip install --require-hashes -r requirements.txt
       - name: The demo fails closed and names WSL
         shell: bash
         env:
@@ -115,6 +125,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Install the pinned dependency
+        run: python -m pip install --require-hashes -r requirements.txt
       - name: Every refusal must have a test that notices its removal
         env:
           MODULE: ${{ matrix.module }}

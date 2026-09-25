@@ -7,6 +7,8 @@
 #
 #     ./scripts/demo.sh
 #
-# Needs nothing but Python 3.11+ — no dependencies, no network, no state on disk.
+# Needs Python 3.11+ and the one pinned dependency in requirements.txt
+# (python3 -m pip install --require-hashes -r requirements.txt) — no network,
+# no state on disk.
 set -eu
 exec python3 "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/demo.py" "$@"

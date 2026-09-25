@@ -23,6 +23,7 @@ import urllib.request
 from geniusnew import wiring
 
 from geniusnew.anchor_process import AnchorClient, start
+from geniusnew.audit import AuditAuthority
 from geniusnew.audit_chain import AuditAnchor, sign_head, verify
 from geniusnew.contracts import ContractError, Grant, Policy
 from geniusnew.http_entry import serve
@@ -106,7 +107,8 @@ class Fixture:
         """Started as an operator would, outside the service it will anchor."""
         directory = tempfile.TemporaryDirectory(prefix='geniusnew-anchor-')
         self.addCleanup(directory.cleanup)
-        handle = start(audit_key=derive_keys(ROOT_SECRET).audit_key,
+        audit = AuditAuthority(audit_key=derive_keys(ROOT_SECRET).audit_key)
+        handle = start(verifier=audit.verifier(),
                        socket_path=os.path.join(directory.name, 'anchor.sock'))
         self.addCleanup(handle.stop)
         return handle

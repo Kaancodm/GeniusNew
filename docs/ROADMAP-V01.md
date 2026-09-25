@@ -119,8 +119,8 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    denn eine Voreinstellung wäre wieder der Dienst, der seinen Anker selbst startet; und
    `Service` hat keine Methode mehr, die etwas beendet. Statt zweier Pipes hält der
    Schreiber jetzt einen Unix-Socket-Pfad; fragen kann er darüber weiterhin genau die
-   zwei Dinge von oben. Den Schlüssel bekommt der Anker
-   von dem, der ihn startet, nicht vom Schreiber. Ein Neustart des Dienstes setzt den
+   zwei Dinge von oben. Den öffentlichen Prüfschlüssel bekommt der Anker von dem, der
+   ihn startet, nicht vom Schreiber. Ein Neustart des Dienstes setzt den
    Anker nicht mehr zurück; die Demo belegt das mit einem vierzehnten Angriff, und
    `tests/test_end_to_end.py` hält es fest.
 
@@ -130,8 +130,12 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    eigene Entscheidung in `docs/ADR-002-anchor-persistence.md`, Status offen. Ein Test
    hält die Grenze offen.
 
-   **Entscheidung zu HMAC:** bleibt für v0.1. Die Grenze steht in `SECURITY.md` und ist
-   per Test offen gehalten; asymmetrische Signaturen kommen nach v0.1.
+   **Entscheidung zu HMAC:** blieb für v0.1. Nach v0.1 sind **Audit-Köpfe Ed25519**:
+   `AuditAuthority` signiert, `AuditVerifier` hält nur den öffentlichen Schlüssel, und der
+   Anker-Prozess bekommt nur diesen. Damit ist die Schlüsselfrage dieses Schritts für die
+   Kette gelöst; der Anker kann einen gefälschten Kopf ablehnen, aber keinen erzeugen.
+   Handoff- und Ergebnissignaturen folgen in eigenen Schritten. Erste Abhängigkeit:
+   `cryptography`, in `requirements.txt` exakt gepinnt und mit Hashes.
 
 9. **Ergebnisvertrag** — das Ergebnis wird vom Worker signiert und bei der Annahme
    geprüft, symmetrisch zum eingehenden Handoff. Ohne diesen Schritt bleibt „das Ergebnis
