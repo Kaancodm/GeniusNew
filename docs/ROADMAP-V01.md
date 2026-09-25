@@ -119,7 +119,9 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    `AuditAuthority` signiert, `AuditVerifier` hält nur den öffentlichen Schlüssel, und der
    Anker-Prozess bekommt nur diesen. Damit ist die Schlüsselfrage dieses Schritts für die
    Kette gelöst; der Anker kann einen gefälschten Kopf ablehnen, aber keinen erzeugen.
-   Handoff- und Ergebnissignaturen folgen in eigenen Schritten. Erste Abhängigkeit:
+   Nach v0.1 sind auch **Handoffs Ed25519** (`HandoffSigner` nur im Orchestrator,
+   `HandoffVerifier` in Gateway, Ergebnisprüfung, Approval und Audit). Die
+   Ergebnissignatur folgt in einem eigenen Schritt. Erste Abhängigkeit:
    `cryptography`, in `requirements.txt` exakt gepinnt und mit Hashes.
 
 9. **Ergebnisvertrag** — das Ergebnis wird vom Worker signiert und bei der Annahme
@@ -204,11 +206,10 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
     Zulassung und Replay über denselben oder einen anderen Runner scheitern. Der Approval-
     Token selbst verlässt den Gateway-Pfad nicht, im Permit steht nur der Receipt-Hash.
 
-    Handoff-HMAC bleibt symmetrisch: ein Gateway mit dem Integritätsschlüssel könnte
-    technisch auch signieren. Die Unabhängigkeit ist in v0.1 deshalb eine getrennte
-    Runtime-Rolle/Instanz mit eigener API-Grenze, nicht eine asymmetrische
-    Verifikationsautorität. Eine solche Schlüsseltrennung wäre eine spätere
-    Kryptographie-/Deployment-Entscheidung.
+    In v0.1 war das Handoff-HMAC symmetrisch: ein Gateway mit dem Integritätsschlüssel
+    hätte technisch auch signieren können. **Nach v0.1 geschlossen:** Handoffs sind
+    Ed25519 (Handoff v2), das Gateway hält nur den `HandoffVerifier` und lehnt es ab,
+    mit dem Signer konstruiert zu werden.
 
 13. **Orchestrator** — Admission, Zuordnung, Dispatch. Deterministisch, fail closed, keine
     geteilte veränderliche Autorität. Er trifft Entscheidungen, er bestätigt sie nicht

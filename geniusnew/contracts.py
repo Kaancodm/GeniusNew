@@ -6,14 +6,22 @@ from dataclasses import dataclass
 import hashlib
 import hmac
 import json
+import re
 from typing import Any
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (Ed25519PrivateKey,
+                                                              Ed25519PublicKey)
 
 
 class ContractError(ValueError):
     """Raised whenever an untrusted contract cannot be accepted."""
 
 
-_VERSION = "geniusnew-handoff-v1"
+_VERSION = "geniusnew-handoff-v2"
+_SIGNING_LABEL = b"geniusnew/handoff-signing/ed25519/v1"
+_SIGNATURE = re.compile(r"\A[0-9a-f]{128}\Z")
 _PENDING = "PENDING_APPROVAL"
 _NOT_REQUIRED = "NOT_REQUIRED"
 _MAX_WIRE_BYTES = 16 * 1024
@@ -87,14 +95,79 @@ def canonical(value: Any) -> bytes:
         raise ContractError("value is not canonical JSON") from exc
 
 
-def _integrity_key(value: Any) -> bytes:
-    if type(value) is not bytes or len(value) < 32:
-        _fail("integrity_key must be at least 32 bytes")
+class HandoffVerifier:
+    """The public half of the handoff signer: it checks handoffs and issues none.
+
+    Everything that only has to *check* a handoff — the gateway, the result
+    verifier, the approval boundary, the audit role — is given this and nothing
+    else. It holds a 32-byte Ed25519 public key and has no signing method. With
+    HMAC each of them held the key that mints handoffs, so a gateway could issue
+    itself a handoff for any tool in the policy; that is the gap this closes.
+    """
+
+    def __init__(self, *, public_key: bytes) -> None:
+        if type(public_key) is not bytes or len(public_key) != 32:
+            _fail("public_key must be 32 bytes")
+        try:
+            self._key = Ed25519PublicKey.from_public_bytes(public_key)
+        except ValueError:
+            raise ContractError("public_key is not an Ed25519 public key") from None
+        self._public_key = public_key
+
+    @property
+    def public_key(self) -> bytes:
+        return self._public_key
+
+    def verifies(self, message: bytes, signature: bytes) -> bool:
+        try:
+            self._key.verify(signature, message)
+        except InvalidSignature:
+            return False
+        return True
+
+
+class HandoffSigner:
+    """The Orchestrierung role's minting key, and only the orchestrator's.
+
+    The signing key is Ed25519, derived from the handoff integrity key under its
+    own label, so the root secret stays the only secret to manage. What it signs
+    can be checked by a `HandoffVerifier` that never holds it.
+    """
+
+    def __init__(self, *, integrity_key: bytes) -> None:
+        if type(integrity_key) is not bytes or len(integrity_key) < 32:
+            _fail("integrity_key must be at least 32 bytes")
+        seed = hmac.new(integrity_key, _SIGNING_LABEL, hashlib.sha256).digest()
+        self._signing_key = Ed25519PrivateKey.from_private_bytes(seed)
+        self._verifier = HandoffVerifier(public_key=self._signing_key.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw))
+
+    def verifier(self) -> HandoffVerifier:
+        return self._verifier
+
+    def sign(self, message: bytes) -> bytes:
+        if type(message) is not bytes:
+            _fail("message must be bytes")
+        return self._signing_key.sign(message)
+
+
+def _signer(value: Any) -> HandoffSigner:
+    if not isinstance(value, HandoffSigner):
+        _fail("signer must be a HandoffSigner")
     return value
 
 
-def _signature(value: Any, integrity_key: bytes) -> str:
-    return hmac.new(integrity_key, canonical(value), hashlib.sha256).hexdigest()
+def _verifier(value: Any) -> HandoffVerifier:
+    """Accept the signer too, for callers that hold it anyway, and use its public half."""
+    if isinstance(value, HandoffSigner):
+        return value.verifier()
+    if not isinstance(value, HandoffVerifier):
+        _fail("verifier must be a HandoffVerifier")
+    return value
+
+
+def _signature(value: Any, signer: HandoffSigner) -> str:
+    return signer.sign(canonical(value)).hex()
 
 
 def _payload(value: Any) -> dict[str, str]:
@@ -294,12 +367,12 @@ def _wire_object(wire: Any) -> dict[str, Any]:
     return decode_wire(wire, keys=_HANDOFF_KEYS, noun="handoff")
 
 
-def _from_object(value: dict[str, Any], *, subject: str, job_id: str, policy: Policy, integrity_key: bytes, now: int, allow_pending: bool = False) -> Handoff:
+def _from_object(value: dict[str, Any], *, subject: str, job_id: str, policy: Policy, verifier: HandoffVerifier | HandoffSigner, now: int, allow_pending: bool = False) -> Handoff:
     if not isinstance(policy, Policy):
         _fail("policy is invalid")
     _string(job_id, "job_id")
     now = _integer(now, "now")
-    integrity_key = _integrity_key(integrity_key)
+    verifier = _verifier(verifier)
     grant = policy.grant_for(subject)
     for field in ("version", "job_id", "user_id", "orchestrator_id", "worker_agent_id", "tier", "sandbox_profile", "approval_state", "policy_version", "payload_sha256", "signature"):
         _string(value[field], field)
@@ -311,7 +384,8 @@ def _from_object(value: dict[str, Any], *, subject: str, job_id: str, policy: Po
     if not hmac.compare_digest(value["payload_sha256"], expected_hash):
         _fail("payload hash does not match payload")
     signed = {key: field_value for key, field_value in value.items() if key != "signature"}
-    if not hmac.compare_digest(value["signature"], _signature(signed, integrity_key)):
+    if not _SIGNATURE.match(value["signature"]) or not verifier.verifies(
+            canonical(signed), bytes.fromhex(value["signature"])):
         _fail("handoff signature is invalid")
     expected = {
         "version": _VERSION,
@@ -345,11 +419,11 @@ def _from_object(value: dict[str, Any], *, subject: str, job_id: str, policy: Po
     )
 
 
-def issue(request: Any, *, subject: str, job_id: str, policy: Policy, integrity_key: bytes, now: int) -> bytes:
+def issue(request: Any, *, subject: str, job_id: str, policy: Policy, signer: HandoffSigner, now: int) -> bytes:
     """Issue a new wire contract using only trusted policy data."""
     payload = _payload(request)
     now = _integer(now, "now")
-    integrity_key = _integrity_key(integrity_key)
+    signer = _signer(signer)
     if not isinstance(policy, Policy):
         _fail("policy is invalid")
     grant = policy.grant_for(subject)
@@ -370,26 +444,26 @@ def issue(request: Any, *, subject: str, job_id: str, policy: Policy, integrity_
         "payload": payload,
         "payload_sha256": hashlib.sha256(canonical(payload)).hexdigest(),
     }
-    body["signature"] = _signature(body, integrity_key)
+    body["signature"] = _signature(body, signer)
     wire = canonical(body)
     if len(wire) > _MAX_WIRE_BYTES:
         _fail("handoff wire must be a bounded, non-empty bytes value")
     return wire
 
 
-def validate(wire: Any, *, subject: str, job_id: str, policy: Policy, integrity_key: bytes, now: int) -> Handoff:
+def validate(wire: Any, *, subject: str, job_id: str, policy: Policy, verifier: HandoffVerifier | HandoffSigner, now: int) -> Handoff:
     """Deserialize, validate, and bind a handoff to the current trust context."""
     return _from_object(
         _wire_object(wire), subject=subject, job_id=job_id, policy=policy,
-        integrity_key=integrity_key, now=now,
+        verifier=verifier, now=now,
     )
 
 
-def validate_pending(wire: Any, *, subject: str, job_id: str, policy: Policy, integrity_key: bytes, now: int) -> Handoff:
+def validate_pending(wire: Any, *, subject: str, job_id: str, policy: Policy, verifier: HandoffVerifier | HandoffSigner, now: int) -> Handoff:
     """Validate a pending handoff at the server-side approval boundary only."""
     handoff = _from_object(
         _wire_object(wire), subject=subject, job_id=job_id, policy=policy,
-        integrity_key=integrity_key, now=now, allow_pending=True,
+        verifier=verifier, now=now, allow_pending=True,
     )
     if handoff.approval_state != _PENDING:
         _fail("handoff does not require approval")

@@ -1,9 +1,11 @@
 import hashlib
+import hmac
 import json
 from pathlib import Path
 import unittest
 
-from geniusnew.contracts import ContractError, Grant, Policy, canonical, issue, validate
+from geniusnew.contracts import (ContractError, Grant, HandoffSigner, HandoffVerifier, Policy,
+                                 canonical, issue, validate)
 
 
 class ContractsFixture:
@@ -15,7 +17,7 @@ class ContractsFixture:
     """
 
     def setUp(self):
-        self.key = b'phase-1-test-integrity-key-32bytes'
+        self.key = HandoffSigner(integrity_key=b'phase-1-test-integrity-key-32bytes')
         self.grant = Grant('subject-demo', 'user-demo', 'worker-demo', 'basic',
                            ('summarize',), 'isolated', False)
         self.policy = Policy('policy-v1', 'orchestrator-demo', 60,
@@ -25,11 +27,11 @@ class ContractsFixture:
     def issue(self, request=None, policy=None):
         return issue(self.request if request is None else request,
                      subject='subject-demo', job_id='job-demo',
-                     policy=policy or self.policy, integrity_key=self.key, now=100)
+                     policy=policy or self.policy, signer=self.key, now=100)
 
     def check(self, wire, **kw):
         args = dict(subject='subject-demo', job_id='job-demo',
-                    policy=self.policy, integrity_key=self.key, now=101)
+                    policy=self.policy, verifier=self.key, now=101)
         args.update(kw)
         return validate(wire, **args)
 
@@ -49,7 +51,7 @@ class ContractsTest(ContractsFixture, unittest.TestCase):
         self.assertEqual(body['payload_sha256'], hashlib.sha256(b'{"text":"Example text"}').hexdigest())
 
     def test_schema_describes_the_runtime_handoff(self):
-        schema_path = Path(__file__).parents[1] / 'schemas' / 'handoff-v1.schema.json'
+        schema_path = Path(__file__).parents[1] / 'schemas' / 'handoff-v2.schema.json'
         schema = json.loads(schema_path.read_text(encoding='utf-8'))
         body = json.loads(self.issue())
         self.assertEqual(set(schema['required']), set(body))
@@ -57,9 +59,9 @@ class ContractsTest(ContractsFixture, unittest.TestCase):
         self.assertEqual(schema['properties']['version']['const'], body['version'])
 
     def test_schema_identifier_does_not_depend_on_a_domain(self):
-        schema_path = Path(__file__).parents[1] / 'schemas' / 'handoff-v1.schema.json'
+        schema_path = Path(__file__).parents[1] / 'schemas' / 'handoff-v2.schema.json'
         schema = json.loads(schema_path.read_text(encoding='utf-8'))
-        self.assertEqual(schema['$id'], 'urn:geniusnew:schema:handoff:v1')
+        self.assertEqual(schema['$id'], 'urn:geniusnew:schema:handoff:v2')
         self.assertFalse(schema['$id'].startswith(('http://', 'https://')))
 
     def test_noncanonical_json_is_rejected_even_with_a_valid_signature(self):
@@ -79,7 +81,7 @@ class ContractsTest(ContractsFixture, unittest.TestCase):
         for value in ({}, {'text': 1}, {'text': None}, {'text': ''}, [], None):
             with self.subTest(value=value), self.assertRaises(ContractError):
                 issue(value, subject='subject-demo', job_id='job-demo', policy=self.policy,
-                      integrity_key=self.key, now=100)
+                      signer=self.key, now=100)
 
     def test_all_required_fields_and_unknown_fields(self):
         body = json.loads(self.issue())
@@ -129,7 +131,7 @@ class ContractsTest(ContractsFixture, unittest.TestCase):
                 self.check(self.issue(), **args)
         with self.assertRaises(ContractError):
             issue(self.request, subject='unknown', job_id='job-demo', policy=self.policy,
-                  integrity_key=self.key, now=100)
+                  signer=self.key, now=100)
 
     def test_unicode_subject_is_exactly_bound(self):
         unicode_grant = Grant('subjekt-ü', 'user-ü', 'worker-ü', 'basic',
@@ -137,13 +139,13 @@ class ContractsTest(ContractsFixture, unittest.TestCase):
         policy = Policy('policy-v1', 'orchestrator-demo', 60,
                         ('summarize',), ('isolated',), (unicode_grant,))
         wire = issue(self.request, subject='subjekt-ü', job_id='job-demo',
-                     policy=policy, integrity_key=self.key, now=100)
+                     policy=policy, signer=self.key, now=100)
         result = validate(wire, subject='subjekt-ü', job_id='job-demo',
-                          policy=policy, integrity_key=self.key, now=101)
+                          policy=policy, verifier=self.key, now=101)
         self.assertEqual(result.user_id, 'user-ü')
         with self.assertRaises(ContractError):
             issue(self.request, subject='subjekt-u\u0308', job_id='job-demo',
-                  policy=policy, integrity_key=self.key, now=100)
+                  policy=policy, signer=self.key, now=100)
 
     def test_unicode_grants_do_not_break_other_subjects(self):
         unicode_grant = Grant('subjekt-ü', 'user-ü', 'worker-ü', 'basic',
@@ -152,7 +154,7 @@ class ContractsTest(ContractsFixture, unittest.TestCase):
                         ('summarize',), ('isolated',), (unicode_grant, self.grant))
         self.assertEqual(
             validate(self.issue(policy=policy), subject='subject-demo', job_id='job-demo',
-                     policy=policy, integrity_key=self.key, now=101).user_id,
+                     policy=policy, verifier=self.key, now=101).user_id,
             'user-demo',
         )
 
@@ -182,7 +184,7 @@ class ContractsTest(ContractsFixture, unittest.TestCase):
         with self.assertRaises(ContractError):
             self.check(json.dumps(body).encode())
         with self.assertRaises(ContractError):
-            self.check(self.issue(), integrity_key=b'x' * 32)
+            self.check(self.issue(), verifier=HandoffSigner(integrity_key=b'x' * 32))
 
     def test_parser_rejects_ambiguous_or_nonserialized_input(self):
         for wire in (self.check(self.issue()), {}, 'text', b'{}', b'null', b'[]',
@@ -235,11 +237,64 @@ class UncoveredRefusalsTest(ContractsFixture, unittest.TestCase):
                   ('summarize', 'summarize'), 'isolated', False)
 
     def test_a_short_integrity_key_is_refused(self):
-        for key in (b'', b'short', b'x' * 31):
-            with self.subTest(length=len(key)), self.assertRaises(ContractError):
-                self.issue()  # sanity: the good key still works
+        self.issue()  # sanity: the good key still works
+        for key in (b'', b'short', b'x' * 31, 'x' * 32, None):
+            with self.subTest(key=repr(key)[:12]), self.assertRaisesRegex(
+                    ContractError, 'integrity_key'):
+                HandoffSigner(integrity_key=key)
+
+    def test_only_a_signer_can_issue(self):
+        """Raw key bytes and the public half are both refused at issue time."""
+        for signer in (b'phase-1-test-integrity-key-32bytes', self.key.verifier(), None):
+            with self.subTest(signer=type(signer)), self.assertRaisesRegex(
+                    ContractError, 'signer must be a HandoffSigner'):
                 issue(self.request, subject='subject-demo', job_id='job-demo',
-                      policy=self.policy, integrity_key=key, now=100)
+                      policy=self.policy, signer=signer, now=100)
+
+    def test_the_public_half_verifies_and_cannot_sign(self):
+        verifier = self.key.verifier()
+        self.assertEqual(self.check(self.issue(), verifier=verifier).user_id, 'user-demo')
+        self.assertFalse(hasattr(verifier, 'sign'))
+        self.assertEqual(len(verifier.public_key), 32)
+        self.assertNotIn(b'phase-1-test-integrity-key-32bytes', vars(verifier).values())
+        for key in (b'', b'x' * 31, b'x' * 33, 'x' * 32, None):
+            with self.subTest(key=repr(key)[:12]), self.assertRaisesRegex(
+                    ContractError, 'public_key must be 32 bytes'):
+                HandoffVerifier(public_key=key)
+        for bad in (b'phase-1-test-integrity-key-32bytes', None, 'verifier'):
+            with self.subTest(verifier=type(bad)), self.assertRaisesRegex(
+                    ContractError, 'verifier must be a HandoffVerifier'):
+                self.check(self.issue(), verifier=bad)
+
+    def test_a_handoff_signed_with_hmac_is_refused(self):
+        """Version 1 was HMAC. A v1-shaped handoff, correctly MAC'd, is not a v2 one."""
+        body = json.loads(self.issue())
+        del body['signature']
+        body['signature'] = hmac.new(b'phase-1-test-integrity-key-32bytes', canonical(body),
+                                     hashlib.sha256).hexdigest()
+        with self.assertRaisesRegex(ContractError, 'handoff signature is invalid'):
+            self.check(canonical(body))
+        body['version'] = 'geniusnew-handoff-v1'
+        with self.assertRaises(ContractError):
+            self.check(canonical(body))
+
+    def test_a_signature_does_not_transfer_to_another_handoff(self):
+        first = json.loads(self.issue())
+        second = json.loads(issue({'text': 'other text'}, subject='subject-demo',
+                                  job_id='job-demo', policy=self.policy,
+                                  signer=self.key, now=100))
+        second['signature'] = first['signature']
+        with self.assertRaisesRegex(ContractError, 'handoff signature is invalid'):
+            self.check(canonical(second))
+
+    def test_a_malformed_signature_is_refused_before_it_is_decoded(self):
+        body = json.loads(self.issue())
+        for signature in ('0' * 64, 'zz' * 64, body['signature'].upper(), body['signature'][:-2],
+                          body['signature'] + '00'):
+            with self.subTest(signature=signature[:8]):
+                body['signature'] = signature
+                with self.assertRaisesRegex(ContractError, 'handoff signature is invalid'):
+                    self.check(canonical(body))
 
     def test_requires_approval_must_be_a_boolean(self):
         for value in (1, 0, 'true', None, []):
@@ -312,7 +367,7 @@ class UncoveredRefusalsTest(ContractsFixture, unittest.TestCase):
                     self.check(wire, policy=policy)
                 with self.assertRaises(ContractError):
                     issue(self.request, subject='subject-demo', job_id='job-demo',
-                          policy=policy, integrity_key=self.key, now=100)
+                          policy=policy, signer=self.key, now=100)
 
 
 if __name__ == '__main__':

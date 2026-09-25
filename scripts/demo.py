@@ -44,7 +44,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from geniusnew.audit_chain import sign_head, verify  # noqa: E402
-from geniusnew.contracts import ContractError, Grant, Policy, validate  # noqa: E402
+from geniusnew.contracts import ContractError, Grant, Policy, issue, validate  # noqa: E402
 from geniusnew.http_entry import serve  # noqa: E402
 from geniusnew.results import WorkerAuthority, produce  # noqa: E402
 from geniusnew.verifier import ResultVerifier  # noqa: E402
@@ -193,7 +193,7 @@ def build_attacks(service, url, api_key, request_text, records, head):
     spare = dispatch("job-demo-spare")
     handoff = validate(spare.handoff_wire, subject="subject-demo",
                        job_id="job-demo-spare", policy=policy,
-                       integrity_key=keys.integrity_key, now=NOW)
+                       verifier=service.handoff_verifier, now=NOW)
     authority = WorkerAuthority(result_key=keys.result_key,
                                 integrity_key=keys.integrity_key)
 
@@ -224,7 +224,7 @@ def build_attacks(service, url, api_key, request_text, records, head):
                       authority=service.audit, anchor=service.anchor)
 
     fresh = ResultVerifier(verifier_id="verifier-2",
-                           integrity_key=keys.integrity_key,
+                           handoff_verifier=service.handoff_verifier,
                            result_key=keys.result_key)
 
     return [
@@ -250,6 +250,9 @@ def build_attacks(service, url, api_key, request_text, records, head):
         ("Sign results with the handoff key",
          lambda: WorkerAuthority(result_key=keys.integrity_key,
                                  integrity_key=keys.integrity_key)),
+        ("Mint a handoff with the gateway's key",
+         lambda: issue({"text": "x"}, subject="subject-demo", job_id="job-demo-minted",
+                       policy=policy, signer=service.gateway._handoff_verifier, now=NOW)),
         ("Swap the payload after validation", swap_payload),
         ("Dispatch without a gateway permit",
          lambda: service.orchestrator._workers["worker-demo"].dispatch(

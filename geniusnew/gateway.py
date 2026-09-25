@@ -20,7 +20,8 @@ from threading import Lock
 from typing import Any
 
 from .approvals import ApprovalStore, create_scope
-from .contracts import ContractError, Handoff, Policy, validate, validate_pending
+from .contracts import (ContractError, Handoff, HandoffVerifier, Policy, validate,
+                        validate_pending)
 from .results import handoff_digest
 
 _GATEWAY_ID = re.compile(r"\A[a-z0-9][a-z0-9-]{0,62}\Z")
@@ -70,9 +71,11 @@ def _gateway_id(value: Any) -> str:
     return value
 
 
-def _integrity_key(value: Any) -> bytes:
-    if type(value) is not bytes or len(value) < 32:
-        _fail("integrity_key must be at least 32 bytes")
+def _handoff_verifier(value: Any) -> HandoffVerifier:
+    # Exactly the verifier. Handed the signer, the gateway could mint the
+    # handoffs it is there to check, which is what Ed25519 took away.
+    if type(value) is not HandoffVerifier:
+        _fail("handoff_verifier must be a HandoffVerifier")
     return value
 
 
@@ -151,10 +154,10 @@ class GatewayRejected(ContractError):
 class Gateway:
     """Independent validation and approval consumption before dispatch."""
 
-    def __init__(self, *, gateway_id: str, integrity_key: bytes,
+    def __init__(self, *, gateway_id: str, handoff_verifier: HandoffVerifier,
                  approval_store: ApprovalStore) -> None:
         self._gateway_id = _gateway_id(gateway_id)
-        self._integrity_key = _integrity_key(integrity_key)
+        self._handoff_verifier = _handoff_verifier(handoff_verifier)
         if not isinstance(approval_store, ApprovalStore):
             _fail("approval_store must be an ApprovalStore")
         self._approvals = approval_store
@@ -190,7 +193,7 @@ class Gateway:
             try:
                 handoff = validate_pending(
                     wire, subject=subject, job_id=job_id, policy=policy,
-                    integrity_key=self._integrity_key, now=now,
+                    verifier=self._handoff_verifier, now=now,
                 )
             except ContractError as refusal:
                 raise GatewayRejected(
@@ -200,7 +203,7 @@ class Gateway:
             try:
                 scope = create_scope(
                     wire, subject=subject, job_id=job_id, policy=policy,
-                    integrity_key=self._integrity_key, now=now,
+                    verifier=self._handoff_verifier, now=now,
                 )
                 receipt = self._approvals.consume(approval_token, scope, now=now)
             except ContractError as refusal:
@@ -219,7 +222,7 @@ class Gateway:
             try:
                 handoff = validate(
                     wire, subject=subject, job_id=job_id, policy=policy,
-                    integrity_key=self._integrity_key, now=now,
+                    verifier=self._handoff_verifier, now=now,
                 )
             except ContractError as refusal:
                 raise GatewayRejected(

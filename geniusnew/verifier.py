@@ -53,7 +53,7 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Any
 
-from .contracts import ContractError, Policy, validate, validate_pending
+from .contracts import ContractError, HandoffVerifier, Policy, validate, validate_pending
 from .results import Result, WorkerAuthority, accept as accept_result, handoff_digest
 
 _VERIFIER_ID = re.compile(r"\A[a-z0-9][a-z0-9-]{0,62}\Z")
@@ -156,19 +156,18 @@ class Acceptance:
 class ResultVerifier:
     """Takes results for jobs it did not request and did not run."""
 
-    def __init__(self, *, verifier_id: str, integrity_key: bytes,
+    def __init__(self, *, verifier_id: str, handoff_verifier: HandoffVerifier,
                  result_key: bytes) -> None:
         if type(verifier_id) is not str or not _VERIFIER_ID.match(verifier_id):
             _fail("verifier_id must be a lowercase identifier of at most 63 characters")
-        if type(integrity_key) is not bytes or len(integrity_key) < 32:
-            _fail("integrity_key must be at least 32 bytes")
-        # Passing the integrity key here is the defence `results.py` documents:
-        # a deployment that derived its keys some other way gets an accidental
-        # reuse refused. `keys.derive_keys` is what makes them differ.
-        self._authority = WorkerAuthority(result_key=result_key,
-                                          integrity_key=integrity_key)
+        # Exactly the public half: this checks handoffs, it never issues one.
+        if type(handoff_verifier) is not HandoffVerifier:
+            _fail("handoff_verifier must be a HandoffVerifier")
+        # It no longer holds the handoff integrity key, so it cannot compare the
+        # result key against it. `keys.derive_keys` is what makes them differ.
+        self._authority = WorkerAuthority(result_key=result_key)
         self._verifier_id = verifier_id
-        self._integrity_key = integrity_key
+        self._handoff_verifier = handoff_verifier
         self._accepted: set[str] = set()
         self._lock = Lock()
 
@@ -247,7 +246,7 @@ class ResultVerifier:
         revalidate = validate_pending if pending else validate
         try:
             return revalidate(handoff_wire, subject=subject, job_id=job_id,
-                              policy=policy, integrity_key=self._integrity_key,
+                              policy=policy, verifier=self._handoff_verifier,
                               now=now)
         except ContractError as refusal:
             raise Rejected(str(refusal), reason_code="HANDOFF_NOT_VALID",

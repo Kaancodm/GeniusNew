@@ -56,7 +56,7 @@ Der Befehl schickt einen Job über HTTP durch alle Schichten und greift ihn dana
 dreizehnmal an. Die letzte Zeile muss lauten:
 
 ```
-PASS — job succeeded over HTTP, chain verified against the anchored head, 13/13 attacks refused.
+PASS — job succeeded over HTTP, chain verified against the anchored head, 14/14 attacks refused.
 ```
 
 und der Exit-Code ist `0`. Alles andere ist ein Fehlschlag: das Skript sagt dann, welche
@@ -78,8 +78,8 @@ kein Schlüsselmaterial. `tests/test_demo.py` prüft das mit Kanarienwerten.
 **Was `PASS` nicht bedeutet:** keine Produktionsfreigabe und kein Sicherheitsnachweis
 für einen echten Betrieb. Außer Worker und Audit-Anker sind die Instanzen getrennte
 Objekte in einem Prozess; die Worker-Isolation ist eine Prozessgrenze, keine microVM;
-der Anker wird vom Dienst gestartet und hält nur Speicher; Handoff- und
-Ergebnissignaturen sind noch HMAC und damit symmetrisch (Audit-Köpfe sind Ed25519). Die
+der Anker wird vom Dienst gestartet und hält nur Speicher; Ergebnissignaturen sind
+noch HMAC und damit symmetrisch (Handoffs und Audit-Köpfe sind Ed25519). Die
 bekannten Grenzen stehen einzeln in `SECURITY.md`.
 
 **Andere Betriebssysteme:** Die Worker-Isolation braucht POSIX-Ressourcenlimits. Unter
@@ -107,9 +107,9 @@ Siehe:
 - `docs/MIGRATION-MATRIX.md` — kanonisches Import-Gate
 - `docs/IMPORT-MANIFEST.md` — historische erste Inventur
 - `SECURITY.md`
-- `docs/HANDOFF-V1.md`
+- `docs/HANDOFF-V2.md`
 - `docs/APPROVAL-V1.md`
-- `schemas/handoff-v1.schema.json`
+- `schemas/handoff-v2.schema.json`
 - `geniusnew/contracts.py`
 - `geniusnew/approvals.py`
 - `geniusnew/workers.py`

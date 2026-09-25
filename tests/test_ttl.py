@@ -35,7 +35,7 @@ is what found the gap in the first place.
 import unittest
 
 from geniusnew.approvals import ApprovalStore
-from geniusnew.contracts import ContractError, Grant, Policy, issue, validate
+from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, issue, validate
 from geniusnew.gateway import DispatchPermit, Gateway
 from geniusnew.isolation import IsolationLimits
 from geniusnew.keys import derive_keys
@@ -70,7 +70,7 @@ class Fixture:
         self.authority = WorkerAuthority(result_key=self.keys.result_key,
                                          integrity_key=self.keys.integrity_key)
         self.gateway = Gateway(gateway_id='gateway-1',
-                               integrity_key=self.keys.integrity_key,
+                               handoff_verifier=HandoffSigner(integrity_key=self.keys.integrity_key).verifier(),
                                approval_store=ApprovalStore())
 
     def policy_for(self, ttl=60):
@@ -83,7 +83,7 @@ class Fixture:
         policy = self.policy_for(ttl)
         return policy, issue({'text': 'the quick brown fox'}, subject='subject-demo',
                              job_id='job-demo', policy=policy,
-                             integrity_key=self.keys.integrity_key, now=now)
+                             signer=HandoffSigner(integrity_key=self.keys.integrity_key), now=now)
 
     def admit(self, *, ttl=60, now=T, admitted_at=None):
         policy, wire = self.issue(ttl=ttl, now=now)
@@ -153,7 +153,7 @@ class TTLControlPointTest(Fixture, unittest.TestCase):
         """
         policy, wire = self.issue(ttl=60)
         handoff = validate(wire, subject='subject-demo', job_id='job-demo',
-                           policy=policy, integrity_key=self.keys.integrity_key,
+                           policy=policy, verifier=HandoffSigner(integrity_key=self.keys.integrity_key),
                            now=T + 1)
         with self.assertRaisesRegex(ContractError, 'after its handoff expired'):
             produce(None, handoff=handoff, status='FAILED',
