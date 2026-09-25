@@ -2,7 +2,7 @@ import hashlib
 import unittest
 
 from geniusnew.approvals import ApprovalStore
-from geniusnew.contracts import ContractError, Grant, Policy, issue, validate
+from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, issue, validate
 from geniusnew.gateway import Gateway
 from geniusnew.results import WorkerAuthority, accept
 from geniusnew.workers import (DeterministicSummarizer, Worker, WorkerRunner)
@@ -46,22 +46,22 @@ class MutatingWorker(Worker):
 
 class WorkerBoundaryTest(unittest.TestCase):
     def setUp(self):
-        self.key = b'phase-2-test-integrity-key-32bytes'
+        self.key = HandoffSigner(integrity_key=b'phase-2-test-integrity-key-32bytes')
         self.authority = WorkerAuthority(result_key=b'a-separate-result-key-of-32bytes!')
         grant = Grant('subject-demo', 'user-demo', 'worker-demo', 'basic',
                       ('summarize',), 'isolated', False)
         self.policy = Policy('policy-v1', 'orchestrator-demo', 60,
                              ('summarize',), ('isolated',), (grant,))
-        self.gateway = Gateway(gateway_id='gateway-test', integrity_key=self.key,
+        self.gateway = Gateway(gateway_id='gateway-test', handoff_verifier=self.key.verifier(),
                                approval_store=ApprovalStore())
         self.handoff = self.issue_handoff()
         self.runner = WorkerRunner(DeterministicSummarizer(), authority=self.authority)
 
     def issue_handoff(self, text='the quick brown fox', job_id='job-demo', now=100):
         wire = issue({'text': text}, subject='subject-demo', job_id=job_id,
-                     policy=self.policy, integrity_key=self.key, now=now)
+                     policy=self.policy, signer=self.key, now=now)
         return validate(wire, subject='subject-demo', job_id=job_id,
-                        policy=self.policy, integrity_key=self.key, now=now + 1)
+                        policy=self.policy, verifier=self.key, now=now + 1)
 
     def permit_for(self, handoff=None, *, admitted_at=None):
         handoff = handoff or self.handoff

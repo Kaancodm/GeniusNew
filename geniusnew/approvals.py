@@ -9,7 +9,8 @@ import secrets
 from threading import RLock
 from typing import Callable
 
-from .contracts import ContractError, Handoff, canonical, validate_pending
+from .contracts import (ContractError, Handoff, HandoffSigner, HandoffVerifier, canonical,
+                        validate_pending)
 
 
 _GRANTED = "GRANTED"
@@ -129,11 +130,11 @@ def _scope_matches(left: ApprovalScope, right: ApprovalScope) -> bool:
 
 
 def create_scope(wire: bytes, *, subject: str, job_id: str, policy: object,
-                 integrity_key: bytes, now: int) -> ApprovalScope:
+                 verifier: HandoffVerifier | HandoffSigner, now: int) -> ApprovalScope:
     """Create a scope only from a currently valid, signed pending handoff."""
     handoff: Handoff = validate_pending(
         wire, subject=subject, job_id=job_id, policy=policy,
-        integrity_key=integrity_key, now=now,
+        verifier=verifier, now=now,
     )
     return ApprovalScope(
         origin=_PROVENANCE,

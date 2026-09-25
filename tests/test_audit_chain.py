@@ -3,7 +3,7 @@ import unittest
 from geniusnew.audit import AuditAuthority, event_from_handoff
 from geniusnew.audit_chain import (AuditAnchor, AuditChain, AuditHead, AuditRecord, sign_head,
                                    verify)
-from geniusnew.contracts import ContractError, Grant, Policy, issue, validate
+from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, issue, validate
 
 
 class ChainFixture:
@@ -15,7 +15,7 @@ class ChainFixture:
     """
 
     def setUp(self):
-        self.key = b'phase-2-test-integrity-key-32bytes'
+        self.key = HandoffSigner(integrity_key=b'phase-2-test-integrity-key-32bytes')
         self.authority = AuditAuthority(audit_key=b'a-separate-audit-key-of-32-bytes!')
         self.other = AuditAuthority(audit_key=b'yet-another-audit-key-of-32bytes!')
         self.actor = self.authority.actor('gateway', 'gw-1')
@@ -29,9 +29,9 @@ class ChainFixture:
 
     def event(self, step):
         wire = issue({'text': f'job {step}'}, subject='subject-demo', job_id=f'job-{step}',
-                     policy=self.policy, integrity_key=self.key, now=100)
+                     policy=self.policy, signer=self.key, now=100)
         handoff = validate(wire, subject='subject-demo', job_id=f'job-{step}',
-                           policy=self.policy, integrity_key=self.key, now=101)
+                           policy=self.policy, verifier=self.key, now=101)
         return event_from_handoff(handoff, trace_id=f'trace-{step}', actor=self.actor,
                                   action='HANDOFF_ADMITTED', decision='ALLOWED',
                                   reason_code='POLICY_SATISFIED', occurred_at=101 + step)
