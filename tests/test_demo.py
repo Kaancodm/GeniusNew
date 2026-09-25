@@ -84,9 +84,9 @@ class DemoTest(unittest.TestCase):
     def test_every_attack_is_refused(self):
         """The half that matters. A pipeline printing success proves nothing."""
         _, output = run()
-        self.assertEqual(output.count("[ok]"), 15, output)
+        self.assertEqual(output.count("[ok]"), 16, output)
         self.assertNotIn("[!!]", output)
-        self.assertIn("15/15 attacks refused", output)
+        self.assertIn("16/16 attacks refused", output)
 
     def test_each_attack_is_refused_by_the_check_it_targets(self):
         """Refused is not enough — it has to be refused by the right check.
@@ -108,6 +108,7 @@ class DemoTest(unittest.TestCase):
             "Accept the same result twice": "already has an accepted result",
             "Sign results with the handoff key": "must not be the handoff integrity key",
             "Mint a handoff with the gateway's key": "signer must be a HandoffSigner",
+            "Sign a result with the verifier's key": "authority must be a WorkerAuthority",
             "Swap the payload after validation": "payload no longer matches",
             "Dispatch without a gateway permit": "requires a gateway-minted",
             "Truncate the chain, keep the old head": "signed head claims",

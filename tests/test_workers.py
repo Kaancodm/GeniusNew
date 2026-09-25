@@ -76,7 +76,7 @@ class WorkerBoundaryTest(unittest.TestCase):
 
     def taken(self, wire, *, handoff=None, now=120):
         return accept(wire, handoff=handoff or self.handoff,
-                      authority=self.authority, now=now)
+                      verifier=self.authority, now=now)
 
     # --- the reference worker ----------------------------------------------
 

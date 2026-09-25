@@ -26,7 +26,7 @@ the payload, and fails if any of them reaches this output.
 ## The second half is the point
 
 Any pipeline can print success. The refusals are what the contracts are for, so
-the demo performs fifteen attacks and requires every one to be refused. Seven
+the demo performs sixteen attacks and requires every one to be refused. Seven
 were real holes at some point — found by review, by adversarial probing, and one
 by wiring two finished components together and discovering they did not fit.
 
@@ -232,7 +232,7 @@ def post(url: str, api_key: bytes, payload: dict) -> tuple[int, dict]:
 
 
 def build_attacks(service, url, api_key, request_text, records, head, restart):
-    """Fifteen attempts, each refused by a different check.
+    """Sixteen attempts, each refused by a different check.
 
     Four go in over HTTP, because the entrance is the only part a stranger can
     reach. The rest hold the objects an insider would have.
@@ -291,7 +291,7 @@ def build_attacks(service, url, api_key, request_text, records, head, restart):
 
     fresh = ResultVerifier(verifier_id="verifier-2",
                            handoff_verifier=service.handoff_verifier,
-                           result_key=keys.result_key)
+                           worker_verifier=authority.verifier())
 
     return [
         # --- what a stranger at the socket can try ---------------------------
@@ -319,6 +319,10 @@ def build_attacks(service, url, api_key, request_text, records, head, restart):
         ("Mint a handoff with the gateway's key",
          lambda: issue({"text": "x"}, subject="subject-demo", job_id="job-demo-minted",
                        policy=policy, signer=service.gateway._handoff_verifier, now=NOW)),
+        ("Sign a result with the verifier's key",
+         lambda: produce({"text": "x"}, handoff=handoff, status="SUCCEEDED",
+                         reason_code="WORK_COMPLETED",
+                         authority=service.verifier._worker_verifier, now=NOW)),
         ("Swap the payload after validation", swap_payload),
         ("Dispatch without a gateway permit",
          lambda: service.orchestrator._workers["worker-demo"].dispatch(

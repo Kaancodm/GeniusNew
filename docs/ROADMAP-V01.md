@@ -141,8 +141,9 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    Anker-Prozess bekommt nur diesen. Damit ist die Schlüsselfrage dieses Schritts für die
    Kette gelöst; der Anker kann einen gefälschten Kopf ablehnen, aber keinen erzeugen.
    Nach v0.1 sind auch **Handoffs Ed25519** (`HandoffSigner` nur im Orchestrator,
-   `HandoffVerifier` in Gateway, Ergebnisprüfung, Approval und Audit). Die
-   Ergebnissignatur folgt in einem eigenen Schritt. Erste Abhängigkeit:
+   `HandoffVerifier` in Gateway, Ergebnisprüfung, Approval und Audit) und **Ergebnisse
+   Ed25519** (`WorkerAuthority` signiert, `WorkerVerifier` in der Ergebnisprüfung). Damit
+   gibt es keine HMAC-Signatur mehr. Erste Abhängigkeit:
    `cryptography`, in `requirements.txt` exakt gepinnt und mit Hashes.
 
 9. **Ergebnisvertrag** — das Ergebnis wird vom Worker signiert und bei der Annahme
@@ -161,8 +162,9 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    Offen bleibt, was kein Vertrag lösen kann: die Annahme ist **nicht einmalig**. Ein
    Vertrag hält keinen Zustand; dasselbe Ergebnis zweimal anzunehmen verhindert erst die
    annehmende Instanz aus Schritt 14, so wie `approvals.py` es für Approvals tut. Ein
-   Test hält diese Grenze offen fest. Ebenso bleibt HMAC symmetrisch: die von §8
-   geforderte Unabhängigkeit ist hier organisatorisch, nicht kryptografisch.
+   Test hält diese Grenze offen fest. In v0.1 blieb zudem HMAC symmetrisch; nach v0.1
+   ist die Ergebnissignatur Ed25519 und die von §8 geforderte Unabhängigkeit damit
+   kryptografisch.
 
 10. **Worker-Schnittstelle** plus ein deterministischer Trivial-Worker als Referenz.
 
@@ -374,11 +376,10 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
     Instanz mit derselben Kennung nimmt dasselbe Ergebnis erneut an. Der Anspruch lautet
     deshalb „eine Annahme pro Handoff **pro Instanz**", und ein Test hält das fest.
 
-    **Offen bleibt die Symmetrie.** Das Ergebnis-HMAC ist symmetrisch — wer prüfen kann,
-    kann signieren. Die Unabhängigkeit ist hier eine getrennte Instanz mit eigener
-    API-Grenze, keine kryptografische; ein Test hält diese Grenze offen fest, statt sie
-    wegzubehaupten. Eine asymmetrische Ergebnissignatur ist die Abhängigkeitsentscheidung
-    aus Schritt 8 und änderte nur den Konstruktor dieser Datei.
+    **In v0.1 offen, danach geschlossen: die Symmetrie.** Das Ergebnis-HMAC war
+    symmetrisch — wer prüfen konnte, konnte signieren; ein Test hielt das offen fest.
+    Nach v0.1 ist die Ergebnissignatur Ed25519, die Instanz hält nur den
+    `WorkerVerifier`, und wie vorhergesagt änderte sich nur ihr Konstruktor.
 
     **Offen bleibt die Approval-Evidenz.** Ein approval-pflichtiger Wire trägt dauerhaft
     `PENDING_APPROVAL` — das Konsumieren schreibt ihn nicht um —, also kann diese Instanz
@@ -542,7 +543,7 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
     die nicht scheitern kann, beweist nichts.
 
     Die zweite Hälfte ist der eigentliche Punkt: zwölf Manipulationsversuche (heute
-    fünfzehn, siehe unten), die alle
+    sechzehn, siehe unten), die alle
     abgelehnt werden müssen. Sieben davon waren einmal ein echtes Loch — aus Review, aus
     eigenem Probing, und eines aus dem Zusammenstecken zweier fertiger Komponenten.
 
@@ -560,11 +561,12 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
     Ausgabe eines Befehls — bis auf die Prozessgrenze zwischen den Instanzen, die eine
     Deployment-Frage bleibt.
 
-    Aus fünf Angriffen sind fünfzehn geworden: vier davon gehen über den Socket, weil der
+    Aus fünf Angriffen sind sechzehn geworden: vier davon gehen über den Socket, weil der
     Eingang das Einzige ist, was ein Fremder erreicht — ein nicht registrierter Schlüssel,
     ein `tier` im Body, eine selbstgewählte Job-Kennung, eine Tür, die es nicht gibt. Die
-    übrigen elf halten die Objekte, die ein Insider hätte; einer davon versucht, mit dem
-    Prüfschlüssel des Gateways einen Handoff zu prägen, und die letzten beiden sind der
+    übrigen zwölf halten die Objekte, die ein Insider hätte; zwei davon versuchen, mit
+    einem Prüfschlüssel zu signieren — einen Handoff mit dem des Gateways, ein Ergebnis
+    mit dem der Ergebnisprüfung —, und die letzten beiden sind der
     Schreiber selbst, der den Anker zurückzusetzen versucht — einmal aus dem eigenen
     Speicher, einmal durch einen Neustart des Dienstes (Schritt 8).
 
@@ -614,9 +616,9 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
     die tatsächlich verwendete Umgebung und die Grenzen des Nachweises fest.
 
     Der Nachweis deckt laut Protokoll keine Demo mit anderer Angriffszahl ab. Die Änderung
-    auf fünfzehn Angriffe (Schritt 8, Lebenszyklus des Ankers, zusammen mit dem
-    Handoff-Angriff aus der Ed25519-Umstellung) hat deshalb einen erneuten
-    Durchlauf nach denselben Kriterien, der im Protokoll steht. Seitdem führt die CI
+    auf sechzehn Angriffe (Schritt 8, Lebenszyklus des Ankers, zusammen mit den
+    Signaturangriffen aus der Ed25519-Umstellung) braucht deshalb einen erneuten
+    Durchlauf nach denselben Kriterien; er steht noch aus. Bis dahin führt die CI
     denselben Quickstart bei jedem Push aus einer frischen Kopie aus (Schritt 19).
 
 21. **Tag `v0.1`** auf einem grünen, verifizierten Commit.

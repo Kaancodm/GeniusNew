@@ -55,10 +55,10 @@ python3 -m pip install --require-hashes -r requirements.txt
 ```
 
 Der Befehl schickt einen Job über HTTP durch alle Schichten und greift ihn danach
-fünfzehnmal an. Die letzte Zeile muss lauten:
+sechzehnmal an. Die letzte Zeile muss lauten:
 
 ```
-PASS — job succeeded over HTTP, chain verified against the anchored head, 15/15 attacks refused.
+PASS — job succeeded over HTTP, chain verified against the anchored head, 16/16 attacks refused.
 ```
 
 und der Exit-Code ist `0`. Alles andere ist ein Fehlschlag: das Skript sagt dann, welche
@@ -72,7 +72,7 @@ Was die Ausgabe zeigt, in der Reihenfolge der nummerierten Blöcke:
 | `[2]`–`[3]` | Job geht über einen echten Socket hinein; die Identität kommt aus dem API-Key, nicht aus dem Request |
 | `[4]` | Audit-Chain mit vier Einträgen von drei Instanzen: `orchestrator`, `gateway`, `monitor` |
 | `[5]` | Kette verifiziert gegen einen signierten Kopf, festgelegt bei einem Anker in eigenem Prozess, den nicht der Dienst startet |
-| `[6]` | Fünfzehn Manipulationsversuche, jeder muss mit `[ok]` abgelehnt werden |
+| `[6]` | Sechzehn Manipulationsversuche, jeder muss mit `[ok]` abgelehnt werden |
 
 Die Ausgabe enthält bewusst nur Digests und Kennungen — keine Payload, kein Ergebnistext,
 kein Schlüsselmaterial. `tests/test_demo.py` prüft das mit Kanarienwerten.
@@ -80,9 +80,9 @@ kein Schlüsselmaterial. `tests/test_demo.py` prüft das mit Kanarienwerten.
 **Was `PASS` nicht bedeutet:** keine Produktionsfreigabe und kein Sicherheitsnachweis
 für einen echten Betrieb. Außer Worker und Audit-Anker sind die Instanzen getrennte
 Objekte in einem Prozess; die Worker-Isolation ist eine Prozessgrenze, keine microVM;
-der Anker läuft unter demselben Betriebssystem-Nutzer und hält nur Speicher;
-Ergebnissignaturen sind noch HMAC und damit symmetrisch (Handoffs und Audit-Köpfe sind
-Ed25519). Die bekannten Grenzen stehen einzeln in `SECURITY.md`.
+der Anker läuft unter demselben Betriebssystem-Nutzer und hält nur Speicher; alle
+Signaturen (Handoff, Ergebnis, Audit-Kopf) sind Ed25519, aber alle Schlüssel hängen an
+einem Root-Secret. Die bekannten Grenzen stehen einzeln in `SECURITY.md`.
 
 ### Windows: über WSL
 
@@ -129,8 +129,9 @@ gestoppt (`anchor_process.start`); der Dienst hält nur seinen Socket-Pfad. Ob u
 Anker persistiert, ist eine eigene, offene Entscheidung
 (`docs/ADR-002-anchor-persistence.md`). Schritt 20 (technischer Quickstart-Review) ist
 nach den vom Projektverantwortlichen angepassten Abnahmekriterien abgeschlossen; der
-geprüfte Commit, die Umgebung, das Ergebnis und der erneute Durchlauf nach der Änderung
-auf fünfzehn Angriffe stehen in [docs/QUICKSTART-REVIEW.md](docs/QUICKSTART-REVIEW.md).
+geprüfte Commit, die Umgebung und das Ergebnis stehen in
+[docs/QUICKSTART-REVIEW.md](docs/QUICKSTART-REVIEW.md). Der Nachweis gilt für 13 Angriffe;
+der erneute Durchlauf für die heutigen sechzehn steht noch aus.
 Schritt 21 (Tag `v0.1`) steht aus.
 
 Die Phasennummern in `docs/MIGRATION-MATRIX.md` zählen die Migration aus dem
