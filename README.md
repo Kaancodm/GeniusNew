@@ -154,7 +154,7 @@ Siehe:
 
 ## Lokale Prüfung
 
-Dieselben zwei Schritte wie der Linux-Job der CI (`.github/workflows/verify.yml`):
+Dieselben zwei Schritte wie die Linux-Jobs der CI (`.github/workflows/verify.yml`):
 
 ```sh
 python3 -m unittest discover -s tests -v

@@ -33,9 +33,10 @@ def run(root_secret=None, request_text="ordinary demo text", api_key=None):
     runs this whole suite once per refusal, so anything the suite does, it does
     a hundred-odd times.
 
-    Measured, because the first version of this note guessed and was wrong: one
-    demo run costs about two milliseconds, and these tests add roughly 0.18s to
-    a suite that already takes 1.9s. The memo is a small tidy-up, not a rescue.
+    Measured, and measured again when it changed: a run used to cost about two
+    milliseconds, and since the worker runs in its own process and the anchor
+    in another it costs about a quarter of a second. At that price the memo
+    matters, and so does how many distinct runs the tests ask for.
     """
     key = (root_secret or DEFAULT_SECRET, request_text, api_key or API_KEY)
     if key not in _RUNS:
@@ -44,6 +45,18 @@ def run(root_secret=None, request_text="ordinary demo text", api_key=None):
             code = main(root_secret=key[0], request_text=key[1], api_key=key[2])
         _RUNS[key] = (code, captured.getvalue())
     return _RUNS[key]
+
+
+def run_with_canaries():
+    """One run carrying all three canaries at once.
+
+    Each leak test still asserts its own canary is absent; they share a run
+    because a leak of one does not depend on the others being ordinary, and
+    three separate runs were three quarters of a second of every suite run.
+    """
+    return run(root_secret=SECRET_CANARY.encode() + b"-padding-to-thirty-two-bytes",
+               request_text=f"please summarise {PAYLOAD_CANARY}",
+               api_key=API_KEY_CANARY)
 
 
 def run_uncached(root_secret=None, request_text="ordinary demo text", api_key=None):
@@ -152,7 +165,7 @@ class DemoTest(unittest.TestCase):
         pasted into issues, so it shows they differ without showing them.
         """
         secret = SECRET_CANARY.encode() + b"-padding-to-thirty-two-bytes"
-        code, output = run(root_secret=secret)
+        code, output = run_with_canaries()
         self.assertEqual(code, 0)
         self.assertNotIn(SECRET_CANARY, output)
         for fragment in (secret.hex(), secret.hex()[:16], SECRET_CANARY[:12]):
@@ -174,13 +187,13 @@ class DemoTest(unittest.TestCase):
         digest stands for the payload, and the digest is the part that proves
         nobody swapped it.
         """
-        code, output = run(request_text=f"please summarise {PAYLOAD_CANARY}")
+        code, output = run_with_canaries()
         self.assertEqual(code, 0)
         self.assertNotIn(PAYLOAD_CANARY, output)
 
     def test_the_api_key_never_reaches_the_output(self):
         """It is a credential a stranger presents, and the demo prints requests."""
-        code, output = run(api_key=API_KEY_CANARY)
+        code, output = run_with_canaries()
         self.assertEqual(code, 0)
         for fragment in (API_KEY_CANARY.decode(), API_KEY_CANARY.decode()[:12],
                          API_KEY_CANARY.hex()):
@@ -206,17 +219,18 @@ class DemoTest(unittest.TestCase):
     def test_the_demo_is_deterministic(self):
         """Two genuinely separate runs produce the same digests.
 
-        Uncached on purpose: comparing a memoized result with itself would pass
-        whatever the demo did. The listening port is masked because the kernel
-        picks it — everything a reader would diff is a digest, and those are
-        fixed by the fixed clock and the fixed job ids.
+        One side is always fresh: comparing a memoized result with itself would
+        pass whatever the demo did. The other may come from the memo, which is
+        itself the output of an earlier, separate run. The listening port is
+        masked because the kernel picks it — everything a reader would diff is
+        a digest, and those are fixed by the fixed clock and the fixed job ids.
         """
         import re
 
         def stable(output):
             return re.sub(r"127\.0\.0\.1:\d+", "127.0.0.1:PORT", output)
 
-        self.assertEqual(stable(run_uncached()[1]), stable(run_uncached()[1]))
+        self.assertEqual(stable(run()[1]), stable(run_uncached()[1]))
 
     def test_the_output_carries_the_evidence_not_the_content(self):
         """Every digest printed is 64 hex characters, and there are several."""

@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 jobs:
-  contracts:
+  tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,8 +30,6 @@ jobs:
           git archive HEAD | tar -x -C "$fresh"
           (cd "$fresh" && env -i PATH="$PATH" ./scripts/demo.sh) | tee "$RUNNER_TEMP/demo.out"
           grep -qxF -- "$(tail -n 1 "$RUNNER_TEMP/demo.out")" README.md
-      - name: Every refusal must have a test that notices its removal
-        run: python scripts/refusals.py
 
   # The runner is the macOS machine: the same suite, demo included.
   macos:
@@ -67,3 +65,54 @@ jobs:
           test "$status" -eq 1
           test "$(wc -l < demo.out)" -eq 1
           grep -q "^FAIL .*fail closed.*WSL" demo.out
+
+  guarded:
+    runs-on: ubuntu-latest
+    outputs:
+      modules: ${{ steps.list.outputs.modules }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # Read from the guard itself, so the matrix cannot drift from GUARDED.
+      - id: list
+        run: >-
+          echo "modules=$(python -c 'import json; from scripts.refusals import GUARDED;
+          print(json.dumps(list(GUARDED)))')" >> "$GITHUB_OUTPUT"
+
+  refusals:
+    needs: guarded
+    runs-on: ubuntu-latest
+    name: refusals (${{ matrix.module }})
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.guarded.outputs.modules) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Every refusal must have a test that notices its removal
+        env:
+          MODULE: ${{ matrix.module }}
+        run: python scripts/refusals.py "$MODULE"
+
+  # The check name branch protection may require. A skipped job counts as
+  # passing there, so this runs always and demands success from every job.
+  contracts:
+    needs: [tests, macos, windows, refusals]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Tests, platforms and every refusal check passed
+        env:
+          TESTS: ${{ needs.tests.result }}
+          MACOS: ${{ needs.macos.result }}
+          WINDOWS: ${{ needs.windows.result }}
+          REFUSALS: ${{ needs.refusals.result }}
+        run: |
+          echo "tests=$TESTS macos=$MACOS windows=$WINDOWS refusals=$REFUSALS"
+          test "$TESTS" = success && test "$MACOS" = success \
+            && test "$WINDOWS" = success && test "$REFUSALS" = success
