@@ -557,12 +557,19 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
     `ubuntu-latest`; unter Windows verweigert der isolierte Runner die Ausführung
     (fail closed), die Demo endet dort also nicht mit `PASS`.
 
-20. **README-Quickstart**, den ein Fremder ohne Rückfragen befolgen kann. Am besten von
-    jemandem gegengelesen, der das Projekt nicht kennt.
+20. **README-Quickstart** mit dokumentiertem technischem Review: frischer Clone,
+    eigene virtuelle Umgebung, erfolgreiche Installation und Demo, erwartete letzte
+    Zeile und Exit-Code `0`; Unklarheiten werden festgehalten.
 
-    **Status: geschrieben, nicht gegengelesen.** Der Quickstart steht in `README.md`. Der
-    zweite Halbsatz dieses Schritts ist nicht erfüllt, solange niemand ohne
-    Projektkenntnis ihn befolgt hat; bis dahin gilt der Schritt als offen.
+    **Status: abgeschlossen für Commit
+    `d3378daf97af80e5bcd4f97b163b5bed95253329`.** Am 25.09.2026 liefen Clone,
+    venv-Erstellung, hash-gepinnte Installation und Demo unter Ubuntu 26.04 / WSL2 mit
+    Python 3.14.4 erfolgreich. Die erwartete PASS-Zeile mit 13/13 abgelehnten Angriffen
+    wurde exakt erreicht; beim vollständigen Durchlauf waren keine Rückfragen nötig.
+    Der Projektverantwortliche hat diesen technischen Review als Abnahme akzeptiert;
+    eine projektfremde Person und eine neue VM/WSL-Installation sind dafür keine
+    Voraussetzung. Das [Review-Protokoll](QUICKSTART-REVIEW.md) hält die Entscheidung,
+    die tatsächlich verwendete Umgebung und die Grenzen des Nachweises fest.
 
 21. **Tag `v0.1`** auf einem grünen, verifizierten Commit.
 
