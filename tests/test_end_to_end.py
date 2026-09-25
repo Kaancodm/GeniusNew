@@ -13,6 +13,7 @@ said so: both had full test suites and both were right about their own half.
 
 import json
 import os
+import tempfile
 import threading
 import unittest
 import unittest.mock
@@ -21,11 +22,12 @@ import urllib.request
 
 from geniusnew import wiring
 
-from geniusnew.anchor_process import AnchorProcess
-from geniusnew.audit_chain import sign_head, verify
+from geniusnew.anchor_process import AnchorClient, start
+from geniusnew.audit_chain import AuditAnchor, sign_head, verify
 from geniusnew.contracts import ContractError, Grant, Policy
 from geniusnew.http_entry import serve
 from geniusnew.isolation import IsolatedWorkerRunner
+from geniusnew.keys import derive_keys
 from geniusnew.results import WorkerAuthority, accept
 from geniusnew.verifier import Rejected
 from geniusnew.wiring import build
@@ -76,10 +78,16 @@ class MalformedResultRunner(WorkerRunner):
 
 
 class Fixture:
+    # A real anchor costs an interpreter start per test, and
+    # `scripts/refusals.py` runs this suite once per refusal. So only the
+    # tests about the anchored path start one; the rest use the in-process
+    # seam, which answers the same two questions.
+    anchored = False
+
     def setUp(self):
         self.clock = [1_700_000_000]
+        self.anchor = self.started_anchor() if self.anchored else None
         self.service = self.service_for()
-        self.addCleanup(self.service.close)
         self.server = serve(self.service.entry)
         self.thread = threading.Thread(
             target=self.server.serve_forever, kwargs={'poll_interval': 0.01},
@@ -90,6 +98,18 @@ class Fixture:
         self.addCleanup(self.thread.join, 5)
         self.addCleanup(self.server.shutdown)
         self.addCleanup(self.server.server_close)
+
+    def anchor_client(self):
+        return AnchorClient(self.anchor.socket_path) if self.anchor else AuditAnchor()
+
+    def started_anchor(self):
+        """Started as an operator would, outside the service it will anchor."""
+        directory = tempfile.TemporaryDirectory(prefix='geniusnew-anchor-')
+        self.addCleanup(directory.cleanup)
+        handle = start(audit_key=derive_keys(ROOT_SECRET).audit_key,
+                       socket_path=os.path.join(directory.name, 'anchor.sock'))
+        self.addCleanup(handle.stop)
+        return handle
 
     def policy_for(self, *, ttl=60, requires_approval=False):
         grant = Grant('subject-demo', 'user-demo', 'worker-demo', 'basic',
@@ -112,7 +132,8 @@ class Fixture:
             api_keys={API_KEY: 'subject-demo'},
             workers=(DeterministicSummarizer(),) if workers is DEFAULT else workers,
             clock=lambda: self.clock[0],
-            runner_factory=factory)
+            runner_factory=factory,
+            anchor=self.anchor_client())
 
     def post(self, text=REQUEST, *, key=API_KEY, body=DEFAULT, url=None):
         payload = json.dumps({'text': text}).encode() if body is DEFAULT else body
@@ -144,20 +165,6 @@ class EndToEndTest(Fixture, unittest.TestCase):
         self.assertRegex(body['handoff_sha256'], r'\A[0-9a-f]{64}\Z')
         self.assertRegex(body['result_sha256'], r'\A[0-9a-f]{64}\Z')
 
-    def test_the_chain_records_each_instance_and_verifies_against_the_anchor(self):
-        self.post()
-        records = self.service.chain.records
-        self.assertEqual([record.event.action for record in records],
-                         ['HANDOFF_ISSUED', 'HANDOFF_ADMITTED',
-                          'EXECUTION_DISPATCHED', 'RESULT_ACCEPTED'])
-        self.assertEqual([record.event.actor.component for record in records],
-                         ['orchestrator', 'gateway', 'orchestrator', 'monitor'])
-        head = self.service.head()
-        self.assertEqual(
-            verify(records, head, authority=self.service.audit,
-                   anchor=self.service.anchor),
-            len(records))
-
     def test_default_composition_uses_process_isolation(self):
         runners = [endpoint.runner
                    for endpoint in self.service.orchestrator._workers.values()]
@@ -165,16 +172,20 @@ class EndToEndTest(Fixture, unittest.TestCase):
         self.assertTrue(all(isinstance(runner, IsolatedWorkerRunner)
                             for runner in runners))
 
-    def test_default_composition_anchors_in_its_own_process(self):
-        self.assertIsInstance(self.service.anchor, AnchorProcess)
-        self.assertNotEqual(self.service.anchor.pid, os.getpid())
+    def test_the_anchor_is_not_optional(self):
+        """No default: a default would be the service starting its own anchor."""
+        with self.assertRaisesRegex(TypeError, 'anchor'):
+            build(root_secret=ROOT_SECRET, policy=self.policy_for(),
+                  api_keys={API_KEY: 'subject-demo'},
+                  workers=(DeterministicSummarizer(),))
 
     def test_gateway_refusal_is_audited_after_handoff_issue(self):
         ticks = iter((self.clock[0], self.clock[0] + 1))
         service = build(
             root_secret=ROOT_SECRET, policy=self.policy_for(ttl=1),
             api_keys={API_KEY: 'subject-demo'},
-            workers=(DeterministicSummarizer(),), clock=lambda: next(ticks))
+            workers=(DeterministicSummarizer(),), clock=lambda: next(ticks),
+            anchor=AuditAnchor())
         server = serve(service.entry)
         thread = threading.Thread(target=server.serve_forever,
                                   kwargs={'poll_interval': 0.01}, daemon=True)
@@ -191,21 +202,6 @@ class EndToEndTest(Fixture, unittest.TestCase):
         self.assertEqual([record.event.actor.component for record in records],
                          ['orchestrator', 'gateway'])
         self.assertEqual(records[-1].event.reason_code, 'HANDOFF_NOT_VALID')
-
-    def test_a_truncated_chain_is_refused_even_re_signed(self):
-        """The anchor's reason for existing, on the real chain this time."""
-        self.post()
-        records = self.service.chain.records
-        head = self.service.head()
-        with self.assertRaisesRegex(ContractError, 'signed head claims'):
-            verify(records[:-1], head, authority=self.service.audit,
-                   anchor=self.service.anchor)
-        with self.assertRaisesRegex(ContractError, 'anchor committed'):
-            verify(records[:-1],
-                   sign_head(count=len(records) - 1,
-                             head_hash=records[-2].record_hash,
-                             authority=self.service.audit),
-                   authority=self.service.audit, anchor=self.service.anchor)
 
     def test_the_result_signature_is_what_acceptance_actually_checked(self):
         """A forged result does not become an accepted one.
@@ -285,7 +281,7 @@ class EndToEndTest(Fixture, unittest.TestCase):
             root_secret=ROOT_SECRET, policy=self.policy_for(ttl=1),
             api_keys={API_KEY: 'subject-demo'},
             workers=(DeterministicSummarizer(),), clock=lambda: self.clock[0],
-            runner_factory=self._slow_runner(takes=2.0))
+            runner_factory=self._slow_runner(takes=2.0), anchor=AuditAnchor())
         server = serve(service.entry)
         thread = threading.Thread(target=server.serve_forever,
                                   kwargs={'poll_interval': 0.01}, daemon=True)
@@ -317,7 +313,7 @@ class EndToEndTest(Fixture, unittest.TestCase):
             root_secret=ROOT_SECRET, policy=self.policy_for(),
             api_keys={API_KEY: 'subject-demo'},
             workers=(DeterministicSummarizer(),), clock=lambda: self.clock[0],
-            runner_factory=factory)
+            runner_factory=factory, anchor=AuditAnchor())
         server = serve(service.entry)
         thread = threading.Thread(target=server.serve_forever,
                                   kwargs={'poll_interval': 0.01}, daemon=True)
@@ -339,7 +335,8 @@ class EndToEndTest(Fixture, unittest.TestCase):
     def test_the_wiring_refuses_a_worker_no_grant_names(self):
         with self.assertRaisesRegex(ContractError, 'no grant in this policy'):
             build(root_secret=ROOT_SECRET, policy=self.policy_for(),
-                  api_keys={API_KEY: 'subject-demo'}, workers=(UngrantedWorker(),))
+                  api_keys={API_KEY: 'subject-demo'}, workers=(UngrantedWorker(),),
+                  anchor=AuditAnchor())
 
     def two_subject_policy(self, *, second_agent):
         grants = tuple(
@@ -352,13 +349,14 @@ class EndToEndTest(Fixture, unittest.TestCase):
         with self.assertRaisesRegex(ContractError, 'more than one worker agent'):
             build(root_secret=ROOT_SECRET,
                   policy=self.two_subject_policy(second_agent='worker-other'),
-                  api_keys={API_KEY: 'subject-a'}, workers=(DeterministicSummarizer(),))
+                  api_keys={API_KEY: 'subject-a'}, workers=(DeterministicSummarizer(),),
+                  anchor=AuditAnchor())
 
     def test_subjects_sharing_one_agent_are_still_wired(self):
         service = build(root_secret=ROOT_SECRET,
                         policy=self.two_subject_policy(second_agent='worker-demo'),
                         api_keys={API_KEY: 'subject-a'},
-                        workers=(DeterministicSummarizer(),))
+                        workers=(DeterministicSummarizer(),), anchor=AuditAnchor())
         self.assertIsNotNone(service)
 
     def test_build_refuses_what_it_cannot_rely_on(self):
@@ -367,18 +365,19 @@ class EndToEndTest(Fixture, unittest.TestCase):
                 with self.assertRaisesRegex(ContractError, 'policy is invalid'):
                     build(root_secret=ROOT_SECRET, policy=policy,
                           api_keys={API_KEY: 'subject-demo'},
-                          workers=(DeterministicSummarizer(),))
+                          workers=(DeterministicSummarizer(),), anchor=AuditAnchor())
         for clock in ('clock', 42, []):
             with self.subTest(clock=type(clock)):
                 with self.assertRaisesRegex(ContractError, 'clock must be callable'):
                     build(root_secret=ROOT_SECRET, policy=self.policy_for(),
                           api_keys={API_KEY: 'subject-demo'},
-                          workers=(DeterministicSummarizer(),), clock=clock)
+                          workers=(DeterministicSummarizer(),), clock=clock,
+                          anchor=AuditAnchor())
         with self.assertRaisesRegex(ContractError, 'WorkerRunner'):
             build(root_secret=ROOT_SECRET, policy=self.policy_for(),
                   api_keys={API_KEY: 'subject-demo'},
                   workers=(DeterministicSummarizer(),),
-                  runner_factory=lambda worker: 'not-a-runner')
+                  runner_factory=lambda worker: 'not-a-runner', anchor=AuditAnchor())
         with self.assertRaisesRegex(ContractError, 'anchor must be an AuditAnchor'):
             build(root_secret=ROOT_SECRET, policy=self.policy_for(),
                   api_keys={API_KEY: 'subject-demo'},
@@ -394,6 +393,65 @@ class EndToEndTest(Fixture, unittest.TestCase):
             return runner
 
         return factory
+
+
+class AnchoredPathTest(Fixture, unittest.TestCase):
+    """From the socket to a head held by an anchor the service did not start."""
+
+    anchored = True
+
+    def test_the_chain_records_each_instance_and_verifies_against_the_anchor(self):
+        self.post()
+        records = self.service.chain.records
+        self.assertEqual([record.event.action for record in records],
+                         ['HANDOFF_ISSUED', 'HANDOFF_ADMITTED',
+                          'EXECUTION_DISPATCHED', 'RESULT_ACCEPTED'])
+        self.assertEqual([record.event.actor.component for record in records],
+                         ['orchestrator', 'gateway', 'orchestrator', 'monitor'])
+        head = self.service.head()
+        self.assertEqual(
+            verify(records, head, authority=self.service.audit,
+                   anchor=self.service.anchor),
+            len(records))
+
+    def test_the_service_is_anchored_in_a_process_it_did_not_start(self):
+        self.assertIsInstance(self.service.anchor, AnchorClient)
+        self.assertNotEqual(self.anchor.pid, os.getpid())
+        self.assertFalse(hasattr(self.service, 'close'))
+
+    def test_a_truncated_chain_is_refused_even_re_signed(self):
+        """The anchor's reason for existing, on the real chain this time."""
+        self.post()
+        records = self.service.chain.records
+        head = self.service.head()
+        with self.assertRaisesRegex(ContractError, 'signed head claims'):
+            verify(records[:-1], head, authority=self.service.audit,
+                   anchor=self.service.anchor)
+        with self.assertRaisesRegex(ContractError, 'anchor committed'):
+            verify(records[:-1],
+                   sign_head(count=len(records) - 1,
+                             head_hash=records[-2].record_hash,
+                             authority=self.service.audit),
+                   authority=self.service.audit, anchor=self.service.anchor)
+
+    def test_a_restarted_service_is_still_held_to_what_it_committed(self):
+        """Roadmap step 8, the lifecycle half: a service restart is not a reset.
+
+        The restarted service has a fresh chain and the same keys — everything
+        it needs to re-sign a shortened log. What it no longer has is a fresh
+        anchor, because it never started the one it had.
+        """
+        self.post()
+        records = self.service.chain.records
+        self.service.head()
+        restarted = self.service_for()
+        with self.assertRaisesRegex(ContractError, 'anchor committed 4 records; this chain has 3'):
+            verify(records[:-1],
+                   sign_head(count=len(records) - 1, head_hash=records[-2].record_hash,
+                             authority=restarted.audit),
+                   authority=restarted.audit, anchor=restarted.anchor)
+        with self.assertRaisesRegex(ContractError, 'anchor already committed 4 records'):
+            restarted.head()
 
 
 OTHER_KEY = b'SECOND-API-KEY-CANARY-NOT-DISCLOSED'
@@ -412,7 +470,8 @@ class ApprovalOverHttpTest(Fixture, unittest.TestCase):
         return build(root_secret=ROOT_SECRET, policy=policy,
                      api_keys={API_KEY: 'subject-demo', OTHER_KEY: 'subject-other'},
                      workers=(DeterministicSummarizer(),),
-                     clock=lambda: self.clock[0])
+                     clock=lambda: self.clock[0],
+                     anchor=self.anchor_client())
 
     def approve(self, job_id, token, *, key=API_KEY, body=b'{}'):
         headers = {'Content-Type': 'application/json',

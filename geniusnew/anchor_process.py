@@ -2,36 +2,51 @@
 
 `audit_chain.AuditAnchor` says of itself that keeping it in the same process as
 the chain defeats its purpose: whoever writes the log could reach into the
-anchor's memory and move it backwards. Here the anchor's state lives in a child
-interpreter, and the writer holds nothing but two pipes. Across them it can ask
-two things — commit this signed head over these records, and what is committed —
-and there is no message that resets, rewinds or overwrites anything.
+anchor's memory and move it backwards. Here the anchor's state lives in another
+interpreter, and the writer holds nothing but a socket path. Through it it can
+ask two things — commit this signed head over these records, and what is
+committed — and there is no message that resets, rewinds or overwrites anything.
 
-The child runs the existing `AuditAnchor` unchanged. It receives records as
-data, rebuilds them with its own `AuditAuthority`, and applies the same
-verification and the same extension rule the in-process anchor always applied,
-so this module adds a boundary and no new chain logic.
+The anchor process runs the existing `AuditAnchor` unchanged. It receives
+records as data, rebuilds them with its own `AuditAuthority`, and applies the
+same verification and the same extension rule the in-process anchor always
+applied, so this module adds a boundary and no new chain logic.
+
+## Who starts it, and who stops it
+
+Not the service. `start` is the anchor's own lifecycle path: it launches the
+process in a session of its own, hands it the audit key once over a pipe it
+then closes, and returns an `AnchorHandle` — the one object that can stop it.
+Whoever runs the service keeps that handle; the service itself is given an
+`AnchorClient`, which holds a socket path and nothing else: no process, no
+pipe, no stop. A service that restarts connects to the same anchor and finds
+everything it committed still committed, so a restart is no longer a reset.
+
+The key reaches the anchor from its starter, never from the writer. The writer
+cannot choose which key its heads are checked against.
 
 ## What the boundary is, and is not
 
-It is a memory boundary: the anchored count and hash are not objects the writer
-can reach. It is **not** a lifecycle boundary. The service starts this process,
-so it can also end it, and the commitments live in memory only — a restarted
-anchor starts at zero. Keeping the anchor alive independently of the writer
-means running it under a different operating-system user and, for restarts,
-persistence; both are deployment decisions `docs/ROADMAP-V01.md` leaves past
-v0.1, and `SECURITY.md` lists the gap.
+It is a memory and a lifecycle boundary against the service's code. It is
+**not** a boundary against the operating-system user: the anchor runs as the
+same user, so a process of that user can still signal it — which fails closed,
+below, but ends the anchor. And the commitments live in memory only: a
+restarted *anchor* starts at zero. Running it under a user of its own is a
+deployment decision; persisting it is a decision of its own, recorded as open
+in `docs/ADR-002-anchor-persistence.md`. `SECURITY.md` lists both.
 
-The child holds the audit key, because verifying a head needs it and HMAC is
+The anchor holds the audit key, because verifying a head needs it and HMAC is
 symmetric. That does not weaken the anchor: it never writes the log, and what
 it protects against is a writer that already holds the same key.
 
 ## Failing closed
 
-A child that is gone, silent past the deadline, or answering in a shape it
+An anchor that is gone, silent past the deadline, or answering in a shape it
 should not, is reported as `ContractError` and never as an anchored state.
 `verify(..., anchor=...)` therefore refuses a chain rather than skipping the
-anchor check when the anchor cannot be reached.
+anchor check when the anchor cannot be reached. A socket path that is already
+taken makes `start` refuse rather than replace whatever holds it: a second
+anchor on the same path would be a silent reset.
 """
 
 from __future__ import annotations
@@ -40,10 +55,11 @@ from contextlib import suppress
 import json
 import os
 import select
+import signal
+import socket
 import subprocess
 import sys
 import time
-from threading import Lock
 from typing import Any, BinaryIO, Iterable
 import weakref
 
@@ -60,6 +76,9 @@ _MAX_REQUEST_BYTES = 64 * 1024 * 1024
 _MAX_REPLY_BYTES = 4096
 _MAX_REFUSAL_CHARS = 512
 _REPLY_SECONDS = 30.0
+# One request per connection, served in turn. A client that connects and then
+# stalls holds the anchor for at most this long.
+_CONNECTION_SECONDS = 10.0
 
 _HEAD_KEYS = frozenset({"count", "head_hash", "signature", "version"})
 _RECORD_KEYS = frozenset({"event", "index", "previous_hash", "record_hash"})
@@ -75,7 +94,7 @@ def _fail(message: str) -> None:
 
 
 class _Unreachable(Exception):
-    """The child did not answer as a well-behaved anchor process would."""
+    """The anchor did not answer as a well-behaved anchor process would."""
 
 
 def _decode(data: bytes, noun: str) -> dict[str, Any]:
@@ -101,7 +120,13 @@ def _frame(message: dict[str, Any], limit: int) -> bytes:
     return len(data).to_bytes(4, "big") + data
 
 
-# --- the child ---------------------------------------------------------------
+def _socket_path(value: Any) -> str:
+    if type(value) is not str or not os.path.isabs(value):
+        _fail("anchor socket_path must be an absolute path")
+    return value
+
+
+# --- the anchor process ------------------------------------------------------
 
 def _authority_from(init: dict[str, Any]) -> AuditAuthority:
     if set(init) != {"audit_key", "kind"} or init["kind"] != "init":
@@ -125,8 +150,8 @@ def _record(value: Any, authority: AuditAuthority) -> AuditRecord:
     """Rebuild a record so the unchanged chain checks can run over it.
 
     The actor is re-minted by this process's own authority: an actor is proof
-    that the audit authority stood behind an event, and a string off a pipe is
-    not that proof until someone holding the key has said so.
+    that the audit authority stood behind an event, and a string off a socket
+    is not that proof until someone holding the key has said so.
     """
     if not isinstance(value, dict) or set(value) != _RECORD_KEYS:
         _fail("anchor request carries a malformed record")
@@ -162,20 +187,51 @@ def _handle(message: dict[str, Any], anchor: AuditAnchor,
     return _committed(anchor.commit(head, records, authority=authority))
 
 
-def _read_frame(stream: BinaryIO) -> bytes | None:
+def _read_frame(stream: BinaryIO, limit: int = _MAX_REQUEST_BYTES) -> bytes | None:
     header = stream.read(4)
     if len(header) != 4:
         return None
     size = int.from_bytes(header, "big")
-    if size > _MAX_REQUEST_BYTES:
+    if size > limit:
         return None
     data = stream.read(size)
     return data if len(data) == size else None
 
 
-def _serve(requests: BinaryIO, replies: BinaryIO) -> int:
-    """Serve until the writer closes the pipe. A torn frame ends the process."""
-    data = _read_frame(requests)
+def _answer(data: bytes | None, anchor: AuditAnchor,
+            authority: AuditAuthority) -> bytes | None:
+    """One request frame in, one reply frame out. A torn frame gets no reply."""
+    if data is None:
+        return None
+    try:
+        reply = _handle(_decode(data, "anchor request"), anchor, authority)
+    except ContractError as refusal:
+        reply = {"kind": "refused", "message": str(refusal)[:_MAX_REFUSAL_CHARS]}
+    return _frame(reply, _MAX_REPLY_BYTES)
+
+
+def _serve_connection(connection: socket.socket, anchor: AuditAnchor,
+                      authority: AuditAuthority) -> None:
+    connection.settimeout(_CONNECTION_SECONDS)
+    with suppress(OSError):
+        with connection.makefile("rb") as requests:
+            reply = _answer(_read_frame(requests), anchor, authority)
+        if reply is not None:
+            connection.sendall(reply)
+
+
+def _stopped(signum: int, frame: Any) -> None:
+    raise SystemExit(0)
+
+
+def _serve(init: BinaryIO, ready: BinaryIO, socket_path: str) -> int:
+    """Take the key from the starter, then answer on the socket until stopped.
+
+    Reports ready only once the socket is bound, so a starter that got an
+    answer knows the path is this anchor's. A path that is already bound —
+    another anchor, or a stale file from one that died — is not taken over.
+    """
+    data = _read_frame(init)
     if data is None:
         return 1
     try:
@@ -183,19 +239,28 @@ def _serve(requests: BinaryIO, replies: BinaryIO) -> int:
     except ContractError:
         return 1
     anchor = AuditAnchor()
-    replies.write(_frame(_committed(anchor.committed), _MAX_REPLY_BYTES))
-    replies.flush()
-    while (data := _read_frame(requests)) is not None:
+    signal.signal(signal.SIGTERM, _stopped)
+    os.umask(0o077)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
         try:
-            reply = _handle(_decode(data, "anchor request"), anchor, authority)
-        except ContractError as refusal:
-            reply = {"kind": "refused", "message": str(refusal)[:_MAX_REFUSAL_CHARS]}
-        replies.write(_frame(reply, _MAX_REPLY_BYTES))
-        replies.flush()
-    return 0
+            listener.bind(socket_path)
+        except OSError:
+            return 1
+        try:
+            listener.listen(16)
+            ready.write(_frame(_committed(anchor.committed), _MAX_REPLY_BYTES))
+            ready.flush()
+            ready.close()
+            while True:
+                connection, _ = listener.accept()
+                with connection:
+                    _serve_connection(connection, anchor, authority)
+        finally:
+            with suppress(OSError):
+                os.unlink(socket_path)
 
 
-# --- the writer's side -------------------------------------------------------
+# --- the lifecycle path ------------------------------------------------------
 
 def _write_all(stream: BinaryIO, data: bytes) -> None:
     view = memoryview(data)
@@ -219,19 +284,91 @@ def _read_exact(stream: BinaryIO, size: int, deadline: float) -> bytes:
     return b"".join(chunks)
 
 
-def _stop(process: subprocess.Popen[bytes]) -> None:
-    # Closing stdin is the shutdown message: the child's read returns short
-    # and it exits. Killing is only for a child that does not.
+def _receive(stream: BinaryIO, deadline: float) -> bytes:
+    size = int.from_bytes(_read_exact(stream, 4, deadline), "big")
+    if size > _MAX_REPLY_BYTES:
+        raise _Unreachable()
+    return _read_exact(stream, size, deadline)
+
+
+def _close_pipes(process: subprocess.Popen[bytes]) -> None:
     for stream in (process.stdin, process.stdout):
         if stream is not None:
             with suppress(OSError):
                 stream.close()
+
+
+def _stop(process: subprocess.Popen[bytes]) -> None:
+    # SIGTERM lets the anchor remove its own socket. Killing is only for an
+    # anchor that does not stop; its socket file then stays, and the next
+    # `start` on that path refuses until someone removes it on purpose.
+    _close_pipes(process)
+    if process.poll() is None:
+        process.terminate()
     try:
         process.wait(timeout=1)
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
 
+
+class AnchorHandle:
+    """The one object that can stop an anchor.
+
+    Kept by whoever started it — an operator, a supervisor, the demo — and
+    never handed to the service. An anchor whose handle is dropped is stopped
+    with it, so a starter that exits does not leave a process behind.
+    """
+
+    def __init__(self, process: subprocess.Popen[bytes], socket_path: str) -> None:
+        self._process = process
+        self._socket_path = socket_path
+        self._stop = weakref.finalize(self, _stop, process)
+
+    @property
+    def pid(self) -> int:
+        return self._process.pid
+
+    @property
+    def socket_path(self) -> str:
+        return self._socket_path
+
+    def stop(self) -> None:
+        """End the anchor. Everything it committed is gone with it."""
+        self._stop()
+
+
+def start(*, audit_key: bytes, socket_path: str) -> AnchorHandle:
+    """Start an anchor listening on `socket_path`. Its lifecycle is the caller's.
+
+    The process gets a session of its own, so a signal to the starter's
+    process group — a Ctrl-C at the service's terminal — does not reach it.
+    """
+    AuditAuthority(audit_key=audit_key)
+    socket_path = _socket_path(socket_path)
+    process = subprocess.Popen(
+        [sys.executable, "-m", "geniusnew.anchor_process", "--socket", socket_path],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        bufsize=0, close_fds=True, env=_minimal_environment(),
+        start_new_session=True,
+    )
+    try:
+        _write_all(process.stdin, _frame({"audit_key": audit_key.hex(), "kind": "init"},
+                                         _MAX_REQUEST_BYTES))
+        process.stdin.close()
+        _state(_decode(_receive(process.stdout, time.monotonic() + _REPLY_SECONDS),
+                       "anchor reply"))
+    except (_Unreachable, OSError, ValueError):
+        # ValueError is ContractError's base class, so a malformed ready frame
+        # lands here too. The socket path is left alone: if it was taken, it
+        # belongs to whoever took it.
+        _stop(process)
+        _fail("anchor process did not start")
+    _close_pipes(process)
+    return AnchorHandle(process, socket_path)
+
+
+# --- the writer's side -------------------------------------------------------
 
 def _state(reply: dict[str, Any]) -> tuple[int, str]:
     if (reply.get("kind") == "refused" and set(reply) == {"kind", "message"}
@@ -242,53 +379,18 @@ def _state(reply: dict[str, Any]) -> tuple[int, str]:
     return _count(reply["count"], "anchor count"), _digest(reply["head_hash"], "anchor head_hash")
 
 
-class AnchorProcess(AuditAnchor):
-    """An `AuditAnchor` whose state is in another interpreter.
+class AnchorClient(AuditAnchor):
+    """What the service holds: the path to an anchor someone else started.
 
     It is a subclass so that `audit_chain.verify` accepts it where it accepts
     any anchor, and it deliberately does not call the base constructor: there
-    is no local count or hash to fall back on if the child cannot be asked.
-
-    The child starts on first use. A fresh anchor holds nothing either way, and
-    starting an interpreter costs about seventy milliseconds that a service
-    which never commits a head should not pay. Once closed it does not start
-    again: a second process would be a silent reset.
+    is no local count or hash to fall back on if the anchor cannot be asked.
+    It can ask the two questions and nothing else. It cannot start, stop or
+    reset the anchor, and dropping it changes nothing on the other side.
     """
 
-    def __init__(self, *, audit_key: bytes) -> None:
-        AuditAuthority(audit_key=audit_key)
-        self._audit_key = audit_key
-        self._lock = Lock()
-        self._process: subprocess.Popen[bytes] | None = None
-        self._closed = False
-        self._close = lambda: None
-
-    def close(self) -> None:
-        """End the anchor process. Everything it committed is gone with it."""
-        with self._lock:
-            self._closed = True
-            self._close()
-
-    @property
-    def pid(self) -> int:
-        self._exchange({"kind": "committed"})
-        return self._process.pid
-
-    def _started(self) -> subprocess.Popen[bytes]:
-        """The child, started if this is the first request. Call under the lock."""
-        if self._process is not None or self._closed:
-            if self._process is None:
-                raise _Unreachable()
-            return self._process
-        self._process = subprocess.Popen(
-            [sys.executable, "-m", "geniusnew.anchor_process"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            bufsize=0, close_fds=True, env=_minimal_environment(),
-        )
-        self._close = weakref.finalize(self, _stop, self._process)
-        init = _frame({"audit_key": self._audit_key.hex(), "kind": "init"}, _MAX_REQUEST_BYTES)
-        _state(_decode(_send(self._process, init), "anchor reply"))
-        return self._process
+    def __init__(self, socket_path: str) -> None:
+        self._socket_path = _socket_path(socket_path)
 
     @property
     def committed(self) -> tuple[int, str]:
@@ -296,10 +398,10 @@ class AnchorProcess(AuditAnchor):
 
     def commit(self, head: AuditHead, records: Iterable[AuditRecord], *,
                authority: AuditAuthority) -> tuple[int, str]:
-        """Send a head and its chain; the child verifies with its own authority.
+        """Send a head and its chain; the anchor verifies with its own authority.
 
         `authority` is accepted for the base signature and not sent: the key
-        the child checks with is the one it was started with, not one the
+        the anchor checks with is the one its starter gave it, not one the
         writer hands over per call.
         """
         if not isinstance(head, AuditHead):
@@ -317,28 +419,25 @@ class AnchorProcess(AuditAnchor):
 
     def _exchange(self, message: dict[str, Any]) -> tuple[int, str]:
         frame = _frame(message, _MAX_REQUEST_BYTES)
-        with self._lock:
-            try:
-                reply = _send(self._started(), frame)
-            except (_Unreachable, OSError, ValueError):
-                # ValueError covers pipes already closed and, being its base
-                # class, a ContractError from a malformed init reply. Either
-                # way no further answer can be trusted, so the process is ended.
-                self._close()
-                reply = None
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                connection.settimeout(_REPLY_SECONDS)
+                connection.connect(self._socket_path)
+                connection.sendall(frame)
+                with connection.makefile("rb") as replies:
+                    reply = _read_frame(replies, _MAX_REPLY_BYTES)
+        except OSError:
+            reply = None
         if reply is None:
             _fail("anchor process is unreachable")
         return _state(_decode(reply, "anchor reply"))
 
 
-def _send(process: subprocess.Popen[bytes], frame: bytes) -> bytes:
-    _write_all(process.stdin, frame)
-    deadline = time.monotonic() + _REPLY_SECONDS
-    size = int.from_bytes(_read_exact(process.stdout, 4, deadline), "big")
-    if size > _MAX_REPLY_BYTES:
-        raise _Unreachable()
-    return _read_exact(process.stdout, size, deadline)
+def _main(argv: list[str]) -> int:
+    if len(argv) != 2 or argv[0] != "--socket":
+        return 2
+    return _serve(sys.stdin.buffer, sys.stdout.buffer, argv[1])
 
 
 if __name__ == "__main__":
-    raise SystemExit(_serve(sys.stdin.buffer, sys.stdout.buffer))
+    raise SystemExit(_main(sys.argv[1:]))

@@ -49,10 +49,10 @@ cd GeniusNew
 ```
 
 Der Befehl schickt einen Job über HTTP durch alle Schichten und greift ihn danach
-dreizehnmal an. Die letzte Zeile muss lauten:
+vierzehnmal an. Die letzte Zeile muss lauten:
 
 ```
-PASS — job succeeded over HTTP, chain verified against the anchored head, 13/13 attacks refused.
+PASS — job succeeded over HTTP, chain verified against the anchored head, 14/14 attacks refused.
 ```
 
 und der Exit-Code ist `0`. Alles andere ist ein Fehlschlag: das Skript sagt dann, welche
@@ -65,8 +65,8 @@ Was die Ausgabe zeigt, in der Reihenfolge der nummerierten Blöcke:
 | `[0]`–`[1]` | Drei getrennte Rollenschlüssel, Policy als Allow-List mit Default-Deny |
 | `[2]`–`[3]` | Job geht über einen echten Socket hinein; die Identität kommt aus dem API-Key, nicht aus dem Request |
 | `[4]` | Audit-Chain mit vier Einträgen von drei Instanzen: `orchestrator`, `gateway`, `monitor` |
-| `[5]` | Kette verifiziert gegen einen signierten Kopf, festgelegt bei einem Anker in eigenem Prozess |
-| `[6]` | Dreizehn Manipulationsversuche, jeder muss mit `[ok]` abgelehnt werden |
+| `[5]` | Kette verifiziert gegen einen signierten Kopf, festgelegt bei einem Anker in eigenem Prozess, den nicht der Dienst startet |
+| `[6]` | Vierzehn Manipulationsversuche, jeder muss mit `[ok]` abgelehnt werden |
 
 Die Ausgabe enthält bewusst nur Digests und Kennungen — keine Payload, kein Ergebnistext,
 kein Schlüsselmaterial. `tests/test_demo.py` prüft das mit Kanarienwerten.
@@ -74,20 +74,50 @@ kein Schlüsselmaterial. `tests/test_demo.py` prüft das mit Kanarienwerten.
 **Was `PASS` nicht bedeutet:** keine Produktionsfreigabe und kein Sicherheitsnachweis
 für einen echten Betrieb. Außer Worker und Audit-Anker sind die Instanzen getrennte
 Objekte in einem Prozess; die Worker-Isolation ist eine Prozessgrenze, keine microVM;
-der Anker wird vom Dienst gestartet und hält nur Speicher; die Signaturen sind HMAC und
-damit symmetrisch. Die bekannten Grenzen stehen einzeln in `SECURITY.md`.
+der Anker läuft unter demselben Betriebssystem-Nutzer und hält nur Speicher; die
+Signaturen sind HMAC und damit symmetrisch. Die bekannten Grenzen stehen einzeln in
+`SECURITY.md`.
 
-**Andere Betriebssysteme:** Die Worker-Isolation braucht POSIX-Ressourcenlimits. Unter
-Windows verweigert sie die Ausführung (fail closed), die Demo erreicht dort kein `PASS`.
-WSL ist Linux; die Testsuite läuft dort (belegt in #28). macOS ist nicht getestet. Die
-CI läuft auf `ubuntu-latest`.
+### Windows: über WSL
+
+Die Worker-Isolation braucht POSIX-Ressourcenlimits, der Audit-Anker einen Unix-Socket.
+Unter Windows direkt verweigert der Dienst deshalb die Ausführung (fail closed): die Demo
+endet mit einer `FAIL`-Zeile, die das sagt und auf WSL verweist, und Exit-Code `1`. Die
+CI hält genau das auf `windows-latest` fest. WSL ist Linux; dort gilt der Quickstart
+oben unverändert (belegt in #28):
+
+```powershell
+wsl --install        # einmalig, als Administrator; danach neu starten
+```
+
+Dann im Ubuntu-Fenster:
+
+```sh
+cd ~
+git clone https://github.com/Kaancodm/GeniusNew.git
+cd GeniusNew
+./scripts/demo.sh
+```
+
+Im Linux-Dateisystem (`~`) klonen, nicht unter `/mnt/c`: dort ist es deutlich langsamer.
+Das aktuelle Ubuntu bringt Python 3.12 mit. `.gitattributes` hält Skripte auf
+LF-Zeilenenden, sodass auch ein mit Git für Windows geklontes Verzeichnis startet.
+
+### macOS
+
+Die CI führt Suite und Demo auf `macos-latest` aus. Maßgeblich ist das Ergebnis dieses
+Jobs, nicht dieser Satz.
 
 ## Aktueller Stand
 
-Roadmap zu v0.1 (`docs/ROADMAP-V01.md`): Schritte 1–19 umgesetzt; der Audit-Anker
-aus Schritt 8 läuft in eigenem Prozess, sein Lebenszyklus liegt noch beim Dienst.
-Schritt 20 (Gegenlesen dieses Quickstarts durch jemanden ohne Projektkenntnis) ist
-offen, Schritt 21 (Tag `v0.1`) steht aus.
+Roadmap zu v0.1 (`docs/ROADMAP-V01.md`): Schritte 1–19 umgesetzt. Der Audit-Anker aus
+Schritt 8 läuft in eigenem Prozess und wird über einen eigenen Pfad gestartet und
+gestoppt (`anchor_process.start`); der Dienst hält nur seinen Socket-Pfad. Ob und wie der
+Anker persistiert, ist eine eigene, offene Entscheidung
+(`docs/ADR-002-anchor-persistence.md`). Schritt 20 (Gegenlesen dieses Quickstarts durch
+jemanden ohne Projektkenntnis) ist offen: das Protokoll dafür steht in
+`docs/QUICKSTART-REVIEW.md`, die Person ist noch nicht benannt. Schritt 21 (Tag `v0.1`)
+steht aus.
 
 Die Phasennummern in `docs/MIGRATION-MATRIX.md` zählen die Migration aus dem
 Altprojekt und sind nicht dieselben wie die Bauphasen hier.
@@ -114,7 +144,9 @@ Siehe:
 - `geniusnew/verifier.py`
 - `geniusnew/http_entry.py`
 - `geniusnew/wiring.py` — Kompositionswurzel
-- `geniusnew/anchor_process.py` — Audit-Anker in eigenem Prozess
+- `geniusnew/anchor_process.py` — Audit-Anker in eigenem Prozess, eigener Start-/Stopp-Pfad
+- `docs/ADR-002-anchor-persistence.md` — offene Entscheidung zur Persistenz des Ankers
+- `docs/QUICKSTART-REVIEW.md` — Protokoll für das Gegenlesen des Quickstarts
 - `geniusnew/audit.py`, `geniusnew/audit_chain.py`
 - `docs/ISOLATION-V01.md`
 - `docs/GATEWAY-V01.md`
@@ -122,7 +154,7 @@ Siehe:
 
 ## Lokale Prüfung
 
-Dieselben zwei Schritte wie die CI (`.github/workflows/verify.yml`):
+Dieselben zwei Schritte wie der Linux-Job der CI (`.github/workflows/verify.yml`):
 
 ```sh
 python3 -m unittest discover -s tests -v

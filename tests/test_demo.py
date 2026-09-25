@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts import demo  # noqa: E402
 from scripts.demo import API_KEY, main  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -70,9 +71,9 @@ class DemoTest(unittest.TestCase):
     def test_every_attack_is_refused(self):
         """The half that matters. A pipeline printing success proves nothing."""
         _, output = run()
-        self.assertEqual(output.count("[ok]"), 13, output)
+        self.assertEqual(output.count("[ok]"), 14, output)
         self.assertNotIn("[!!]", output)
-        self.assertIn("13/13 attacks refused", output)
+        self.assertIn("14/14 attacks refused", output)
 
     def test_each_attack_is_refused_by_the_check_it_targets(self):
         """Refused is not enough — it has to be refused by the right check.
@@ -98,6 +99,7 @@ class DemoTest(unittest.TestCase):
             "Truncate the chain, keep the old head": "signed head claims",
             "Truncate the chain and re-sign the head": "anchor committed",
             "Rewind the anchor from inside the writer": "anchor committed",
+            "Restart the service and re-sign the chain": "anchor committed",
         }
         import re
         refusals = dict(re.findall(r"\[ok\] (.+?)\s{2,}(.+)", output))
@@ -224,6 +226,33 @@ class DemoTest(unittest.TestCase):
         self.assertGreaterEqual(len(digests), 6)
         self.assertIn("handoff digest", output)
         self.assertIn("result digest", output)
+
+    def test_a_host_without_posix_isolation_gets_a_fail_that_says_where_to_run(self):
+        """Windows: the service refuses to run (fail closed), and the demo says why.
+
+        A traceback would also be a non-zero exit, but a stranger reads it as
+        a broken repository rather than as a refusal with a way round it.
+        """
+        from unittest.mock import patch
+        with patch.object(demo, "_resource_supported", return_value=False):
+            code, output = run_uncached()
+        self.assertEqual(code, 1)
+        self.assertRegex(output, r"\AFAIL — .*fail closed.*WSL")
+        self.assertNotIn("PASS", output)
+        self.assertNotIn("[0]", output)
+
+    def test_the_readme_quotes_the_line_the_demo_really_ends_with(self):
+        """Roadmap step 20: a stranger compares their last line with the README's.
+
+        The count in that line changes whenever an attack is added, and the
+        README has to change with it. A sentence in a document does not notice
+        when it did not.
+        """
+        import re
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        quoted = re.findall(r"^PASS — .+$", readme, flags=re.MULTILINE)
+        _, output = run()
+        self.assertEqual(quoted, [output.rstrip("\n").splitlines()[-1]])
 
     def test_the_shell_entry_point_runs_it(self):
         """The command a stranger actually types."""

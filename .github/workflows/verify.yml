@@ -19,5 +19,51 @@ jobs:
           python-version: '3.11'
       - name: Run contract tests
         run: python -m unittest discover -s tests -v
+      # What a stranger has: the committed files, nothing cached, no
+      # environment. The last line must be the one README.md tells them to
+      # expect, word for word.
+      - name: Quickstart from a fresh copy with an empty environment
+        shell: bash
+        run: |
+          fresh="$RUNNER_TEMP/fresh"
+          mkdir "$fresh"
+          git archive HEAD | tar -x -C "$fresh"
+          (cd "$fresh" && env -i PATH="$PATH" ./scripts/demo.sh) | tee "$RUNNER_TEMP/demo.out"
+          grep -qxF -- "$(tail -n 1 "$RUNNER_TEMP/demo.out")" README.md
       - name: Every refusal must have a test that notices its removal
         run: python scripts/refusals.py
+
+  # The runner is the macOS machine: the same suite, demo included.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Run contract tests
+        run: python -m unittest discover -s tests -v
+      - name: Run the quickstart
+        run: ./scripts/demo.sh
+
+  # No POSIX resource limits, so the worker isolation refuses to run. This
+  # holds that refusal in place: exit code 1, a FAIL line that says why and
+  # points to WSL — never a PASS, and never a traceback.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: The demo fails closed and names WSL
+        shell: bash
+        env:
+          PYTHONUTF8: '1'
+        run: |
+          status=0
+          python scripts/demo.py > demo.out 2>&1 || status=$?
+          cat demo.out
+          test "$status" -eq 1
+          test "$(wc -l < demo.out)" -eq 1
+          grep -q "^FAIL .*fail closed.*WSL" demo.out

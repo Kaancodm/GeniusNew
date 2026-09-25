@@ -1,11 +1,14 @@
 """Roadmap step 8: the anchor in a process the writer cannot reach into."""
 
+import gc
 import io
 import os
+import socket
+import tempfile
 import unittest
 
 from geniusnew import anchor_process
-from geniusnew.anchor_process import AnchorProcess
+from geniusnew.anchor_process import AnchorClient, start
 from geniusnew.audit import AuditAuthority, event_from_handoff
 from geniusnew.audit_chain import AuditAnchor, AuditChain, AuditHead, sign_head, verify
 from geniusnew.contracts import ContractError, Grant, Policy, canonical, issue, validate
@@ -45,24 +48,35 @@ class ChainFixture:
                                   authority=self.authority)
 
 
+def started_anchor(test, audit_key=AUDIT_KEY, directory=None):
+    """Start an anchor the way an operator would: outside any service."""
+    if directory is None:
+        holder = tempfile.TemporaryDirectory(prefix='geniusnew-anchor-')
+        test.addCleanup(holder.cleanup)
+        directory = holder.name
+    handle = start(audit_key=audit_key, socket_path=os.path.join(directory, 'anchor.sock'))
+    test.addCleanup(handle.stop)
+    return handle
+
+
 class AnchorProcessTest(ChainFixture, unittest.TestCase):
-    """Against a real child process. Kept few: each one starts an interpreter."""
+    """Against a real anchor process. Kept few: each one starts an interpreter."""
 
     def setUp(self):
         super().setUp()
-        self.anchor = AnchorProcess(audit_key=AUDIT_KEY)
-        self.addCleanup(self.anchor.close)
+        self.handle = started_anchor(self)
+        self.anchor = AnchorClient(self.handle.socket_path)
 
-    def test_a_commit_is_held_by_the_child_and_verified_against(self):
+    def test_a_commit_is_held_by_the_anchor_and_verified_against(self):
         committed = self.anchor.commit(self.head, self.records, authority=self.authority)
         self.assertEqual(committed, (5, self.head.head_hash))
         self.assertEqual(self.anchor.committed, committed)
         self.assertEqual(verify(self.records, self.head, authority=self.authority,
                                 anchor=self.anchor), 5)
-        self.assertNotEqual(self.anchor.pid, os.getpid())
+        self.assertNotEqual(self.handle.pid, os.getpid())
         self.assertNotIn('_count', vars(self.anchor))
 
-    def test_a_truncated_and_re_signed_chain_is_refused_by_the_child(self):
+    def test_a_truncated_and_re_signed_chain_is_refused_by_the_anchor(self):
         self.anchor.commit(self.head, self.records, authority=self.authority)
         shorter, resigned = self.truncated()
         with self.assertRaisesRegex(ContractError, 'anchor committed 5 records; this chain has 4'):
@@ -77,7 +91,7 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
         with self.assertRaisesRegex(ContractError, 'anchor committed 5 records'):
             verify(shorter, resigned, authority=self.authority, anchor=self.anchor)
 
-    def test_a_head_signed_with_another_key_is_refused_by_the_child(self):
+    def test_a_head_signed_with_another_key_is_refused_by_the_anchor(self):
         other = AuditAuthority(audit_key=OTHER_KEY)
         with self.assertRaisesRegex(ContractError, 'head signature does not verify'):
             self.anchor.commit(self.chain.head(other), self.records, authority=other)
@@ -94,8 +108,8 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
 
     def test_an_anchor_that_is_gone_fails_closed(self):
         self.anchor.commit(self.head, self.records, authority=self.authority)
-        self.anchor._process.kill()
-        self.anchor._process.wait()
+        self.handle._process.kill()
+        self.handle._process.wait()
         with self.assertRaisesRegex(ContractError, 'anchor process is unreachable'):
             self.anchor.committed
         with self.assertRaisesRegex(ContractError, 'anchor process is unreachable'):
@@ -103,27 +117,58 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
         with self.assertRaisesRegex(ContractError, 'anchor process is unreachable'):
             self.anchor.commit(self.head, self.records, authority=self.authority)
 
-    def test_a_closed_anchor_does_not_start_again(self):
-        """Starting on first use must not become starting on any use: that is a reset."""
-        unused = AnchorProcess(audit_key=AUDIT_KEY)
-        unused.close()
-        with self.assertRaisesRegex(ContractError, 'anchor process is unreachable'):
-            unused.committed
-        self.assertIsNone(unused._process)
+    def test_a_restarted_writer_finds_its_commitments_still_there(self):
+        """The lifecycle gap this module closed: a writer restart is not a reset.
 
-    def test_a_restarted_anchor_remembers_nothing_and_this_is_the_boundary(self):
-        """Held open. Memory only, started by the service: a restart is a reset.
-
-        `SECURITY.md` lists it. Closing it needs the anchor started under
-        another operating-system user and persisted, which v0.1 leaves out.
+        The client is all a service holds. Dropping it and connecting anew is
+        what a restarted service does, and the anchor is still where it was.
         """
         self.anchor.commit(self.head, self.records, authority=self.authority)
-        self.anchor.close()
-        restarted = AnchorProcess(audit_key=AUDIT_KEY)
-        self.addCleanup(restarted.close)
+        del self.anchor
+        gc.collect()
+        restarted = AnchorClient(self.handle.socket_path)
+        self.assertEqual(restarted.committed, (5, self.head.head_hash))
+        shorter, resigned = self.truncated()
+        with self.assertRaisesRegex(ContractError, 'anchor committed 5 records; this chain has 4'):
+            verify(shorter, resigned, authority=self.authority, anchor=restarted)
+
+    def test_the_client_holds_nothing_that_could_stop_the_anchor(self):
+        self.assertEqual(set(vars(self.anchor)), {'_socket_path'})
+        for name in ('stop', 'close', 'pid', '_process'):
+            with self.subTest(name=name):
+                self.assertFalse(hasattr(self.anchor, name))
+
+    def test_it_runs_in_a_session_of_its_own(self):
+        """A Ctrl-C at the starter's terminal goes to the starter's group, not here."""
+        self.assertEqual(os.getsid(self.handle.pid), self.handle.pid)
+        self.assertNotEqual(os.getpgid(self.handle.pid), os.getpgid(0))
+
+    def test_a_taken_socket_path_is_not_taken_over(self):
+        """A second anchor on the same path would be a silent reset."""
+        self.anchor.commit(self.head, self.records, authority=self.authority)
+        with self.assertRaisesRegex(ContractError, 'anchor process did not start'):
+            start(audit_key=AUDIT_KEY, socket_path=self.handle.socket_path)
+        self.assertEqual(self.anchor.committed, (5, self.head.head_hash))
+
+    def test_stopping_it_removes_its_socket_and_the_client_fails_closed(self):
+        self.handle.stop()
+        self.assertFalse(os.path.exists(self.handle.socket_path))
+        with self.assertRaisesRegex(ContractError, 'anchor process is unreachable'):
+            self.anchor.committed
+
+    def test_a_restarted_anchor_remembers_nothing_and_this_is_the_boundary(self):
+        """Held open. Memory only: an anchor restart is a reset.
+
+        `SECURITY.md` lists it, and `docs/ADR-002-anchor-persistence.md` is
+        where persisting it is to be decided. The stop and the start are the
+        operator's now, not the service's — but they still forget.
+        """
+        self.anchor.commit(self.head, self.records, authority=self.authority)
+        self.handle.stop()
+        restarted = started_anchor(self, directory=os.path.dirname(self.handle.socket_path))
         shorter, resigned = self.truncated()
         self.assertEqual(verify(shorter, resigned, authority=self.authority,
-                                anchor=restarted), 4)
+                                anchor=AnchorClient(restarted.socket_path)), 4)
 
 
 class InProcessAnchorTest(ChainFixture, unittest.TestCase):
@@ -137,7 +182,15 @@ class InProcessAnchorTest(ChainFixture, unittest.TestCase):
 
     def test_a_short_key_is_refused_before_a_process_starts(self):
         with self.assertRaisesRegex(ContractError, 'audit_key'):
-            AnchorProcess(audit_key=b'short')
+            start(audit_key=b'short', socket_path='/nonexistent/anchor.sock')
+
+    def test_the_socket_path_must_be_absolute(self):
+        for path in ('anchor.sock', None, b'/tmp/anchor.sock'):
+            with self.subTest(path=path):
+                with self.assertRaisesRegex(ContractError, 'absolute path'):
+                    AnchorClient(path)
+        with self.assertRaisesRegex(ContractError, 'absolute path'):
+            start(audit_key=AUDIT_KEY, socket_path='anchor.sock')
 
 
 def frame(message):
@@ -251,25 +304,41 @@ class ChildProtocolTest(ChainFixture, unittest.TestCase):
                 with self.assertRaisesRegex(ContractError, 'invalid reply'):
                     anchor_process._state(reply)
 
-    def test_the_serve_loop_answers_each_frame_and_stops_at_a_torn_one(self):
-        requests = (frame({'audit_key': AUDIT_KEY.hex(), 'kind': 'init'})
-                    + frame(self.commit_message()) + frame({'kind': 'reset'})
-                    + frame({'kind': 'committed'}) + b'\x00\x00')
-        out = io.BytesIO()
-        self.assertEqual(anchor_process._serve(io.BytesIO(requests), out), 0)
-        answers = replies(out.getvalue())
-        self.assertEqual([answer['kind'] for answer in answers],
-                         ['ok', 'ok', 'refused', 'ok'])
-        self.assertEqual(answers[0]['count'], 0)
-        self.assertEqual(answers[3]['count'], 5)
+    def serve(self, data):
+        """One connection, served as the anchor serves it. Returns what came back."""
+        server, client = socket.socketpair()
+        with server, client:
+            client.sendall(data)
+            client.shutdown(socket.SHUT_WR)
+            anchor_process._serve_connection(server, self.anchor, self.authority)
+            server.close()
+            return client.makefile('rb').read()
 
-    def test_the_serve_loop_will_not_start_without_a_key(self):
-        for requests in (b'', frame({'kind': 'init'})):
-            with self.subTest(requests=requests):
-                out = io.BytesIO()
-                self.assertEqual(anchor_process._serve(io.BytesIO(requests), out), 1)
-                self.assertEqual(out.getvalue(), b'')
+    def test_each_connection_gets_one_answer(self):
+        self.assertEqual([answer['kind'] for answer in replies(
+            self.serve(frame(self.commit_message())))], ['ok'])
+        self.assertEqual(replies(self.serve(frame({'kind': 'reset'})))[0]['kind'], 'refused')
+        answers = replies(self.serve(frame({'kind': 'committed'})
+                                     + frame({'kind': 'committed'})))
+        self.assertEqual(answers, [{'count': 5, 'head_hash': self.head.head_hash,
+                                    'kind': 'ok'}])
 
+    def test_a_torn_or_oversized_frame_gets_no_answer(self):
+        oversized = (anchor_process._MAX_REQUEST_BYTES + 1).to_bytes(4, 'big')
+        for data in (b'', b'\x00\x00', frame({'kind': 'committed'})[:-1], oversized):
+            with self.subTest(data=data[:8]):
+                self.assertEqual(self.serve(data), b'')
+        self.assertEqual(self.anchor.committed, (0, EMPTY))
+
+    def test_the_anchor_will_not_start_without_a_key(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, 'anchor.sock')
+            for requests in (b'', frame({'kind': 'init'})):
+                with self.subTest(requests=requests):
+                    out = io.BytesIO()
+                    self.assertEqual(anchor_process._serve(io.BytesIO(requests), out, path), 1)
+                    self.assertEqual(out.getvalue(), b'')
+                    self.assertFalse(os.path.exists(path))
 
 if __name__ == '__main__':
     unittest.main()

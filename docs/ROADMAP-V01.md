@@ -109,11 +109,26 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    Gegen den bisherigen In-Prozess-Anker gelingt das, gegen den Prozess nicht; beide
    Richtungen hält ein Test fest.
 
-   Offen bleibt der **Lebenszyklus**: Der Dienst startet den Anker und kann ihn damit
-   auch beenden, und die Festlegungen liegen nur im Speicher — ein Neustart ist ein
-   Zurücksetzen. Das zu schließen heißt, den Anker unter einem anderen Betriebssystem-
-   Nutzer zu betreiben und zu persistieren; beides ist Deployment bzw. Persistenz und
-   damit außerhalb von v0.1. Ein Test hält die Grenze offen.
+   Offen war danach der **Lebenszyklus**: Der Dienst startete den Anker und konnte ihn
+   damit auch beenden, und ein Neustart des Dienstes war ein Zurücksetzen.
+
+   **Status: Lebenszyklus beim eigenen Pfad.** Start und Stopp sind aus dem Dienst
+   herausgezogen: `anchor_process.start` startet den Anker in einer eigenen Session und
+   gibt ein `AnchorHandle` zurück, das als Einziges ihn beenden kann. Der Dienst bekommt
+   in `wiring.build` nur einen `AnchorClient` mit dem Socket-Pfad — ohne Voreinstellung,
+   denn eine Voreinstellung wäre wieder der Dienst, der seinen Anker selbst startet; und
+   `Service` hat keine Methode mehr, die etwas beendet. Statt zweier Pipes hält der
+   Schreiber jetzt einen Unix-Socket-Pfad; fragen kann er darüber weiterhin genau die
+   zwei Dinge von oben. Den Schlüssel bekommt der Anker
+   von dem, der ihn startet, nicht vom Schreiber. Ein Neustart des Dienstes setzt den
+   Anker nicht mehr zurück; die Demo belegt das mit einem vierzehnten Angriff, und
+   `tests/test_end_to_end.py` hält es fest.
+
+   Offen bleiben zwei Dinge, bewusst getrennt: Der Anker läuft unter demselben
+   Betriebssystem-Nutzer (Deployment), und er hält nur Speicher — ein Neustart des
+   *Ankers* ist weiterhin ein Zurücksetzen. Ob und wie er persistiert wird, ist eine
+   eigene Entscheidung in `docs/ADR-002-anchor-persistence.md`, Status offen. Ein Test
+   hält die Grenze offen.
 
    **Entscheidung zu HMAC:** bleibt für v0.1. Die Grenze steht in `SECURITY.md` und ist
    per Test offen gehalten; asymmetrische Signaturen kommen nach v0.1.
@@ -515,7 +530,8 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
     Skript endet mit `PASS` oder `FAIL` und einem entsprechenden Exit-Code — eine Demo,
     die nicht scheitern kann, beweist nichts.
 
-    Die zweite Hälfte ist der eigentliche Punkt: zwölf Manipulationsversuche, die alle
+    Die zweite Hälfte ist der eigentliche Punkt: zwölf Manipulationsversuche (heute
+    vierzehn, siehe unten), die alle
     abgelehnt werden müssen. Sieben davon waren einmal ein echtes Loch — aus Review, aus
     eigenem Probing, und eines aus dem Zusammenstecken zweier fertiger Komponenten.
 
@@ -533,11 +549,12 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
     Ausgabe eines Befehls — bis auf die Prozessgrenze zwischen den Instanzen, die eine
     Deployment-Frage bleibt.
 
-    Aus fünf Angriffen sind dreizehn geworden: vier davon gehen über den Socket, weil der
+    Aus fünf Angriffen sind vierzehn geworden: vier davon gehen über den Socket, weil der
     Eingang das Einzige ist, was ein Fremder erreicht — ein nicht registrierter Schlüssel,
     ein `tier` im Body, eine selbstgewählte Job-Kennung, eine Tür, die es nicht gibt. Die
-    übrigen neun halten die Objekte, die ein Insider hätte; der neunte ist der Schreiber
-    selbst, der den Anker zurückzusetzen versucht (Schritt 8).
+    übrigen zehn halten die Objekte, die ein Insider hätte; die letzten beiden sind der
+    Schreiber selbst, der den Anker zurückzusetzen versucht — einmal aus dem eigenen
+    Speicher, einmal durch einen Neustart des Dienstes (Schritt 8).
 
 19. **CI führt den End-to-End-Test mit aus**, nicht nur die Unit-Tests.
 
@@ -549,9 +566,19 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
     Refusal-Mutation-Guard über dieselbe Suite, also muss auch jede Ablehnung auf dem
     End-to-End-Pfad von einem Test bemerkt werden.
 
-    Grenze: die Isolation verlangt POSIX-Ressourcenlimits. Die CI läuft auf
-    `ubuntu-latest`; unter Windows verweigert der isolierte Runner die Ausführung
-    (fail closed), die Demo endet dort also nicht mit `PASS`.
+    Grenze: die Isolation verlangt POSIX-Ressourcenlimits, der Anker einen Unix-Socket.
+    Deshalb läuft die CI auf drei Systemen, jedes mit der Aussage, die dort gilt:
+    `ubuntu-latest` führt Suite, Refusal-Guard und den Quickstart aus einer frischen
+    Kopie mit leerer Umgebung aus, und die letzte Zeile muss wörtlich in der README
+    stehen; `macos-latest` führt Suite und Demo aus; `windows-latest` verlangt, dass die
+    Demo mit Exit-Code 1 und einer `FAIL`-Zeile endet, die auf WSL verweist (fail
+    closed). Unter Windows läuft die Demo in WSL; die README beschreibt den Weg.
+
+    Die Isolation behauptet auch ein Speicherlimit. Bisher belegte ein Test nur, dass der
+    Wert im Kind ankommt; `test_memory_past_the_limit_is_refused_not_granted` verlangt
+    jetzt, dass er greift. Die erste Fassung dieses Tests bestand auch ohne Speicherlimit —
+    sie schrieb jede Seite und lief ins CPU-Limit. Wieder eine Zusicherung, die ein anderer
+    Pfad erfüllte als der geprüfte; gefunden, indem das Limit testweise entfernt wurde.
 
 20. **README-Quickstart**, den ein Fremder ohne Rückfragen befolgen kann. Am besten von
     jemandem gegengelesen, der das Projekt nicht kennt.
@@ -559,6 +586,11 @@ Ein Ergebnis, das nur der Autor reproduzieren kann, ist kein Ergebnis.
     **Status: geschrieben, nicht gegengelesen.** Der Quickstart steht in `README.md`. Der
     zweite Halbsatz dieses Schritts ist nicht erfüllt, solange niemand ohne
     Projektkenntnis ihn befolgt hat; bis dahin gilt der Schritt als offen.
+
+    Was sich davon prüfen lässt, prüft die CI (Schritt 19). Für den Rest steht das
+    Protokoll in `docs/QUICKSTART-REVIEW.md`: wer, in welcher Umgebung, was
+    aufgeschrieben wird und wann der Schritt als erledigt gilt. **Offen ist die Person** —
+    sie muss benannt werden, und das kann kein Commit.
 
 21. **Tag `v0.1`** auf einem grünen, verifizierten Commit.
 
