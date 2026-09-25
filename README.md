@@ -56,7 +56,7 @@ Der Befehl schickt einen Job über HTTP durch alle Schichten und greift ihn dana
 dreizehnmal an. Die letzte Zeile muss lauten:
 
 ```
-PASS — job succeeded over HTTP, chain verified against the anchored head, 14/14 attacks refused.
+PASS — job succeeded over HTTP, chain verified against the anchored head, 15/15 attacks refused.
 ```
 
 und der Exit-Code ist `0`. Alles andere ist ein Fehlschlag: das Skript sagt dann, welche
@@ -78,8 +78,8 @@ kein Schlüsselmaterial. `tests/test_demo.py` prüft das mit Kanarienwerten.
 **Was `PASS` nicht bedeutet:** keine Produktionsfreigabe und kein Sicherheitsnachweis
 für einen echten Betrieb. Außer Worker und Audit-Anker sind die Instanzen getrennte
 Objekte in einem Prozess; die Worker-Isolation ist eine Prozessgrenze, keine microVM;
-der Anker wird vom Dienst gestartet und hält nur Speicher; Ergebnissignaturen sind
-noch HMAC und damit symmetrisch (Handoffs und Audit-Köpfe sind Ed25519). Die
+der Anker wird vom Dienst gestartet und hält nur Speicher; alle Signaturen (Handoff,
+Ergebnis, Audit-Kopf) sind Ed25519, aber alle Schlüssel hängen an einem Root-Secret. Die
 bekannten Grenzen stehen einzeln in `SECURITY.md`.
 
 **Andere Betriebssysteme:** Die Worker-Isolation braucht POSIX-Ressourcenlimits. Unter

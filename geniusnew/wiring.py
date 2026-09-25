@@ -240,7 +240,7 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
                                 gateway=gateway, workers=endpoints)
     verifier = ResultVerifier(verifier_id=verifier_id,
                               handoff_verifier=handoff_verifier,
-                              result_key=keys.result_key)
+                              worker_verifier=worker_authority.verifier())
     audit = AuditAuthority(audit_key=keys.audit_key)
     chain = AuditChain()
     pending = PendingJobs()

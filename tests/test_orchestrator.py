@@ -127,7 +127,7 @@ class Fixture:
                            policy=self.policy if policy is DEFAULT else policy,
                            verifier=self.key, now=now)
         return accept(dispatched.result_wire, handoff=handoff,
-                      authority=self.result_authority, now=now)
+                      verifier=self.result_authority, now=now)
 
 
 class OrchestratorTest(Fixture, unittest.TestCase):

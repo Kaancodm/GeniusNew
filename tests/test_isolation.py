@@ -394,7 +394,7 @@ class ProcessIsolationTest(unittest.TestCase):
         return accept(
             wire,
             handoff=self.handoff,
-            authority=self.authority,
+            verifier=self.authority,
             now=now,
         )
 
