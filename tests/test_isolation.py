@@ -68,6 +68,42 @@ class SpawnWorker(Worker):
         return {"text": "spawn unexpectedly worked"}
 
 
+class NativeSpawnWorker(Worker):
+    """Starts a shell through the one spawn path that raises no audit event.
+
+    `spawnv_passfds` is the stdlib's own thin wrapper around
+    `_posixsubprocess.fork_exec`, kept in step with it on every Python version,
+    so the test does not have to track that function's changing signature.
+    """
+
+    tool = "summarize"
+
+    def __init__(self, path):
+        self.path = path
+
+    def run(self, payload):
+        from multiprocessing.util import spawnv_passfds
+
+        # The path travels as $0, never through the shell's parser.
+        pid = spawnv_passfds(b"/bin/sh", [b"/bin/sh", b"-c", b'echo escaped > "$0"',
+                                         os.fsencode(self.path)], ())
+        # Reap the child before returning: the assertion needs a completed write,
+        # not a race between a detached shell and temporary-directory cleanup.
+        _, status = os.waitpid(pid, 0)
+        return {"text": f"shell exit={os.waitstatus_to_exitcode(status)}"}
+
+
+class OutsideReadWorker(Worker):
+    tool = "summarize"
+
+    def __init__(self, path):
+        self.path = path
+
+    def run(self, payload):
+        with open(self.path, encoding="utf-8") as handle:
+            return {"text": handle.read()}
+
+
 class ParentProcReadWorker(Worker):
     tool = "summarize"
 
@@ -516,6 +552,38 @@ class ProcessIsolationTest(unittest.TestCase):
         taken = self.taken(self.runner(SpawnWorker()).execute(self.permit_for(self.handoff), now=110))
         self.assertFalse(taken.succeeded)
         self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
+
+    def test_a_spawn_below_the_audit_hook_escapes_and_this_is_the_boundary(self):
+        """Held open (SECURITY.md): the sandbox is an audit hook, and
+        `_posixsubprocess` raises no audit event. A worker can start a process
+        the hook never sees, and that process writes where the worker may not.
+        Only worker code can do this, not a client. Closing it takes an OS
+        sandbox; whoever does must invert this test and update SECURITY.md.
+        """
+        with tempfile.TemporaryDirectory() as outside:
+            target = os.path.join(outside, "escape.txt")
+            taken = self.taken(
+                self.runner(NativeSpawnWorker(target)).execute(self.permit_for(self.handoff), now=110)
+            )
+            self.assertTrue(taken.succeeded)
+            self.assertEqual(taken.output, {"text": "shell exit=0"})
+            with open(target, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "escaped\n")
+
+    def test_a_read_outside_the_temporary_directory_is_allowed_and_this_is_the_boundary(self):
+        """Held open (SECURITY.md): only `/proc`, `/sys` and `/dev` are refused
+        to a reading worker. Anything else the service user can read, a worker
+        can read and hand back as its output, which goes to the client.
+        """
+        with tempfile.TemporaryDirectory() as outside:
+            target = os.path.join(outside, "host-file.txt")
+            with open(target, "w", encoding="utf-8") as handle:
+                handle.write("CANARY-OUTSIDE-THE-SANDBOX")
+            taken = self.taken(
+                self.runner(OutsideReadWorker(target)).execute(self.permit_for(self.handoff), now=110)
+            )
+        self.assertTrue(taken.succeeded)
+        self.assertEqual(taken.output, {"text": "CANARY-OUTSIDE-THE-SANDBOX"})
 
     def test_parent_proc_environment_cannot_be_read(self):
         taken = self.taken(

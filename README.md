@@ -38,22 +38,28 @@ GeniusNew wird Zero-Trust aufgebaut. Sicherheitsrelevante Identität, Rechte, Po
 
 ## Quickstart
 
-Voraussetzungen: Linux, Python 3.11 oder neuer, `git`. Eine einzige Abhängigkeit,
-`cryptography` für die Ed25519-Signatur der Audit-Köpfe, exakt gepinnt und mit den Hashes
-aller veröffentlichten Dateien in `requirements.txt`. Nach der Installation kein
-Internetzugriff — der HTTP-Eingang lauscht nur auf `127.0.0.1` —, und nichts bleibt auf
-der Platte zurück außer temporären Verzeichnissen, die wieder verschwinden.
+`./scripts/demo.sh` ist der kanonische Demo-Nachweis dieses Entwicklungsstands:
+ein Befehl, der einen Job über
+HTTP durch alle Schichten schickt, die Audit-Kette gegen den verankerten Kopf prüft und
+den Job danach fünfzehnmal angreift.
+
+**Voraussetzungen:** Linux (oder WSL), Python 3.11 oder neuer, `git`. Die direkte
+Abhängigkeit `cryptography` liefert die Ed25519-Signaturen von Handoff, Ergebnis und
+Audit-Kopf. Sie und ihre Abhängigkeiten sind mit Versionen und Hashes in
+`requirements.txt` gepinnt. Nach der Installation kein Internetzugriff — der HTTP-Eingang lauscht
+nur auf `127.0.0.1` —, und nichts bleibt auf der Platte zurück außer temporären
+Verzeichnissen, die wieder verschwinden.
 
 ```sh
 git clone https://github.com/Kaancodm/GeniusNew.git
 cd GeniusNew
 python3 -m venv .venv && . .venv/bin/activate
 python3 -m pip install --require-hashes -r requirements.txt
-./scripts/demo.sh
+python3 -W error::ResourceWarning -m unittest discover -s tests   # Sekunden, endet mit OK
+./scripts/demo.sh                                                 # der Nachweis
 ```
 
-Der Befehl schickt einen Job über HTTP durch alle Schichten und greift ihn danach
-dreizehnmal an. Die letzte Zeile muss lauten:
+**Erfolgssignal:** Die Tests enden mit `OK`. Die letzte Zeile der Demo muss lauten:
 
 ```
 PASS — job succeeded over HTTP, chain verified against the anchored head, 15/15 attacks refused.
@@ -70,18 +76,39 @@ Was die Ausgabe zeigt, in der Reihenfolge der nummerierten Blöcke:
 | `[2]`–`[3]` | Job geht über einen echten Socket hinein; die Identität kommt aus dem API-Key, nicht aus dem Request |
 | `[4]` | Audit-Chain mit vier Einträgen von drei Instanzen: `orchestrator`, `gateway`, `monitor` |
 | `[5]` | Kette verifiziert gegen einen signierten Kopf, festgelegt bei einem Anker in eigenem Prozess |
-| `[6]` | Dreizehn Manipulationsversuche, jeder muss mit `[ok]` abgelehnt werden |
+| `[6]` | Fünfzehn Manipulationsversuche, jeder muss mit `[ok]` abgelehnt werden |
+| `[7]` | Der Anker wird gestoppt und aus seiner Zustandsdatei neu gestartet; er setzt beim letzten signierten Kopf fort |
 
 Die Ausgabe enthält bewusst nur Digests und Kennungen — keine Payload, kein Ergebnistext,
 kein Schlüsselmaterial. `tests/test_demo.py` prüft das mit Kanarienwerten.
 
+**Was `PASS` zeigt:** Ein Job läuft den ganzen Pfad einmal durch — API-Key →
+serverseitige Identität → Orchestrator, der den Handoff signiert → Gateway, das ihn
+unabhängig prüft und einen einmaligen Permit ausstellt → Worker in eigenem Prozess →
+signiertes Ergebnis → Ergebnisprüfung, die nur öffentliche Schlüssel hält → Audit-Kette,
+deren signierter Kopf bei einem Anker in eigenem Prozess liegt. Jeder der fünfzehn
+Angriffe (fremder Key, Tier oder Job-ID aus dem Request, unbekannte Route, Ergebnis-Replay,
+abgelaufene Gültigkeit, Doppelannahme, falsche Rollenschlüssel, Payload-Tausch, Dispatch
+ohne Permit, gekürzte oder zurückgesetzte Kette) wird abgelehnt.
+
 **Was `PASS` nicht bedeutet:** keine Produktionsfreigabe und kein Sicherheitsnachweis
 für einen echten Betrieb. Außer Worker und Audit-Anker sind die Instanzen getrennte
-Objekte in einem Prozess; die Worker-Isolation ist eine Prozessgrenze, keine microVM;
-der Anker wird vom Dienst unter demselben Nutzer gestartet (seine Zustandsdatei übersteht
-einen Neustart, schützt aber nicht vor Rückschnitt durch diesen Nutzer); alle Signaturen (Handoff,
-Ergebnis, Audit-Kopf) sind Ed25519, aber alle Schlüssel hängen an einem Root-Secret. Die
-bekannten Grenzen stehen einzeln in `SECURITY.md`.
+Objekte in einem Prozess; die Worker-Isolation ist eine Prozessgrenze, keine microVM, und
+beruht auf einem Python-Audit-Hook, den Worker-Code umgehen kann — ein Worker kann so
+Prozesse starten und außerhalb seines Verzeichnisses schreiben, und er darf Dateien des
+Hosts lesen; der Anker wird vom Dienst unter demselben Nutzer gestartet (seine
+Zustandsdatei übersteht einen Neustart, schützt aber nicht vor Rückschnitt durch diesen
+Nutzer); alle Signaturen (Handoff, Ergebnis, Audit-Kopf) sind Ed25519, aber alle
+Schlüssel hängen an einem Root-Secret. Die bekannten Grenzen stehen einzeln in
+`SECURITY.md`.
+
+**v0.1 und `main`:** Der Tag [v0.1](https://github.com/Kaancodm/GeniusNew/tree/v0.1)
+zeigt auf Commit `3a0e1bc30f60d93838d575ca6ab5d8a754c340e9`
+(geprüft am 26.09.2026). Für ihn gilt
+[das README jenes Commits](https://github.com/Kaancodm/GeniusNew/blob/3a0e1bc30f60d93838d575ca6ab5d8a754c340e9/README.md):
+keine externe Python-Abhängigkeit, HMAC- statt Ed25519-Signaturen, und die Demo endet
+mit `13/13 attacks refused`. Der Quickstart oben gilt für den neueren Stand dieses
+Branches; eine Aussage über den Tag ersetzt keine Prüfung des aktuellen Commits.
 
 **Andere Betriebssysteme:** Die Worker-Isolation braucht POSIX-Ressourcenlimits. Unter
 Windows verweigert sie die Ausführung (fail closed), die Demo erreicht dort kein `PASS`.
@@ -95,7 +122,7 @@ aus Schritt 8 läuft in eigenem Prozess, sein Lebenszyklus liegt noch beim Diens
 Schritt 20 (technischer Quickstart-Review) ist nach den vom Projektverantwortlichen
 angepassten Abnahmekriterien abgeschlossen; der geprüfte Commit, die Umgebung und das
 Ergebnis stehen in [docs/QUICKSTART-REVIEW.md](docs/QUICKSTART-REVIEW.md).
-Schritt 21 (Tag `v0.1`) steht aus.
+Der Tag `v0.1` aus Schritt 21 ist angelegt; sein geprüfter Ziel-Commit steht oben.
 
 Die Phasennummern in `docs/MIGRATION-MATRIX.md` zählen die Migration aus dem
 Altprojekt und sind nicht dieselben wie die Bauphasen hier.
@@ -137,15 +164,19 @@ Siehe:
 
 ## Lokale Prüfung
 
-Dieselben Schritte wie die CI (`.github/workflows/verify.yml`), in der venv aus dem
-Quickstart:
+In der aktivierten venv aus dem Quickstart, immer nacheinander. Der Refusal-Guard
+prüft die vom Thema betroffenen Module; hier ist die Worker-Isolation das Beispiel:
 
 ```sh
-python3 -m pip install --require-hashes -r requirements.txt
-python3 -m unittest discover -s tests -v
-python3 scripts/refusals.py
+python3 -W error::ResourceWarning -m unittest discover -s tests -v
+./scripts/demo.sh
+python3 scripts/refusals.py geniusnew/isolation.py geniusnew/isolation_child.py
+git diff --check
 ```
 
-Der erste läuft in Sekunden und enthält den End-to-End-Test und die Demo. Der zweite
+Die Testsuite enthält den End-to-End-Test und einen Demo-Test; danach läuft die Demo
+noch einmal als eigener Befehl. Der Refusal-Guard
 schaltet jede Ablehnung im Code einzeln ab und verlangt, dass die Suite jedes Mal rot
 wird; er führt die Suite dafür einmal pro Ablehnung aus und dauert entsprechend Minuten.
+Ohne Modulargumente prüft `python3 scripts/refusals.py` alle Module in `GUARDED`.
+Die CI (`.github/workflows/verify.yml`) prüft diese als Matrix.
