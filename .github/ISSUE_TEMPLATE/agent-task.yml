@@ -1,0 +1,47 @@
+name: Bounded collaboration task
+description: Define one verifiable task for a person or coding assistant.
+title: "task: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This repository is public. Do not include credentials, private endpoints,
+        personal documents or sensitive vulnerability details.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Expected outcome
+      description: Describe one concrete change and why it is needed.
+    validations:
+      required: true
+  - type: input
+    id: baseline
+    attributes:
+      label: Verified baseline
+      description: Full commit SHA and, if relevant, the dependent PR.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and boundaries
+      description: Files or behavior in scope, existing work to preserve, and exclusions.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance evidence
+      description: Observable result, relevant commands and expected refusal behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: handoff
+    attributes:
+      label: Handoff and review
+      description: Implementer, independent reviewer if needed, and required owner decision.
+      value: |
+        Deliver a draft PR with exact head SHA, diff summary, actual checks and open limits.
+        Do not merge, tag a release or deploy as part of this task.
+    validations:
+      required: true
