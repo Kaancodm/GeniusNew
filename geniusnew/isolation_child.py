@@ -15,6 +15,7 @@ from .isolation import (
     _MAX_CHILD_REQUEST_BYTES,
     _SandboxDenied,
     _audit_hook,
+    _install_process_filter,
     _set_resource_limits,
     _write_message,
 )
@@ -81,6 +82,10 @@ def child_entry(root: str) -> int:
         os.environ.update({"HOME": root, "TMPDIR": root, "TEMP": root, "TMP": root})
         tempfile.tempdir = root
         state = {"violated": False}
+        # The filter goes in first: the hook refuses ctypes, which installing
+        # it needs. From here the kernel kills any process start the hook
+        # cannot see; a failure to install lands in the outer handler.
+        _install_process_filter()
         sys.addaudithook(_audit_hook(root, state))
 
         try:

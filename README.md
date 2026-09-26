@@ -42,9 +42,9 @@ GeniusNew wird Zero-Trust aufgebaut. Sicherheitsrelevante Identität, Rechte, Po
 HTTP durch alle Schichten schickt, die Audit-Kette gegen den verankerten Kopf prüft und
 den Job danach fünfzehnmal angreift.
 
-**Voraussetzungen:** Linux (oder WSL), Python 3.11 oder neuer, `git`. Eine einzige
-Abhängigkeit, `cryptography` für die Ed25519-Signaturen von Handoff, Ergebnis und
-Audit-Kopf, exakt gepinnt und mit den Hashes aller veröffentlichten Dateien in
+**Voraussetzungen:** Linux auf x86_64 oder aarch64 (auch WSL 2), Python 3.11 oder neuer,
+`git`. Eine einzige Abhängigkeit, `cryptography` für die Ed25519-Signaturen von Handoff,
+Ergebnis und Audit-Kopf, exakt gepinnt und mit den Hashes aller veröffentlichten Dateien in
 `requirements.txt`. Nach der Installation kein Internetzugriff — der HTTP-Eingang lauscht
 nur auf `127.0.0.1` —, und nichts bleibt auf der Platte zurück außer temporären
 Verzeichnissen, die wieder verschwinden.
@@ -92,10 +92,9 @@ ohne Permit, gekürzte oder zurückgesetzte Kette) wird abgelehnt.
 
 **Was `PASS` nicht bedeutet:** keine Produktionsfreigabe und kein Sicherheitsnachweis
 für einen echten Betrieb. Außer Worker und Audit-Anker sind die Instanzen getrennte
-Objekte in einem Prozess; die Worker-Isolation ist eine Prozessgrenze, keine microVM, und
-beruht auf einem Python-Audit-Hook, den Worker-Code umgehen kann — ein Worker kann so
-Prozesse starten und außerhalb seines Verzeichnisses schreiben, und er darf Dateien des
-Hosts lesen; der Anker wird vom Dienst unter demselben Nutzer gestartet (seine
+Objekte in einem Prozess; die Worker-Isolation ist eine Prozessgrenze, keine microVM:
+Prozessstart sperrt der Kernel (Seccomp), alles Übrige ein Python-Audit-Hook, und ein
+Worker darf Dateien des Hosts lesen; der Anker wird vom Dienst unter demselben Nutzer gestartet (seine
 Zustandsdatei übersteht einen Neustart, schützt aber nicht vor Rückschnitt durch diesen
 Nutzer); alle Signaturen (Handoff, Ergebnis, Audit-Kopf) sind Ed25519, aber alle
 Schlüssel hängen an einem Root-Secret. Die bekannten Grenzen stehen einzeln in
@@ -106,10 +105,10 @@ das README jenes Commits: keine Abhängigkeit, HMAC- statt Ed25519-Signaturen, u
 Demo endet mit `13/13 attacks refused`. `main` ist seither weiter; was dazugekommen ist,
 steht in `docs/STATUS.md`.
 
-**Andere Betriebssysteme:** Die Worker-Isolation braucht POSIX-Ressourcenlimits. Unter
-Windows verweigert sie die Ausführung (fail closed), die Demo erreicht dort kein `PASS`.
-WSL ist Linux; die Testsuite läuft dort (belegt in #28). macOS ist nicht getestet. Die
-CI läuft auf `ubuntu-latest`.
+**Andere Betriebssysteme:** Die Worker-Isolation braucht POSIX-Ressourcenlimits und einen
+Seccomp-Filter, also Linux auf x86_64 oder aarch64. Unter Windows und macOS verweigert
+sie die Ausführung (fail closed), die Demo erreicht dort kein `PASS`. WSL 2 ist Linux;
+die Testsuite lief dort vor dem Seccomp-Filter (belegt in #28). Die CI läuft auf `ubuntu-latest`.
 
 ## Aktueller Stand
 

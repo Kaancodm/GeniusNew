@@ -7,9 +7,11 @@ payload crosses an exec boundary, and the parent validates and signs whatever
 comes back.
 
 This is deliberately a v0.1 process sandbox, not a microVM. The boundary uses a
-fresh Python interpreter, POSIX resource limits and Python's audit-hook
-mechanism. It does not claim to contain hostile native code or raw syscalls; the
-stronger OS boundary belongs after v0.1.
+fresh Python interpreter, POSIX resource limits, Python's audit-hook mechanism
+and one kernel-enforced rule: a seccomp filter that kills the child the moment
+it tries to start another process or program. The hook only sees what Python
+reports, and `_posixsubprocess` reports nothing; the filter sees the syscall.
+Reads are still bounded only by the hook (`SECURITY.md`).
 """
 
 from __future__ import annotations
@@ -18,11 +20,13 @@ from dataclasses import asdict, dataclass
 import json
 import os
 import select
+import signal
+import struct
 import subprocess
 import sys
 import tempfile
 import time
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from .contracts import ContractError, canonical
 from .results import WorkerAuthority
@@ -67,6 +71,31 @@ _FORBIDDEN_PROCESS_EVENTS = frozenset({
     "resource.prlimit",
 })
 _FORBIDDEN_READ_ROOTS = ("/proc", "/sys", "/dev")
+
+# Per architecture: the audit arch the filter must see, the syscalls that start
+# a process or a program, and the two clone variants. aarch64 has no fork or
+# vfork syscall; libc builds both from clone there.
+_FILTER_ARCHES = {
+    "x86_64": {"arch": 0xC000003E, "kill": (57, 58, 59, 322),
+               "clone": 56, "clone3": 435},
+    "aarch64": {"arch": 0xC00000B7, "kill": (221, 281),
+                "clone": 220, "clone3": 435},
+}
+_X32_SYSCALL_BIT = 0x40000000
+_CLONE_THREAD = 0x00010000
+_ENOSYS = 38
+_SECCOMP_RET_KILL_PROCESS = 0x80000000
+_SECCOMP_RET_ERRNO = 0x00050000
+_SECCOMP_RET_ALLOW = 0x7FFF0000
+_BPF_LD_W_ABS = 0x20
+_BPF_JEQ_K = 0x15
+_BPF_JGE_K = 0x35
+_BPF_JSET_K = 0x45
+_BPF_RET_K = 0x06
+_SIGSYS = getattr(signal, "SIGSYS", None)  # absent on Windows
+_PR_SET_SECCOMP = 22
+_PR_SET_NO_NEW_PRIVS = 38
+_SECCOMP_MODE_FILTER = 2
 
 
 def _fail(message: str) -> None:
@@ -196,6 +225,79 @@ def _set_resource_limits(limits: IsolationLimits) -> None:
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
 
+def _process_filter_supported() -> bool:
+    # A 32-bit interpreter on a 64-bit kernel would present another audit arch
+    # and be killed on its first syscall; refuse it here rather than there.
+    return (sys.platform.startswith("linux")
+            and struct.calcsize("P") == 8
+            and os.uname().machine in _FILTER_ARCHES)
+
+
+def _bpf(code: int, jt: int, jf: int, k: int) -> bytes:
+    return struct.pack("HBBI", code, jt, jf, k)
+
+
+def _process_filter(machine: str) -> bytes:
+    """Return a classic-BPF seccomp program for `machine`.
+
+    Kill on: a foreign audit arch (a syscall ABI the table does not describe),
+    x32 syscall numbers, fork, vfork, execve, execveat, and clone without
+    CLONE_THREAD. Threads stay allowed because the interpreter may start them
+    and they share the filter. clone3 passes its flags in memory the filter
+    cannot read, so it gets ENOSYS and libc falls back to clone, which it can.
+    """
+    spec = _FILTER_ARCHES.get(machine)
+    if spec is None:
+        _fail("no seccomp process filter for this architecture")
+    kill = _bpf(_BPF_RET_K, 0, 0, _SECCOMP_RET_KILL_PROCESS)
+    program = [
+        _bpf(_BPF_LD_W_ABS, 0, 0, 4),                   # seccomp_data.arch
+        _bpf(_BPF_JEQ_K, 1, 0, spec["arch"]),
+        kill,
+        _bpf(_BPF_LD_W_ABS, 0, 0, 0),                   # seccomp_data.nr
+        _bpf(_BPF_JGE_K, 0, 1, _X32_SYSCALL_BIT),
+        kill,
+    ]
+    for number in spec["kill"]:
+        program += [_bpf(_BPF_JEQ_K, 0, 1, number), kill]
+    program += [
+        _bpf(_BPF_JEQ_K, 0, 1, spec["clone3"]),
+        _bpf(_BPF_RET_K, 0, 0, _SECCOMP_RET_ERRNO | _ENOSYS),
+        _bpf(_BPF_JEQ_K, 0, 3, spec["clone"]),
+        _bpf(_BPF_LD_W_ABS, 0, 0, 16),                  # low word of args[0]
+        _bpf(_BPF_JSET_K, 1, 0, _CLONE_THREAD),
+        kill,
+        _bpf(_BPF_RET_K, 0, 0, _SECCOMP_RET_ALLOW),
+    ]
+    return b"".join(program)
+
+
+def _install_process_filter(prctl: Callable[..., int] | None = None) -> None:
+    """Make the kernel kill this process if it tries to start another one.
+
+    Called in the child before the audit hook, which refuses ctypes. A filter
+    cannot be removed once installed, so worker code cannot undo it either.
+    `prctl` is injectable so a test can drive the refusals without filtering
+    the test runner itself.
+    """
+    import ctypes
+
+    class _SockFprog(ctypes.Structure):
+        _fields_ = [("len", ctypes.c_ushort), ("filter", ctypes.c_void_p)]
+
+    program = _process_filter(os.uname().machine)
+    if prctl is None:
+        prctl = ctypes.CDLL(None, use_errno=True).prctl
+        prctl.argtypes = (ctypes.c_int,) + (ctypes.c_ulong,) * 4
+        prctl.restype = ctypes.c_int
+    buffer = ctypes.create_string_buffer(program, len(program))
+    fprog = _SockFprog(len(program) // 8, ctypes.addressof(buffer))
+    if prctl(_PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
+        _fail("could not set no_new_privs for the worker")
+    if prctl(_PR_SET_SECCOMP, _SECCOMP_MODE_FILTER, ctypes.addressof(fprog), 0, 0) != 0:
+        _fail("could not install the worker's seccomp filter")
+
+
 def _worker_spec(worker: Worker) -> dict[str, Any]:
     cls = type(worker)
     module = type.__getattribute__(cls, "__module__")
@@ -295,6 +397,9 @@ def _read_process(process: subprocess.Popen[bytes],
 
 
 def _decode_child_message(data: bytes, status: int) -> Any:
+    # Only the seccomp filter sends SIGSYS: the child tried to start a process.
+    if _SIGSYS is not None and status == -_SIGSYS:
+        raise _WorkerIsolationViolation()
     if status < 0:
         raise _WorkerResourceExhausted()
     if status != 0:
@@ -368,6 +473,8 @@ class IsolatedWorkerRunner(WorkerRunner):
                  limits: IsolationLimits | None = None) -> None:
         if not _resource_supported():
             _fail("process isolation requires POSIX resource limits")
+        if not _process_filter_supported():
+            _fail("process isolation requires a Linux seccomp process filter")
         if limits is None:
             limits = IsolationLimits()
         if not isinstance(limits, IsolationLimits):
