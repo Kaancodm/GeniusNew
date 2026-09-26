@@ -9,7 +9,8 @@ Nicht überprüfbare Angaben als `UNKNOWN` kennzeichnen.
 
 Vervollständigung im Editor und Review jedes PRs nach der Checkliste unten. Eigene
 Umsetzung nur mit einem Auftrag (Issue-Formular „Begrenzte Aufgabe“), auf einem eigenen
-Branch und als Draft-PR. Umsetzer und Merger ist Codex; Gemini Pro ist Head der
+Branch und als Draft-PR. Prompts für VS Code (Umsetzung und Review): `docs/HANDOVER.md`,
+Abschnitt 3 und 4. Umsetzer und Merger ist Codex; Gemini Pro ist Head der
 Datenbank; Claude Code löst Konflikte zwischen den Werkzeugen.
 
 ## Projekt und Arbeitsweise
