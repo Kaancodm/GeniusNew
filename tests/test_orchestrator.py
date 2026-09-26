@@ -6,7 +6,7 @@ from geniusnew import orchestrator as orchestrator_module
 from geniusnew.approvals import ApprovalStore, create_scope
 from geniusnew.audit import AuditAuthority, event_from_handoff
 from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, validate
-from geniusnew.gateway import Gateway
+from geniusnew.gateway import DispatchPermit, Gateway
 from geniusnew.orchestrator import (ACTIONS, DENIALS, Admission, Decision, Denied,
                                     Dispatch, DispatchAttempted, Orchestrator,
                                     WorkerEndpoint)
@@ -77,12 +77,14 @@ class Fixture:
                       ('summarize', 'translate'), ('isolated',), (grant,))
 
     def orchestrator_for(self, *, workers=DEFAULT, gateway=DEFAULT,
-                         orchestrator_id='orchestrator-demo', signer=DEFAULT):
+                         orchestrator_id='orchestrator-demo', signer=DEFAULT,
+                         on_admitted=None):
         return Orchestrator(
             orchestrator_id=orchestrator_id,
             signer=self.key if signer is DEFAULT else signer,
             gateway=self.gateway if gateway is DEFAULT else gateway,
-            workers=(self.endpoint,) if workers is DEFAULT else workers)
+            workers=(self.endpoint,) if workers is DEFAULT else workers,
+            on_admitted=on_admitted)
 
     def counting(self, **arguments):
         return CountingRunner(authority=self.result_authority, **arguments)
@@ -648,6 +650,67 @@ class OrchestratorTest(Fixture, unittest.TestCase):
                     with self.assertRaisesRegex(ContractError, 'audit contract accepts'):
                         call()
 
+    # --- the gateway's admission is passed on when it exists ------------------
+    # Review finding LOW-1 (26.09.2026): the composition root recorded the
+    # admission only after `dispatch` returned, so a lost race for the job id or
+    # a crash mid-execution left a minted permit with no admission on the chain.
+
+    def test_the_admission_is_passed_on_before_the_worker_runs(self):
+        seen = []
+        runner = self.counting(wire=b'x')
+        orchestrator = self.orchestrator_for(
+            workers=(WorkerEndpoint('worker-demo', runner),),
+            on_admitted=lambda permit: seen.append((permit, len(runner.calls))))
+        self.dispatch(self.wire(), orchestrator=orchestrator, now=110)
+        [(permit, calls_before)] = seen
+        self.assertIsInstance(permit, DispatchPermit)
+        self.assertEqual(calls_before, 0)
+        self.assertIs(runner.calls[0][0], permit)
+        self.assertEqual((permit.gateway_id, permit.admitted_at), ('gateway-test', 110))
+
+    def test_a_lost_race_for_the_job_id_comes_after_the_admission(self):
+        """Both callers pass the early check; the reservation decides.
+
+        The approval is spent by then, so the admission it bought has to have
+        been passed on before the denial, not instead of it.
+        """
+        policy = self.policy_for(requires_approval=True)
+        wire = self.wire(policy=policy)
+        scope = create_scope(wire, subject='subject-demo', job_id='job-demo',
+                             policy=policy, verifier=self.key, now=101)
+        granted = self.store.grant(scope, now=101, ttl_seconds=30)
+        events = []
+        runner = self.counting(wire=b'x')
+
+        def rival_wins(permit):
+            events.append(('admitted', permit.approval_record_hash))
+            # The other caller reserves the same id in this window.
+            orchestrator._jobs.add('job-demo')
+
+        orchestrator = self.orchestrator_for(
+            workers=(WorkerEndpoint('worker-demo', runner),), on_admitted=rival_wins)
+        decision = self.denied(self.dispatch, wire, orchestrator=orchestrator,
+                               policy=policy, now=102, approval_token=granted.token)
+        self.assertEqual(decision.reason_code, 'JOB_ID_REUSED')
+        [(event, receipt)] = events
+        self.assertEqual(event, 'admitted')
+        self.assertRegex(receipt, r'\A[0-9a-f]{64}\Z')
+        self.assertEqual(runner.calls, [])
+
+    def test_an_admission_that_cannot_be_passed_on_runs_nothing(self):
+        """No execution without its admission on record, and the id stays free."""
+        runner = self.counting(wire=b'x')
+
+        def recorder_down(permit):
+            raise ContractError('audit is unavailable')
+
+        orchestrator = self.orchestrator_for(
+            workers=(WorkerEndpoint('worker-demo', runner),), on_admitted=recorder_down)
+        with self.assertRaisesRegex(ContractError, 'audit is unavailable'):
+            self.dispatch(self.wire(), orchestrator=orchestrator)
+        self.assertEqual(runner.calls, [])
+        self.assertEqual(orchestrator._jobs, set())
+
     def test_the_sanitized_refusal_keeps_no_handle_on_the_original(self):
         """`from exc` puts the text back in __cause__ and in every traceback.
 
@@ -725,6 +788,10 @@ class OrchestratorTest(Fixture, unittest.TestCase):
             self.orchestrator_for(workers=(self.endpoint, 'not-endpoint'))
         with self.assertRaisesRegex(ContractError, 'unique'):
             self.orchestrator_for(workers=(self.endpoint, self.endpoint))
+        for on_admitted in ('record', 42, object()):
+            with self.subTest(on_admitted=type(on_admitted)):
+                with self.assertRaisesRegex(ContractError, 'on_admitted must be callable'):
+                    self.orchestrator_for(on_admitted=on_admitted)
 
     def test_worker_endpoint_configuration_fails_closed(self):
         for worker_id in ('', 'UPPER', 'with space', None, 42, 'x' * 64):
