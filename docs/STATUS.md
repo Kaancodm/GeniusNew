@@ -98,7 +98,7 @@ Vollständig in `SECURITY.md`. Die wichtigsten:
 ## Zusammenarbeit der Werkzeuge
 
 Ab 26.09.2026 gilt `docs/COLLABORATION.md`: **Codex setzt um und mergt**, Kaan
-entscheidet, Copilot und Gemini prüfen, NotebookLM und Microsoft 365 Copilot lesen
+entscheidet, Gemini reviewt jeden PR automatisch, Copilot prüft zusätzlich, NotebookLM und Microsoft 365 Copilot lesen
 `STATUS.md` aus OneDrive. Claude Code kümmert sich nur noch um Ordnung und
 Kommunikation und hilft, wenn Codex feststeckt (Hilferuf-Format dort).
 
@@ -106,7 +106,7 @@ Kommunikation und hilft, wenn Codex feststeckt (Hilferuf-Format dort).
 | --- | --- | --- |
 | ChatGPT Pro / Codex | **Umsetzung**, ein Thema pro PR (`codex/<thema>`) | `AGENTS.md`, `docs/COLLABORATION.md` |
 | GitHub Copilot Pro | Editor und Review jedes PRs | `.github/copilot-instructions.md` |
-| Gemini | zweite Meinung, Recherche | `AGENTS.md`, dieses Dokument |
+| Gemini | **automatisches Review jedes PRs**, Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung | `GEMINI.md`, `.gemini/styleguide.md` |
 | NotebookLM | Fragen an den Projektstand | dieses Dokument, `SECURITY.md`, `docs/ROADMAP-V01.md` |
 | Microsoft 365 Copilot | Berichte, E-Mails, Folien | dieses Dokument im OneDrive-Ordner `GeniusNew` |
 | Claude Code | Ordnung, Kommunikation, Hilfe bei Hilferuf von Codex | `AGENTS.md`, `docs/COLLABORATION.md` |

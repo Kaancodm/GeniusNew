@@ -73,6 +73,7 @@ Matrix pro Modul aus. Der zusammenfassende Check heißt `contracts`.
 | --- | --- |
 | Projektstand und nächste Schritte | `docs/STATUS.md` |
 | Wer macht was, Ablauf, Hilferuf an Claude | `docs/COLLABORATION.md` |
+| Gemini: Kontext und Review-Maßstab | `GEMINI.md`, `.gemini/styleguide.md` |
 | Übergabe-Prompts zwischen Werkzeugen | `docs/HANDOVER.md` |
 | Roadmap v0.1 mit Status je Schritt | `docs/ROADMAP-V01.md` |
 | Bekannte Grenzen | `SECURITY.md` |
