@@ -78,7 +78,8 @@ kein Schlüsselmaterial. `tests/test_demo.py` prüft das mit Kanarienwerten.
 **Was `PASS` nicht bedeutet:** keine Produktionsfreigabe und kein Sicherheitsnachweis
 für einen echten Betrieb. Außer Worker und Audit-Anker sind die Instanzen getrennte
 Objekte in einem Prozess; die Worker-Isolation ist eine Prozessgrenze, keine microVM;
-der Anker wird vom Dienst gestartet und hält nur Speicher; alle Signaturen (Handoff,
+der Anker wird vom Dienst unter demselben Nutzer gestartet (seine Zustandsdatei übersteht
+einen Neustart, schützt aber nicht vor Rückschnitt durch diesen Nutzer); alle Signaturen (Handoff,
 Ergebnis, Audit-Kopf) sind Ed25519, aber alle Schlüssel hängen an einem Root-Secret. Die
 bekannten Grenzen stehen einzeln in `SECURITY.md`.
 
@@ -105,6 +106,10 @@ leitet ihre Schlüssel aus einem festen Demo-Secret ab, das nur für die Demo gi
 
 Siehe:
 
+- `docs/STATUS.md` — aktueller Stand und nächste Schritte, auch als Quelle für NotebookLM
+  und Microsoft 365 Copilot
+- `AGENTS.md` — Regeln für KI-Assistenten (Claude Code, ChatGPT/Codex, Copilot, Gemini);
+  Kurzfassung für Copilot in `.github/copilot-instructions.md`
 - `docs/ADR-001-restart-and-isolation.md`
 - `docs/MIGRATION-MATRIX.md` — kanonisches Import-Gate
 - `docs/IMPORT-MANIFEST.md` — historische erste Inventur

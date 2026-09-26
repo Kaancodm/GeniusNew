@@ -79,6 +79,7 @@ class DemoTest(unittest.TestCase):
         self.assertIn("PASS", output)
         self.assertIn("VERIFIED against the anchored head: 4 entries", output)
         self.assertIn("anchor runs in its own process: True", output)
+        self.assertIn("anchor survives a restart: True", output)
 
     def test_every_attack_is_refused(self):
         """The half that matters. A pipeline printing success proves nothing."""

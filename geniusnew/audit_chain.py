@@ -213,6 +213,21 @@ class AuditAnchor:
         self._head_hash = _EMPTY_HASH
         self._lock = Lock()
 
+    @classmethod
+    def resumed(cls, head: AuditHead, *,
+                authority: AuditAuthority | AuditVerifier) -> "AuditAnchor":
+        """An anchor that starts where a signed head says an earlier one stood.
+
+        For restarting from a persisted commitment. The head is verified first,
+        so what resumes is something the audit authority signed, not a number
+        read back from a file. It cannot show the chain the head was committed
+        over; that was checked when it was committed.
+        """
+        head = _verify_head(head, authority=authority)
+        anchor = cls()
+        anchor._count, anchor._head_hash = head.count, head.head_hash
+        return anchor
+
     @property
     def committed(self) -> tuple[int, str]:
         with self._lock:
