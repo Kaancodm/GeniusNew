@@ -84,19 +84,23 @@ Vollständig in `SECURITY.md`. Die wichtigsten:
 2. `docs/STATUS.md` in NotebookLM als Quelle hochladen und in OneDrive/SharePoint für
    Microsoft 365 Copilot ablegen.
 3. **Datenbank-Design (Gemini Pro, Head der Datenbank):** `docs/DATABASE.md` mit
-   Technikvergleich und Empfehlung, Schema und Migrationen. Danach entscheidet Kaan die
-   Technik.
+   Betriebsort von Portal und Kern, Technikvergleich und Empfehlung, Schema (auch für
+   das Portal) und Migrationen. Danach entscheidet Kaan Betriebsort und Technik.
 4. **Datenbank umsetzen (Codex, je ein PR mit Gemini-Freigabe):** Job- und
    Annahme-Ledger mit Ablauf, wartende Jobs, Audit-Kette, Anker-Zustand in einem
    eigenen Speicher, getrennt von der Kette.
-5. Den Anker als eigenständigen Dienst unter eigenem Nutzer betreiben.
-6. Das Gateway in einen eigenen Prozess legen.
-7. Eine Rolle für Freigebende mit eigener HTTP-Route einführen.
-8. Einen Schlüssel pro Worker einführen.
-9. Doku zu TLS und Rate-Limiting mit Reverse-Proxy-Beispiel.
-10. Die Tests zusätzlich unter macOS in der CI.
-11. Design-Notiz: Worker mit Netzwerk-Allowlist.
-12. `docs/ROADMAP-V02.md` anlegen, danach den Tag `v0.2`.
+5. **Portal aufbauen (Codex, auf der Datenbank):** Nutzer, Sitzungen,
+   Auftragsverlauf, Freigaben über die Weboberfläche. Neu gebaut nach dem Gate in
+   `docs/MIGRATION-MATRIX.md`; der Browser gilt als nicht vertrauenswürdig.
+6. Den Anker als eigenständigen Dienst unter eigenem Nutzer betreiben.
+7. Das Gateway in einen eigenen Prozess legen.
+8. Eine Rolle für Freigebende mit eigener HTTP-Route einführen (Voraussetzung für
+   Freigaben im Portal).
+9. Einen Schlüssel pro Worker einführen.
+10. Doku zu TLS und Rate-Limiting mit Reverse-Proxy-Beispiel.
+11. Die Tests zusätzlich unter macOS in der CI.
+12. Design-Notiz: Worker mit Netzwerk-Allowlist.
+13. `docs/ROADMAP-V02.md` anlegen, danach den Tag `v0.2`.
 
 ## Zusammenarbeit der Werkzeuge
 

@@ -50,21 +50,34 @@ Kaan, und Gemini trägt die Antwort in `docs/DECISIONS.md` ein.
 
 ## Die Datenbank im Code (Head: Gemini Pro)
 
+**Wozu:** Die Datenbank ist die **Grundlage für das Portal**. Das Portal ist die
+Web-Oberfläche, über die Nutzer Aufträge stellen, ihren Verlauf sehen und Freigebende
+Approvals erteilen. Das alte `bürgerbüro/portal` ist nach `docs/MIGRATION-MATRIX.md`
+nur Lesequelle (REBUILD): Es wird neu gebaut, nicht kopiert.
+
 **Was hineinkommt:** Job- und Annahme-Ledger, wartende Approval-Jobs, die Audit-Kette
 und der Anker-Zustand. Damit übersteht der Dienst einen Neustart, ohne etwas doppelt
-anzunehmen oder zu vergessen.
+anzunehmen oder zu vergessen. Für das Portal kommen hinzu: Nutzer und ihre Zuordnung zu
+Principals, API-Key-Digests, Sitzungen, der Auftragsverlauf je Nutzer, die Rolle der
+Freigebenden und Quoten.
 
 **Reihenfolge:**
 1. **Design (Gemini):** Gemini schreibt `docs/DATABASE.md` auf einem Branch
-   `gemini/db-design`. Inhalt: ein Vergleich der Techniken (mindestens SQLite aus der
-   Standardbibliothek und ein gehostetes PostgreSQL) mit Empfehlung, das Schema je
-   Tabelle, die Migrationen, das Verhalten bei beschädigtem Speicher und der Umgang mit
-   Zugangsdaten.
-2. **Entscheidung (Kaan):** Kaan wählt die Technik im PR. Gemini trägt sie in
+   `gemini/db-design`. Inhalt:
+   - **Betriebsort von Portal und Kern** im Vergleich, zum Beispiel Vercel gegen einen
+     eigenen Server. Das entscheidet über die Technik: Serverless hat keine dauerhafte
+     lokale Datei, und Worker-Isolation und Anker-Prozess brauchen einen echten Host.
+   - Die Techniken im Vergleich (mindestens SQLite aus der Standardbibliothek und ein
+     gehostetes PostgreSQL), mit Empfehlung.
+   - Das Schema je Tabelle, auch für die Portal-Tabellen.
+   - Die Migrationen, das Verhalten bei beschädigtem Speicher und der Umgang mit
+     Zugangsdaten.
+2. **Entscheidung (Kaan):** Kaan wählt im PR Betriebsort und Technik. Gemini trägt sie in
    `docs/DECISIONS.md` ein und mergt den Design-PR. Braucht die Technik eine neue
    Abhängigkeit, ist das eine Ausnahme mit Kaans OK.
 3. **Umsetzung (Codex), je ein PR:** (a) Ledger mit Ablauf, (b) wartende Jobs,
-   (c) Audit-Kette, (d) Anker-Zustand. Jeder DB-PR braucht eine **ausdrückliche
+   (c) Audit-Kette, (d) Anker-Zustand, danach die Portal-Tabellen und (e) das Portal
+   selbst. Jeder DB-PR braucht eine **ausdrückliche
    Gemini-Freigabe im PR** zusätzlich zur grünen CI. Ohne Freigabe mergt Codex nicht.
 4. **Doku (NotebookLM):** `docs/DATABASE.md` wird Quelle im Notebook; Fragen zum Schema
    gehen an NotebookLM.
@@ -78,6 +91,10 @@ anzunehmen oder zu vergessen.
 - Keine Zugangsdaten und keine Datenbankdateien im Repository. Die Verbindung kommt aus
   der serverseitigen Laufzeitkonfiguration.
 - Jede neue Ablehnung im DB-Code braucht einen Test; das Modul kommt in `GUARDED`.
+- **Portal:** Der Browser ist nicht vertrauenswürdig. Identität, Rechte, Tier und
+  Job-Kennung bestimmt der Server, so wie heute beim HTTP-Eingang. Das Portal spricht
+  mit dem Kern nur über dessen HTTP-Eingang und nie direkt mit der Datenbank des
+  Kerns.
 - Grenzen aus `SECURITY.md`, die sich dadurch ändern (prozesslokale Ledger,
   Anker-Rückschnitt), werden je PR mit umgekehrtem Test und angepasster Tabelle
   geschlossen.

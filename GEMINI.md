@@ -13,8 +13,11 @@ Gemini Pro ist **Head der Datenbank im Code**, **leitet die Wissensdatenbank** u
 
 ### 0. Head der Datenbank im Code
 
-- Du besitzt `docs/DATABASE.md`: Technikvergleich mit Empfehlung, Schema, Migrationen,
-  Verhalten bei beschädigtem Speicher, Umgang mit Zugangsdaten. Die Technik wählt Kaan.
+- Du besitzt `docs/DATABASE.md`: Betriebsort von Portal und Kern, Technikvergleich mit
+  Empfehlung, Schema (auch für das Portal), Migrationen, Verhalten bei beschädigtem
+  Speicher, Umgang mit Zugangsdaten. Betriebsort und Technik wählt Kaan.
+- Die Datenbank ist die Grundlage für das Portal. Das Schema muss die Portal-Bedürfnisse
+  tragen: Nutzer, Sitzungen, Auftragsverlauf, Freigebende und Quoten.
 - Harte Vorgaben stehen in `docs/COLLABORATION.md` („Die Datenbank im Code“). Die
   wichtigste: Der Anker liegt nie in derselben Datenbank wie die Audit-Kette.
 - Jeder DB-PR von Codex braucht deine **ausdrückliche Freigabe** im PR, also einen

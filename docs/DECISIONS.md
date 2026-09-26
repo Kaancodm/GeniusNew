@@ -7,6 +7,7 @@ zurücknimmt, trägt das als neue Zeile ein und lässt die alte stehen.
 
 | Datum | Entscheidung | Begründung | Quelle |
 | --- | --- | --- | --- |
+| 26.09.2026 | Die Datenbank ist die **Grundlage für das Portal**. Das Portal wird danach auf ihr neu gebaut (REBUILD nach `docs/MIGRATION-MATRIX.md`). Betriebsort und DB-Technik entscheidet Kaan gemeinsam, nach Geminis Vorschlag | Der Betriebsort bestimmt die Technik: Serverless hat keine dauerhafte lokale Datei | `docs/COLLABORATION.md` |
 | 26.09.2026 | **Datenbank im Code** für Ledger, wartende Jobs, Audit-Kette und Anker-Zustand. Gemini Pro ist Head der Datenbank (Design, Schema, Pflicht-Freigabe jedes DB-PRs), Codex setzt um. Die Technik entscheidet Kaan nach Geminis Vorschlag in `docs/DATABASE.md`. Löst „keine Datenbank“ für die Zeit nach v0.1 ab | Neustarts sollen nichts vergessen und nichts doppelt annehmen; eine Stelle verantwortet das Datenmodell | `docs/COLLABORATION.md` |
 | 26.09.2026 | Gemini Pro und NotebookLM führen die Wissensdatenbank (`STATUS.md`, `DECISIONS.md`, NotebookLM-Quellen) | Eine Stelle für Wissen, getrennt von Code; alle Werkzeuge fragen zuerst dort | `docs/COLLABORATION.md` |
 | 26.09.2026 | Gemini reviewt jeden PR automatisch; Critical/High blockiert; Pflicht-Zweitmeinung bei Ausnahmen | Unabhängige Prüfung, ohne Kaan als Engpass | `.gemini/styleguide.md`, `docs/COLLABORATION.md` |
