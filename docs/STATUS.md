@@ -44,17 +44,14 @@ Projektverantwortliche über die GitHub-Oberfläche an.
 | #31 | Audit-Köpfe mit Ed25519 signiert; der Anker hält nur den öffentlichen Schlüssel |
 | #34 | Handoffs mit Ed25519 signiert (Handoff v2); das Gateway kann keinen Handoff mehr ausstellen |
 | #35 | Ergebnisse mit Ed25519 signiert (Ergebnis v2); die Ergebnisprüfung kann kein Ergebnis mehr fälschen |
+| #36 | Anker-Persistenz: jeder signierte Kopf landet in einer Zustandsdatei, ein Neustart setzt dort fort. Dazu `AGENTS.md`, dieses Dokument und die Copilot-Anweisungen |
 | #33 | Quickstart-Review dokumentiert (Codex) |
 | #26 | Phase-0/1-Nachweis aktualisiert |
 
 Damit gibt es **keine HMAC-Signatur mehr**: Jede prüfende Instanz hält nur
 öffentliche Schlüssel.
 
-**Offen:** #36, Anker-Persistenz. Der Anker schreibt jeden signierten Kopf in eine
-Zustandsdatei und setzt nach einem Neustart dort fort. Die CI ist grün, der PR wartet
-auf die Merge-Freigabe.
-
-**Messbar (Hauptzweig plus #36):**
+**Messbar (Hauptzweig `6644dc4`):**
 - 482 Tests laufen in etwa 14 Sekunden.
 - Die Demo endet mit „PASS“, dabei werden **15 von 15 Angriffen** abgelehnt.
 - Der Refusal-Guard deckt 15 Module ab: Jede Ablehnung im Code wird einzeln
@@ -82,8 +79,9 @@ Vollständig in `SECURITY.md`. Die wichtigsten:
 
 ## Nächste Schritte (v0.2)
 
-1. #36 mergen (Anker-Persistenz).
-2. Tag `v0.1` auf `3a0e1bc` anlegen (Projektverantwortlicher).
+1. Tag `v0.1` auf `3a0e1bc` anlegen (Projektverantwortlicher).
+2. `docs/STATUS.md` in NotebookLM als Quelle hochladen und in OneDrive/SharePoint für
+   Microsoft 365 Copilot ablegen.
 3. Einträge in Job- und Annahme-Ledger ablaufen lassen, statt bei 100 000 alles
    abzulehnen.
 4. Beide Ledger persistent machen: Ein Neustart nimmt nichts doppelt an.
@@ -106,6 +104,8 @@ Vollständig in `SECURITY.md`. Die wichtigsten:
 | GitHub Copilot Pro | Vervollständigung im Editor, PR-Reviews | `.github/copilot-instructions.md` |
 | NotebookLM (Gemini) | Fragen an den Projektstand, Zusammenfassungen | dieses Dokument, `SECURITY.md`, `docs/ROADMAP-V01.md` als Quellen |
 | Microsoft 365 Copilot | Berichte, Präsentationen, E-Mails zum Stand | dieses Dokument (in OneDrive/SharePoint abgelegt) |
+
+Übergaben zwischen den Werkzeugen laufen über die zwei Prompts in `docs/HANDOVER.md`.
 
 Regel für alle: Gemergt wird nur mit ausdrücklichem OK des Projektverantwortlichen, und
 jede Änderung läuft über einen PR mit grüner CI.
