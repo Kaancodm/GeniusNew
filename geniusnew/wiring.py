@@ -54,7 +54,8 @@ from .audit import AuditAuthority, event_from_handoff
 from .audit_chain import AuditAnchor, AuditChain
 from .contracts import (ContractError, HandoffSigner, HandoffVerifier, Policy, validate,
                         validate_pending)
-from .gateway import ADMISSION_REASON_CODE, Gateway, GatewayRejected
+from .gateway import (ADMISSION_REASON_CODE, DispatchPermit, Gateway, GatewayRejected,
+                      handoff_from_permit)
 from .http_entry import HttpEntry, PrincipalRegistry
 from .isolation import IsolatedWorkerRunner
 from .keys import ServiceKeys, derive_keys
@@ -239,18 +240,20 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
                   "one worker cannot be registered as several agents")
         endpoints.append(WorkerEndpoint(agents.pop(), runner))
 
+    audit = AuditAuthority(audit_key=keys.audit_key)
+    chain = AuditChain()
     orchestrator = Orchestrator(orchestrator_id=policy.orchestrator_id,
                                 signer=handoff_signer,
-                                gateway=gateway, workers=endpoints)
+                                gateway=gateway, workers=endpoints,
+                                on_admitted=_admission_recorder(
+                                    gateway=gateway, audit=audit, chain=chain))
     verifier = ResultVerifier(verifier_id=verifier_id,
                               handoff_verifier=handoff_verifier,
                               worker_verifier=worker_authority.verifier())
-    audit = AuditAuthority(audit_key=keys.audit_key)
-    chain = AuditChain()
     pending = PendingJobs()
 
     submit, complete = _submitter(
-        orchestrator=orchestrator, gateway=gateway, verifier=verifier,
+        orchestrator=orchestrator, verifier=verifier,
         audit=audit, chain=chain, policy=policy,
         handoff_verifier=handoff_verifier, now=now, pending=pending)
     entry = HttpEntry(
@@ -269,7 +272,36 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
     )
 
 
-def _submitter(*, orchestrator: Orchestrator, gateway: Gateway,
+def _admission_recorder(*, gateway: Gateway, audit: AuditAuthority,
+                        chain: AuditChain) -> Callable[[DispatchPermit], None]:
+    """Record the gateway's admission from the permit, when it is minted.
+
+    The orchestrator calls this, so it must not be able to say anything the
+    gateway did not: it hands over a permit and nothing else. Action, decision
+    and reason are fixed; instance, time and handoff are read from the permit,
+    which only a `Gateway` can mint. It used to be appended after the worker
+    returned, so a lost race for the job id left a minted permit — and possibly
+    a spent approval — with no admission on the in-memory chain. This ordering
+    does not make the chain durable across process crashes.
+    """
+
+    def record(permit: DispatchPermit) -> None:
+        handoff = handoff_from_permit(permit)
+        # One gateway per service. A permit another one minted is not evidence
+        # of an admission this service made.
+        if permit.gateway_id != gateway.gateway_id:
+            _fail("admission names a gateway this service did not wire")
+        _append_event(
+            chain=chain, audit=audit, handoff=handoff,
+            trace_id=_trace_id(handoff), component="gateway",
+            instance_id=permit.gateway_id, action="HANDOFF_ADMITTED",
+            decision="ALLOWED", reason_code=ADMISSION_REASON_CODE,
+            occurred_at=permit.admitted_at)
+
+    return record
+
+
+def _submitter(*, orchestrator: Orchestrator,
                verifier: ResultVerifier, audit: AuditAuthority,
                chain: AuditChain, policy: Policy,
                handoff_verifier: HandoffVerifier, now: Callable[[], int], pending: PendingJobs):
@@ -277,7 +309,9 @@ def _submitter(*, orchestrator: Orchestrator, gateway: Gateway,
 
     Evidence is appended as each security-relevant decision happens. That is
     intentionally incremental: a later refusal must not erase the fact that an
-    earlier component issued, admitted, or dispatched the job.
+    earlier component issued, admitted, or dispatched the job. The gateway's
+    admission is not appended here at all but by `_admission_recorder`, while
+    `dispatch` is still running and before the worker is.
 
     Returns two callables. `submit` issues a job and, unless its grant requires
     approval, runs it. `complete` runs an approval-bound job once the client
@@ -354,14 +388,9 @@ def _submitter(*, orchestrator: Orchestrator, gateway: Gateway,
                 occurred_at=refusal.decision.occurred_at)
             raise
         except DispatchAttempted as refusal:
-            # A DispatchAttempted means gateway admission succeeded and the
-            # orchestrator committed to execution before the worker boundary
-            # refused or failed. Preserve every one of those decisions.
-            _append_event(
-                chain=chain, audit=audit, handoff=handoff, trace_id=trace_id,
-                component="gateway", instance_id=gateway.gateway_id,
-                action="HANDOFF_ADMITTED", decision="ALLOWED",
-                reason_code=ADMISSION_REASON_CODE, occurred_at=dispatch_at)
+            # A DispatchAttempted means gateway admission succeeded — already
+            # on the chain — and the orchestrator committed to execution before
+            # the worker boundary refused or failed. Preserve both of those.
             _append_event(
                 chain=chain, audit=audit, handoff=handoff, trace_id=trace_id,
                 component="orchestrator", instance_id=orchestrator.orchestrator_id,
@@ -376,11 +405,6 @@ def _submitter(*, orchestrator: Orchestrator, gateway: Gateway,
                 reason_code="EXECUTION_REFUSED", occurred_at=dispatch_at)
             raise
 
-        _append_event(
-            chain=chain, audit=audit, handoff=handoff, trace_id=trace_id,
-            component="gateway", instance_id=gateway.gateway_id,
-            action="HANDOFF_ADMITTED", decision="ALLOWED",
-            reason_code=ADMISSION_REASON_CODE, occurred_at=dispatch_at)
         for decision in dispatched.decisions:
             _append_event(
                 chain=chain, audit=audit, handoff=handoff, trace_id=trace_id,
