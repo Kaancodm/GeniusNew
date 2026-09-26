@@ -90,7 +90,8 @@ bestanden melden.
 - `docs/STATUS.md`, `docs/DECISIONS.md` und `docs/DATABASE.md` schreibt nur Gemini
   (Ausnahme: Claude Code bei einem Konflikt, siehe `docs/COLLABORATION.md`). Wer etwas zum Stand
   beiträgt, schreibt es in den Wissensblock seiner PR-Beschreibung
-  (`docs/COLLABORATION.md`).
+  (`docs/COLLABORATION.md`). Die Wissenspflege läuft parallel; ein klarer
+  Folgeauftrag wartet nur auf echte Voraussetzungen, nicht auf sie.
 - Kommentare erklären das *Warum* und die Grenze, nicht das *Was*; so wie der
   umgebende Code.
 

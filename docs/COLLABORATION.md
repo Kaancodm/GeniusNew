@@ -41,7 +41,9 @@ also „Was wurde zu X entschieden?“, „Warum ist Y so?“ oder „Was ist de
 Schritt?“. Steht es dort nicht, ist es noch nicht entschieden. Dann geht die Frage an
 Kaan, und Gemini trägt die Antwort in `docs/DECISIONS.md` ein.
 
-**Pflege nach jedem Merge** (Gemini, mit der Gemini CLI im Repository):
+**Pflege nach jedem Merge** (Gemini, mit der Gemini CLI im Repository). Sie läuft
+**parallel zur Entwicklung** und hält keinen Folgeauftrag auf. Mehrere Merges eines
+Tages dürfen in einem Wissens-PR zusammengefasst werden.
 1. Den Wissensblock des gemergten PRs lesen.
 2. `docs/STATUS.md` und bei Bedarf `docs/DECISIONS.md` auf einem Branch
    `gemini/wissen-<datum>` aktualisieren und einen PR öffnen. Ein solcher PR ändert nur
@@ -49,6 +51,23 @@ Kaan, und Gemini trägt die Antwort in `docs/DECISIONS.md` ein.
 3. Gemini mergt ihn selbst, sobald `contracts` grün ist.
 4. Die Quellen in NotebookLM aktualisieren und Widersprüche zwischen den Dokumenten als
    Issue melden.
+
+**Drei Zustände.** Jede Aussage in der Wissensdatenbank ist erkennbar als eines davon:
+
+| Zustand | Bedeutung |
+| --- | --- |
+| **Belegt** | gestützt durch Code, Test, Befehlsausgabe oder PR mit vollem SHA |
+| **Entschieden** | von Kaan oder innerhalb einer ausdrücklich vergebenen Befugnis festgelegt, mit Zeile in `docs/DECISIONS.md` |
+| **Vorschlag** | mögliche Verbesserung, über die noch nicht entschieden ist |
+
+Ein Vorschlag wird nicht dadurch entschieden, dass er oft wiederholt wird.
+`docs/STATUS.md` beschreibt nur, was jetzt gilt; Überholtes fällt dort heraus und bleibt
+über Git und `docs/DECISIONS.md` nachvollziehbar. In `docs/DECISIONS.md` bleiben alte
+Zeilen stehen, eine überholte Entscheidung verweist auf die neue.
+
+**Aus Wissen wird Regel.** Die stärksten Erkenntnisse landen nicht nur in Notizen: Ein
+gefundener Fehler wird zu einem Auftrag für Test und Korrektur (Codex), eine
+wiederkehrende Rückfrage zu einem Regelvorschlag an Claude Code.
 
 ## Die Datenbank im Code (Head: Gemini Pro)
 
@@ -106,15 +125,20 @@ Freigebenden und Quoten.
 
 ## Der Ablauf eines Themas
 
-1. Kaan wählt den nächsten Schritt; die Auskunft dazu gibt NotebookLM. Kaan gibt ihn
-   Codex mit Prompt 1 aus `docs/HANDOVER.md`.
+1. **Auftrag:** Gemini bereitet den nächsten Schritt als Issue „Begrenzte Aufgabe“ vor
+   (`.github/ISSUE_TEMPLATE/agent-task.yml`, sechs Angaben, siehe unten). Kaan wählt
+   ihn aus und gibt ihn Codex mit Prompt 1 aus `docs/HANDOVER.md`; der Link auf das
+   Issue ersetzt eine lange Beschreibung.
 2. Codex öffnet einen Draft-PR `codex/<thema>` und schreibt den Plan in die
    PR-Beschreibung. Ändert das Thema eine Prozessgrenze oder Kryptografie, fragt Codex
    im PR mit `@gemini-code-assist` nach einer Design-Vorprüfung, bevor Code entsteht.
-3. **Gemini reviewt automatisch**, Copilot zusätzlich. Ein neues Review nach
-   Änderungen fordert Codex mit `/gemini review` im PR an.
+3. **Gemini reviewt automatisch**, Copilot zusätzlich. Ein Review gilt für den Head-SHA,
+   den es geprüft hat. Ändert Codex danach Code, fordert er vor dem Merge ein neues
+   Review an (`/gemini review`, bei Copilot erneut anfordern). Befunde sammeln sich im
+   PR.
 4. **Codex mergt selbst**, sobald die CI grün ist (`contracts`), der Wissensblock
-   ausgefüllt ist und kein blockierender Review-Befund offen ist. Blockierend sind
+   ausgefüllt ist und kein blockierender Review-Befund offen ist. CI und Reviews
+   beziehen sich dabei auf denselben, aktuellen Head. Blockierend sind
    Gemini-Befunde der Stufe **Critical** oder **High** und Copilot-Befunde zu den
    Punkten der Checkliste. Codex behebt sie oder begründet im Thread, warum sie nicht
    zutreffen. Kaans ausdrückliches OK braucht es nur für die Ausnahmen: eine neue
@@ -122,20 +146,69 @@ Freigebenden und Quoten.
    umgekehrt) und Tags. Bei diesen Ausnahmen muss vorher ein
    Gemini-Sicherheits-Review im PR stehen. **DB-PRs** brauchen zusätzlich eine
    ausdrückliche Gemini-Freigabe.
-5. Gemini überträgt den Wissensblock in die Wissensdatenbank (siehe oben).
+5. Gemini überträgt den Wissensblock in die Wissensdatenbank (siehe oben), parallel
+   zum nächsten Auftrag.
 
 **Kommunikation läuft über den PR**, nicht über Kopieren zwischen Chats. Plan,
 Rückfragen an Gemini, Reviews, Begründungen und der Wissensblock stehen im PR. Jedes
 Werkzeug und Kaan sehen so denselben Stand.
+
+### Der Auftrag: sechs Angaben
+
+| Angabe | Inhalt |
+| --- | --- |
+| **Ziel** | Was nachher konkret funktioniert |
+| **Ausgangslage** | Baseline-SHA, relevante Dateien, Entscheidungen und Befunde |
+| **Umfang** | Was zu diesem Auftrag gehört und was ausdrücklich nicht |
+| **Abnahme** | Woran man die Erledigung erkennt: Prüfbefehle, erwartete Ablehnungen |
+| **Abhängigkeiten** | Was vorher vorliegen muss (siehe „Was wirklich wartet“) |
+| **Verantwortung und Freigaben** | Wer umsetzt (genau einer), wer prüft, welche Entscheidung Kaans noch offen ist |
+
+Bereits Entschiedenes steht im Auftrag als entschieden, Offenes als offene Entscheidung.
+Beispiel: „Portal auf Vercel, Kern auf eigenem Server, PostgreSQL“ (entschieden,
+`docs/DECISIONS.md`); „Zugriffsrechte je Nutzergruppe im Portal“ (offen, Kaan). So
+fragt kein Werkzeug Kaan zweimal dasselbe.
+
+### Was wirklich wartet
+
+Ein klarer Folgeauftrag beginnt sofort, auch wenn die Wissenspflege zum letzten Merge
+noch läuft. Er wartet nur auf echte Voraussetzungen:
+
+- **DB-Code:** das gemergte `docs/DATABASE.md` mit Kaans Technikentscheidung, und vor
+  dem Merge die Gemini-Freigabe im PR.
+- **Ausnahmen:** vor dem Merge Gemini-Sicherheits-Review und Kaans OK.
+- **Aufbau auf einem offenen PR:** dessen Merge, eingetragen unter „Abhängigkeiten“.
+
+Richtwert für den Anfang: je Implementierer ein Auftrag in Umsetzung und ein
+vorbereiteter Folgeauftrag; Prüfungen laufen am offenen PR.
+
+### Rückmeldung an Kaan
+
+Nach jedem Arbeitsblock bekommt Kaan vier Zeilen, am Anfang der Übergabe (Prompt 2 in
+`docs/HANDOVER.md`):
+
+```text
+Fertig: <Ergebnis mit PR-Link>
+Geprüft: <Tests und Reviews auf dem aktuellen Head-SHA>
+Blockiert: <keiner | Grund, und wer ihn lösen kann>
+Deine Entscheidung: <keine | Auswahl mit Empfehlung>
+```
+
+Freigegebene Arbeit läuft innerhalb ihres Umfangs weiter. Eine Rückfrage an Kaan kommt
+nur, wenn eine Entscheidung fehlt oder der Umfang sich ändern muss. Die Ausnahmen und
+die Freigaben für Merge und Deployment bleiben dabei unverändert.
 
 ### Wissensblock (Pflicht in jeder PR-Beschreibung von Codex)
 
 ```text
 ## Für die Wissensdatenbank
 - Was ist jetzt anders: <1–3 Sätze>
-- Entscheidungen: <keine | Entscheidung, Begründung>
+- Was haben wir gelernt: <nichts Neues | 1–2 Sätze>
+- Beleg: <Head-SHA, Testname oder Befehl mit Ergebnis>
+- Entscheidungen: <keine | Entscheidung, Begründung, wer>
 - Geänderte Grenzen (SECURITY.md): <keine | welche>
 - Messwerte: <Anzahl Tests, Ergebnis der Demo>
+- Was bleibt offen: <nichts | Punkt, Zustand Vorschlag oder offene Entscheidung>
 - Nächster Schritt: <Vorschlag>
 ```
 
@@ -195,6 +268,21 @@ Frage an Claude: <konkret>
 
 Claude antwortet mit einer Diagnose und einem Vorschlag. Codex setzt ihn im eigenen PR
 um; Claude pusht nur, wenn Kaan es ausdrücklich sagt.
+
+**Beratung ohne Feststecken.** Auch ohne Hilferuf kann jedes Werkzeug oder Kaan Claude
+Code zu einem konkreten offenen Punkt fragen: zwei vorgeschlagene Strukturen haben
+unterschiedliche Folgen, oder eine Änderung berührt eine Prozess- oder
+Sicherheitsgrenze. Widersprechen sich zwei Reviews, ist das ein KONFLIKT (oben). Die
+Anfrage enthält immer eine konkrete Frage; die Umsetzung bleibt beim Verantwortlichen
+und läuft danach weiter.
+
+```text
+BERATUNG GeniusNew
+Wo: <Issue/PR>   Head-SHA: <sha>
+Optionen: <A und B, je 1–2 Sätze mit Folgen>
+Anforderungen: <was gilt, mit Quelle>
+Frage an Claude: <z. B. „Welche Option passt zu unseren Anforderungen, und warum?“>
+```
 
 ## Geräte
 

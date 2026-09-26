@@ -18,13 +18,16 @@ Nur tatsächlich ausgeführte Prüfungen eintragen; nicht Geprüftes als `UNKNOW
 | Demo (`./scripts/demo.sh`) | |
 | Refusal-Guard der geänderten Module | |
 | CI auf dem aktuellen Head | |
-| Gemini-Review (bei DB-PRs: „Gemini-Freigabe DB: ja“) | |
+| Gemini- und Copilot-Review auf dem aktuellen Head-SHA (bei DB-PRs: „Gemini-Freigabe DB: ja“) | |
 
 ## Für die Wissensdatenbank
 - Was ist jetzt anders: <1–3 Sätze>
-- Entscheidungen: <keine | Entscheidung, Begründung>
+- Was haben wir gelernt: <nichts Neues | 1–2 Sätze>
+- Beleg: <Head-SHA, Testname oder Befehl mit Ergebnis>
+- Entscheidungen: <keine | Entscheidung, Begründung, wer>
 - Geänderte Grenzen (SECURITY.md): <keine | welche>
 - Messwerte: <Anzahl Tests, Ergebnis der Demo>
+- Was bleibt offen: <nichts | Punkt, Zustand Vorschlag oder offene Entscheidung>
 - Nächster Schritt: <Vorschlag>
 
 ## Offene Punkte

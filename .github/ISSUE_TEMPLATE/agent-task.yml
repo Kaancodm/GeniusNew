@@ -1,5 +1,5 @@
 name: Begrenzte Aufgabe
-description: Eine prüfbare Aufgabe für eine Person oder einen Assistenten (Codex, Gemini, Copilot).
+description: Ein direkt bearbeitbarer Auftrag mit sechs Angaben für eine Person oder einen Assistenten (Codex, Gemini, Copilot).
 title: "task: "
 body:
   - type: markdown
@@ -7,11 +7,51 @@ body:
       value: |
         Dieses Repository ist öffentlich. Keine Zugangsdaten, privaten Endpunkte,
         persönlichen Unterlagen oder sensiblen Schwachstellendetails eintragen.
-        Rollen und Merge-Regeln: docs/COLLABORATION.md.
+        Rollen, Merge-Regeln und die sechs Angaben: docs/COLLABORATION.md („Der Auftrag“).
+        Entschiedenes als entschieden eintragen, Offenes als offene Entscheidung.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Ziel
+      description: Was nachher konkret funktioniert, und warum es nötig ist.
+    validations:
+      required: true
+  - type: textarea
+    id: baseline
+    attributes:
+      label: Ausgangslage
+      description: Voller Baseline-SHA, relevante Dateien, Entscheidungen (docs/DECISIONS.md) und Befunde.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Umfang
+      description: Dateien oder Verhalten im Umfang, zu erhaltende Arbeit, ausdrückliche Ausschlüsse.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Abnahme
+      description: Beobachtbares Ergebnis, Prüfbefehle, erwartetes Ablehnungsverhalten.
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Abhängigkeiten
+      description: |
+        Was vorher vorliegen muss, zum Beispiel ein gemergter PR, das gemergte
+        docs/DATABASE.md (DB-Code) oder Kaans OK (Ausnahmen). Die Wissenspflege ist
+        keine Abhängigkeit.
+      value: keine
+    validations:
+      required: true
   - type: dropdown
     id: owner
     attributes:
-      label: Zuständig
+      label: Verantwortlich (genau ein Implementierer)
       options:
         - Codex (Umsetzung)
         - Gemini Pro (Datenbank / Wissensdatenbank)
@@ -20,31 +60,14 @@ body:
     validations:
       required: true
   - type: textarea
-    id: outcome
+    id: approvals
     attributes:
-      label: Erwartetes Ergebnis
-      description: Eine konkrete Änderung und warum sie nötig ist.
-    validations:
-      required: true
-  - type: input
-    id: baseline
-    attributes:
-      label: Geprüfte Baseline
-      description: Voller Commit-SHA und, falls relevant, der abhängige PR.
-    validations:
-      required: true
-  - type: textarea
-    id: scope
-    attributes:
-      label: Scope und Grenzen
-      description: Dateien oder Verhalten im Scope, zu erhaltende Arbeit, Ausschlüsse.
-    validations:
-      required: true
-  - type: textarea
-    id: acceptance
-    attributes:
-      label: Abnahme
-      description: Beobachtbares Ergebnis, Prüfbefehle, erwartetes Ablehnungsverhalten.
+      label: Prüfung und Freigaben
+      description: Wer prüft, welche Freigabe nötig ist (DB-PR, Ausnahme), welche Entscheidung Kaans noch offen ist.
+      value: |
+        Prüfung: Gemini und Copilot am PR, auf dem aktuellen Head-SHA.
+        Freigaben: keine über docs/COLLABORATION.md hinaus.
+        Offene Entscheidungen: keine
     validations:
       required: true
   - type: textarea
