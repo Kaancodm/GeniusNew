@@ -1,0 +1,63 @@
+# Zusammenarbeit der Werkzeuge
+
+Ziel: So wenig Abstimmung wie möglich. Es gibt **eine Quelle der Wahrheit** (den
+`main`-Zweig dieses Repositories), **einen Umsetzer** (Codex) und **eine Person, die
+entscheidet** (Kaan). Alle anderen Werkzeuge lesen nur mit oder prüfen.
+
+## Rollen
+
+| Wer | Macht | Macht nicht |
+| --- | --- | --- |
+| **Kaan** | entscheidet, mergt, legt Tags an, legt `docs/STATUS.md` in OneDrive und NotebookLM ab | — |
+| **Codex** (ChatGPT Pro) | setzt um: ein Thema pro PR, Branch `codex/<thema>`, aktualisiert `docs/STATUS.md` im selben PR | mergen, Tags anlegen, Grenzen aus `SECURITY.md` nebenbei ändern |
+| **ChatGPT** (Chat) | plant, formuliert Prompts, erklärt | ins Repo schreiben |
+| **GitHub Copilot Pro** | Vervollständigung im Editor; Review jedes PRs nach der Checkliste in `.github/copilot-instructions.md` | eigene PRs ohne Auftrag |
+| **Gemini** | zweite Meinung zu Design und Review, Recherche | ins Repo schreiben |
+| **NotebookLM** | beantwortet Fragen zum Stand aus `docs/STATUS.md`, `SECURITY.md`, `docs/ROADMAP-V01.md` | Entscheidungen treffen |
+| **Microsoft 365 Copilot** | Berichte, E-Mails, Folien aus `docs/STATUS.md` im OneDrive-Ordner `GeniusNew` | Inhalte erfinden, die nicht in `STATUS.md` stehen |
+| **Claude Code** | nur Ordnung und Kommunikation: hält `STATUS.md`, `AGENTS.md`, `HANDOVER.md` und dieses Dokument stimmig, wenn Kaan darum bittet; **Hilfe, wenn Codex feststeckt** | Funktionen umsetzen, eigene Code-PRs |
+
+## Der Ablauf eines Themas
+
+1. Kaan wählt den nächsten Schritt aus `docs/STATUS.md` und gibt ihn Codex, mit Prompt 1
+   aus `docs/HANDOVER.md`.
+2. Codex öffnet einen Draft-PR `codex/<thema>` und aktualisiert `docs/STATUS.md` im
+   selben PR (Abschnitte „Seit v0.1 gemergt“, „Nächste Schritte“).
+3. Copilot reviewt den PR, Gemini auf Wunsch als zweite Meinung.
+4. Die CI muss grün sein (`contracts`). Erst dann mergt Kaan.
+5. Nach dem Merge legt Kaan die neue `docs/STATUS.md` in den OneDrive-Ordner
+   `GeniusNew` und aktualisiert die Quelle in NotebookLM.
+
+Ein Thema ist erst fertig, wenn `STATUS.md` auf `main` es richtig beschreibt.
+
+## Wann Codex Claude um Hilfe bittet
+
+Codex steckt fest, wenn **eines** davon zutrifft:
+
+- dieselbe CI-Prüfung ist nach zwei eigenen Fixversuchen noch rot,
+- ein Test, der Refusal-Guard oder die Demo widerspricht dem Auftrag, und die Regeln
+  in `AGENTS.md` lassen keinen Weg offen,
+- die Aufgabe berührt eine Grenze aus `SECURITY.md`, und unklar ist, ob sie geschlossen
+  werden soll.
+
+Dann schreibt Codex einen **Hilferuf** in genau dieser Form, und Kaan gibt ihn an
+Claude Code weiter:
+
+```text
+HILFERUF GeniusNew
+PR / Branch: <#nummer, codex/...>   Head-SHA: <sha>
+Ziel: <ein Satz>
+Was fehlschlägt: <Check-Name oder Befehl>
+Fehlermeldung (gekürzt): <max. 30 Zeilen>
+Schon versucht: <1–3 Punkte>
+Frage an Claude: <konkret>
+```
+
+Claude antwortet mit einer Diagnose und einem Vorschlag. Codex setzt ihn im eigenen PR
+um; Claude pusht nur, wenn Kaan es ausdrücklich sagt.
+
+## Ablage in OneDrive
+
+Ordner `GeniusNew` mit genau drei Dateien, die nach jedem Merge ersetzt werden:
+`STATUS.md`, `SECURITY.md`, `ROADMAP-V01.md`. Keine eigenen Kopien bearbeiten: Was dort
+falsch ist, wird im Repository korrigiert und neu abgelegt.

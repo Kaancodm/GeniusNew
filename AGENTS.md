@@ -1,7 +1,8 @@
 # AGENTS.md — Arbeitsanweisungen für KI-Assistenten
 
 Gilt für jeden Assistenten, der in diesem Repository arbeitet: Claude Code, ChatGPT /
-Codex, GitHub Copilot, Gemini. Kurzfassung für Copilot:
+Codex, GitHub Copilot, Gemini. **Wer was macht, steht in `docs/COLLABORATION.md`:**
+Codex setzt um, Kaan mergt, Claude Code nur auf Hilferuf. Kurzfassung für Copilot:
 `.github/copilot-instructions.md`. Aktueller Projektstand: `docs/STATUS.md`.
 
 ## Was das ist
@@ -68,6 +69,7 @@ Matrix pro Modul aus. Der zusammenfassende Check heißt `contracts`.
 | Thema | Datei |
 | --- | --- |
 | Projektstand und nächste Schritte | `docs/STATUS.md` |
+| Wer macht was, Ablauf, Hilferuf an Claude | `docs/COLLABORATION.md` |
 | Übergabe-Prompts zwischen Werkzeugen | `docs/HANDOVER.md` |
 | Roadmap v0.1 mit Status je Schritt | `docs/ROADMAP-V01.md` |
 | Bekannte Grenzen | `SECURITY.md` |

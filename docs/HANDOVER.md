@@ -10,8 +10,8 @@ Prompt vor dem Kopieren aus `docs/STATUS.md` aktualisieren.
 ```text
 Du übernimmst die Mitarbeit am Projekt GeniusNew (GitHub: Kaancodm/GeniusNew).
 
-Lies zuerst, in dieser Reihenfolge: AGENTS.md, docs/STATUS.md, SECURITY.md,
-docs/ROADMAP-V01.md. Ohne Zugriff aufs Repo: docs/STATUS.md als Quelle nutzen.
+Lies zuerst, in dieser Reihenfolge: AGENTS.md, docs/COLLABORATION.md, docs/STATUS.md,
+SECURITY.md, docs/ROADMAP-V01.md. Ohne Zugriff aufs Repo: docs/STATUS.md als Quelle nutzen.
 
 Stand: siehe docs/STATUS.md (Datum oben im Dokument).
 
