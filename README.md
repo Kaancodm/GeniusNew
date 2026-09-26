@@ -106,6 +106,10 @@ leitet ihre Schlüssel aus einem festen Demo-Secret ab, das nur für die Demo gi
 
 Siehe:
 
+- `docs/STATUS.md` — aktueller Stand und nächste Schritte, auch als Quelle für NotebookLM
+  und Microsoft 365 Copilot
+- `AGENTS.md` — Regeln für KI-Assistenten (Claude Code, ChatGPT/Codex, Copilot, Gemini);
+  Kurzfassung für Copilot in `.github/copilot-instructions.md`
 - `docs/ADR-001-restart-and-isolation.md`
 - `docs/MIGRATION-MATRIX.md` — kanonisches Import-Gate
 - `docs/IMPORT-MANIFEST.md` — historische erste Inventur
