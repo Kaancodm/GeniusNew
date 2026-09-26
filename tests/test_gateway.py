@@ -82,7 +82,7 @@ class GatewayTest(unittest.TestCase):
         wire = WorkerRunner(
             DeterministicSummarizer(), authority=authority
         ).execute(permit, now=110)
-        taken = accept(wire, handoff=permit.handoff, authority=authority, now=120)
+        taken = accept(wire, handoff=permit.handoff, verifier=authority, now=120)
         self.assertTrue(taken.succeeded)
 
     def test_dispatch_permit_is_single_use_even_across_runner_instances(self):
@@ -93,7 +93,7 @@ class GatewayTest(unittest.TestCase):
 
         wire = first.execute(permit, now=110)
         self.assertTrue(
-            accept(wire, handoff=permit.handoff, authority=authority, now=120).succeeded
+            accept(wire, handoff=permit.handoff, verifier=authority, now=120).succeeded
         )
         with self.assertRaisesRegex(ContractError, "already been consumed"):
             second.execute(permit, now=111)

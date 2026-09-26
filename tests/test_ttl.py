@@ -284,9 +284,9 @@ class TTLControlPointTest(Fixture, unittest.TestCase):
         result_wire = WorkerRunner(DeterministicSummarizer(),
                                    authority=self.authority).execute(permit, now=T)
         with self.assertRaisesRegex(ContractError, 'expired before its result was accepted'):
-            accept(result_wire, handoff=handoff, authority=self.authority, now=T + 60)
+            accept(result_wire, handoff=handoff, verifier=self.authority, now=T + 60)
         self.assertTrue(accept(result_wire, handoff=handoff,
-                               authority=self.authority, now=T + 59).succeeded)
+                               verifier=self.authority, now=T + 59).succeeded)
 
     def test_acceptance_refuses_a_result_dated_after_the_deadline(self):
         policy, wire, permit = self.admit(ttl=60)
@@ -326,7 +326,7 @@ class TTLControlPointTest(Fixture, unittest.TestCase):
         result_wire = WorkerRunner(DeterministicSummarizer(),
                                    authority=self.authority).execute(permit, now=T)
         with self.assertRaises(ContractError) as caught:
-            accept(result_wire, handoff=permit.handoff, authority=self.authority,
+            accept(result_wire, handoff=permit.handoff, verifier=self.authority,
                    now=T + 60)
         seen['acceptance'] = str(caught.exception)
 
@@ -342,7 +342,7 @@ class TTLControlPointTest(Fixture, unittest.TestCase):
         handoff = permit.handoff
         result_wire = WorkerRunner(DeterministicSummarizer(),
                                    authority=self.authority).execute(permit, now=T + 1)
-        taken = accept(result_wire, handoff=handoff, authority=self.authority,
+        taken = accept(result_wire, handoff=handoff, verifier=self.authority,
                        now=T + 2)
         self.assertTrue(taken.succeeded)
 

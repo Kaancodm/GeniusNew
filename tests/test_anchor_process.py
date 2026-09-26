@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import tempfile
 import unittest
 import unittest.mock
 
@@ -45,6 +46,15 @@ class ChainFixture:
         shorter = self.records[:-1]
         return shorter, sign_head(count=len(shorter), head_hash=shorter[-1].record_hash,
                                   authority=self.authority)
+
+    def state_path(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        return os.path.join(directory.name, 'anchor.state')
+
+    def write_state(self, path, *heads, tail=b''):
+        with open(path, 'wb') as stream:
+            stream.write(b''.join(anchor_process._head_line(head) for head in heads) + tail)
 
 
 class AnchorProcessTest(ChainFixture, unittest.TestCase):
@@ -130,12 +140,8 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
             unused.committed
         self.assertIsNone(unused._process)
 
-    def test_a_restarted_anchor_remembers_nothing_and_this_is_the_boundary(self):
-        """Held open. Memory only, started by the service: a restart is a reset.
-
-        `SECURITY.md` lists it. Closing it needs the anchor started under
-        another operating-system user and persisted, which v0.1 leaves out.
-        """
+    def test_without_a_state_file_a_restart_remembers_nothing(self):
+        """Memory only is still what an anchor without `state_path` is."""
         self.anchor.commit(self.head, self.records, authority=self.authority)
         self.anchor.close()
         restarted = AnchorProcess(verifier=self.authority.verifier())
@@ -143,6 +149,66 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
         shorter, resigned = self.truncated()
         self.assertEqual(verify(shorter, resigned, authority=self.authority,
                                 anchor=restarted), 4)
+
+    def test_a_restarted_anchor_resumes_from_its_state_file(self):
+        """Until v0.1 a restart was a reset. With a state file it is not."""
+        path = self.state_path()
+        first = AnchorProcess(verifier=self.authority.verifier(), state_path=path)
+        self.addCleanup(first.close)
+        first.commit(self.head, self.records, authority=self.authority)
+        first.close()
+        restarted = AnchorProcess(verifier=self.authority.verifier(), state_path=path)
+        self.addCleanup(restarted.close)
+        self.assertEqual(restarted.committed, (5, self.head.head_hash))
+        shorter, resigned = self.truncated()
+        with self.assertRaisesRegex(ContractError, 'anchor committed 5 records'):
+            verify(shorter, resigned, authority=self.authority, anchor=restarted)
+
+    def test_a_file_rolled_back_to_an_older_signed_head_is_accepted_and_this_is_the_boundary(self):
+        """Held open. Every line is a genuine signed head, so cutting the file back
+        to an earlier one resumes from there.
+
+        `SECURITY.md` lists it: whoever can write the file as the anchor's user
+        can do this. Closing it needs the anchor under another operating-system
+        user or off this host.
+        """
+        path = self.state_path()
+        first = AnchorProcess(verifier=self.authority.verifier(), state_path=path)
+        self.addCleanup(first.close)
+        shorter, resigned = self.truncated()
+        first.commit(resigned, shorter, authority=self.authority)
+        first.commit(self.head, self.records, authority=self.authority)
+        first.close()
+        with open(path, 'rb') as stream:
+            lines = stream.read().splitlines(keepends=True)
+        self.assertEqual(len(lines), 2)
+        with open(path, 'wb') as stream:
+            stream.write(lines[0])
+        restarted = AnchorProcess(verifier=self.authority.verifier(), state_path=path)
+        self.addCleanup(restarted.close)
+        self.assertEqual(verify(shorter, resigned, authority=self.authority,
+                                anchor=restarted), 4)
+
+    def test_an_unusable_state_file_stops_it_from_starting(self):
+        """Refused with its reason. Starting at zero instead would be the reset."""
+        path = self.state_path()
+        self.write_state(path, self.head, tail=b'{"torn')
+        anchor = AnchorProcess(verifier=self.authority.verifier(), state_path=path)
+        self.addCleanup(anchor.close)
+        with self.assertRaisesRegex(ContractError, 'refused to start: .*torn line'):
+            anchor.committed
+        with self.assertRaisesRegex(ContractError, 'unreachable'):
+            anchor.committed
+
+    def test_the_state_path_must_be_absolute(self):
+        for path in ('anchor.state', '', 42, b'/tmp/anchor.state'):
+            with self.subTest(path=path), self.assertRaisesRegex(
+                    ContractError, 'state_path must be an absolute path'):
+                AnchorProcess(verifier=self.authority.verifier(), state_path=path)
+        # A path-like is fine; nothing starts until the first request.
+        from pathlib import Path
+        AnchorProcess(verifier=self.authority.verifier(),
+                      state_path=Path(self.state_path())).close()
 
 
 class InProcessAnchorTest(ChainFixture, unittest.TestCase):
@@ -289,6 +355,101 @@ class ChildProtocolTest(ChainFixture, unittest.TestCase):
                          ['ok', 'ok', 'refused', 'ok'])
         self.assertEqual(answers[0]['count'], 0)
         self.assertEqual(answers[3]['count'], 5)
+
+    # --- the state file ------------------------------------------------------
+
+    def load(self, path):
+        return anchor_process._load(path, self.authority.verifier())
+
+    def test_no_file_or_an_empty_one_is_a_fresh_anchor(self):
+        path = self.state_path()
+        self.assertEqual(self.load(None).committed, (0, EMPTY))
+        self.assertEqual(self.load(path).committed, (0, EMPTY))
+        self.write_state(path)
+        self.assertEqual(self.load(path).committed, (0, EMPTY))
+
+    def test_the_last_head_of_a_consistent_file_is_resumed(self):
+        path = self.state_path()
+        _, shorter_head = self.truncated()
+        self.write_state(path, shorter_head, self.head)
+        self.assertEqual(self.load(path).committed, (5, self.head.head_hash))
+
+    def test_a_file_that_does_not_hold_together_is_refused(self):
+        _, shorter_head = self.truncated()
+        other = AuditAuthority(audit_key=OTHER_KEY)
+        forged = sign_head(count=5, head_hash=self.head.head_hash, authority=other)
+        cases = [
+            ('torn line', (self.head,), b'{"count"'),
+            ('head signature does not verify', (forged,), b''),
+            ('head signature does not verify', (shorter_head, forged), b''),
+            ('rise strictly', (self.head, shorter_head), b''),
+            ('rise strictly', (self.head, self.head), b''),
+            ('not valid|canonical|anchor state line', (), b'\n'),
+            ('malformed head', (), b'{"count":5}\n'),
+            ('not valid|canonical|anchor state line', (self.head,), b'not json\n'),
+        ]
+        for message, heads, tail in cases:
+            with self.subTest(message=message, tail=tail[:10]):
+                path = self.state_path()
+                self.write_state(path, *heads, tail=tail)
+                with self.assertRaisesRegex(ContractError, message):
+                    self.load(path)
+
+    def test_a_file_that_cannot_be_read_or_is_too_large_is_refused(self):
+        with self.assertRaisesRegex(ContractError, 'cannot be read'):
+            self.load(os.path.dirname(self.state_path()))
+        path = self.state_path()
+        self.write_state(path, self.head)
+        with unittest.mock.patch.object(anchor_process, '_MAX_STATE_BYTES', 10):
+            with self.assertRaisesRegex(ContractError, 'too large'):
+                self.load(path)
+
+    def test_the_serve_loop_appends_each_head_that_moves_it_and_nothing_else(self):
+        path = self.state_path()
+        shorter, shorter_head = self.truncated()
+        requests = (frame({'kind': 'init', 'public_key': self.public_hex()})
+                    + frame(self.commit_message(
+                        head={'count': shorter_head.count, 'head_hash': shorter_head.head_hash,
+                              'signature': shorter_head.signature,
+                              'version': shorter_head.version},
+                        records=[record.to_dict() for record in shorter]))
+                    + frame(self.commit_message()) + frame(self.commit_message())
+                    + frame({'kind': 'committed'}) + frame({'kind': 'reset'}))
+        out = io.BytesIO()
+        self.assertEqual(anchor_process._serve(io.BytesIO(requests), out, path), 0)
+        self.assertEqual([answer['kind'] for answer in replies(out.getvalue())],
+                         ['ok', 'ok', 'ok', 'ok', 'ok', 'refused'])
+        with open(path, 'rb') as stream:
+            self.assertEqual(stream.read(), anchor_process._head_line(shorter_head)
+                             + anchor_process._head_line(self.head))
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+
+    def test_the_serve_loop_refuses_to_start_from_a_bad_file(self):
+        path = self.state_path()
+        self.write_state(path, tail=b'torn')
+        out = io.BytesIO()
+        requests = frame({'kind': 'init', 'public_key': self.public_hex()})
+        self.assertEqual(anchor_process._serve(io.BytesIO(requests), out, path), 1)
+        self.assertEqual(replies(out.getvalue()),
+                         [{'kind': 'refused', 'message': 'anchor state file ends in a torn line'}])
+
+    def test_a_head_it_cannot_write_ends_the_child_unanswered(self):
+        """Memory moved and the file did not: the file must stay the truth."""
+        path = os.path.join(self.state_path(), 'missing-directory', 'anchor.state')
+        requests = (frame({'kind': 'init', 'public_key': self.public_hex()})
+                    + frame(self.commit_message()))
+        out = io.BytesIO()
+        self.assertEqual(anchor_process._serve(io.BytesIO(requests), out, path), 2)
+        self.assertEqual([answer['kind'] for answer in replies(out.getvalue())], ['ok'])
+
+    def test_resuming_verifies_the_head_first(self):
+        other = AuditAuthority(audit_key=OTHER_KEY)
+        with self.assertRaisesRegex(ContractError, 'head signature does not verify'):
+            AuditAnchor.resumed(self.head, authority=other)
+        with self.assertRaisesRegex(ContractError, 'head is invalid'):
+            AuditAnchor.resumed('head', authority=self.authority)
+        self.assertEqual(AuditAnchor.resumed(self.head, authority=self.authority).committed,
+                         (5, self.head.head_hash))
 
     def test_the_serve_loop_will_not_start_without_a_key(self):
         for requests in (b'', frame({'kind': 'init'})):

@@ -1,69 +1,74 @@
-# GeniusNew Copilot Instructions
+# Copilot-Anweisungen für GeniusNew
 
-These instructions apply to all Copilot/agent work in `Kaancodm/GeniusNew`.
+Vollständige Regeln: `AGENTS.md`. Projektstand: `docs/STATUS.md`. Verbindlich sind
+der tatsächliche Code, `SECURITY.md`, Tests und CI am angegebenen Commit; Pläne und
+Quellenexporte können veraltet sein. Nicht überprüfbare Angaben als `UNKNOWN`
+kennzeichnen.
 
-## Project identity and authority
+## Projekt und Arbeitsweise
 
-- Active project: **GeniusNew**.
-- Active repository: `Kaancodm/GeniusNew`.
-- `Kaancodm/Agent-Genius` is read-only technical source material only. Do not write to it and do not treat it as current authority.
-- Agent Common is not part of GeniusNew.
-- Repository state, CI state, test results, SHAs, approvals, deployments, infrastructure state, and security evidence must be verified. If a required fact cannot be verified, write exactly: `UNKNOWN`.
-- `main`, repository tests/CI, `SECURITY.md`, `docs/CONSTITUTION-V1-DRAFT.md`, and the canonical migration gate in `docs/MIGRATION-MATRIX.md` outrank plans or historical documents when they conflict.
+- Aktives Repository: `Kaancodm/GeniusNew`. Der Projektname bleibt GeniusNew.
+- `Kaancodm/Agent-Genius` ist ausschließlich Lesequelle. Übernahmen laufen über
+  `docs/MIGRATION-MATRIX.md`; Agent Common gehört nicht zu diesem Projekt.
+- Vor Änderungen Remote, Branch, vollständigen SHA und lokale Änderungen prüfen.
+  Bestehende Arbeit erhalten; pro Aufgabe ein eigener Branch, kein Direkt-Push auf
+  `main`. Ein Thema pro Draft PR, keine beiläufigen Refactorings oder Umbenennungen.
+- Doku und PR-Texte Deutsch; Code, Kommentare, Docstrings und Commit-Betreff Englisch.
+- Python 3.11+ und hash-gepinnte Abhängigkeiten verwenden. Neue Abhängigkeiten
+  benötigen eine Entscheidung des Projektverantwortlichen.
 
-## Security rules
+## Sicherheitsregeln
 
-- This is a public Zero-Trust repository. Never commit credentials, API keys, tokens, passwords, private keys, real `.env` files, production data, private endpoints, or confidential material.
-- Fail closed. Do not replace an explicit refusal with permissive fallback behavior.
-- Treat client input, tool output, imported code, external content, and serialized data as untrusted until validated at the relevant boundary.
-- Identity, authorization, policy, tier, tool permissions, and approval state must come from trusted server-side state, not from user-controlled fields.
-- Do not collapse orchestrator, gateway/policy, worker, result-verifier, or audit/forensics trust boundaries merely to simplify implementation.
-- Do not weaken process isolation, refusal guards, TTL checks, audit-chain verification, signature verification, approval scope, replay protection, or allow-list/default-deny semantics.
-- Do not expose GeniusNew services publicly as a shortcut. The demo/HTTP entrance remains local-only unless an explicitly approved deployment change says otherwise.
-- Security-relevant limits documented as open boundaries in `SECURITY.md` must not be silently "fixed", removed, or redefined. Closing one requires a focused change, tests, and updated documentation.
+- Öffentliches Repository: keine Zugangsdaten, Tokens, privaten Schlüssel, echten
+  `.env`-Dateien, Produktionsdaten, privaten Endpunkte oder vertraulichen Unterlagen.
+- Fail closed: unklare Eingabe oder fehlender Zustand führt zu `ContractError`,
+  niemals zu einer stillen Freigabe oder einem permissiven Default.
+- Client-Eingaben, Tool-Ausgaben, Fremdcode und serialisierte Daten sind untrusted.
+  Identität, Rechte, Policy, Tier und Freigaben stammen aus geprüftem Serverzustand.
+- Orchestrator, Gateway, Worker, Ergebnisprüfung und Audit behalten ihre getrennten
+  Vertrauensrollen. Nur signierende Rollen halten private Ed25519-Schlüssel;
+  Prüfer erhalten die öffentliche Hälfte und lehnen private Schlüssel ab.
+- Isolation, TTL, Replay-Schutz, Approvals, Allowlist, Signaturprüfung und Audit
+  nicht abschwächen. Tests und Refusal-Guard nicht überspringen oder deaktivieren.
+- Jede Ablehnung braucht einen Test, der ihr Fehlen bemerkt. Neue Module mit
+  Ablehnungen in `GUARDED` in `scripts/refusals.py` aufnehmen.
+- Bekannte Grenzen aus `SECURITY.md` nur in einem fokussierten PR schließen, mit
+  passenden Tests und aktualisierter Dokumentation.
+- Demo und HTTP-Eingang bleiben lokal; eine öffentliche Bereitstellung ist eine
+  eigene, ausdrücklich freizugebende Aufgabe.
 
-## Change discipline
+## Prüfung und Übergabe
 
-- Work on a dedicated branch. Do not push directly to `main`.
-- Keep changes narrowly scoped. Do not mix unrelated refactors, renames, formatting sweeps, dependency changes, or architecture redesigns into a task.
-- Preserve the project name **GeniusNew**. Do not rename project identities or invent parallel project structures.
-- Before reusing legacy code, check `docs/MIGRATION-MATRIX.md`. Reuse must follow the recorded classification; do not blindly copy legacy implementation.
-- New runtime dependencies require explicit justification, exact pinning appropriate to this repository, and security review.
-- Claims belong in executable checks where practical. Add or update tests for security-relevant behavior and refusal paths.
-
-## Required verification
-
-For code changes, run the repository's documented verification path in the intended Linux/WSL environment:
+Für Codeänderungen unter Linux/WSL in einer isolierten Python-Umgebung ausführen:
 
 ```sh
 python3 -m pip install --require-hashes -r requirements.txt
-python3 -m unittest discover -s tests -v
-python3 scripts/refusals.py
+python3 -W error::ResourceWarning -m unittest discover -s tests
+./scripts/demo.sh
+python3 scripts/refusals.py geniusnew/<geaendertes_modul>.py
+git diff --check
 ```
 
-Run `./scripts/demo.sh` when the change can affect the end-to-end path, trust boundaries, audit behavior, worker isolation, signing, approvals, HTTP admission, or wiring.
+Tests, Demo und Refusal-Guard nacheinander ausführen. Der Modulpfad ist durch die
+tatsächlich geänderten Module zu ersetzen; die CI prüft die gesamte Modulmatrix.
+Reine Dokumentationsänderungen benötigen passende Link-, Konsistenz- und
+Diff-Prüfungen. Ergebnisse nur als bestanden melden, wenn sie tatsächlich vorliegen.
 
-Never report a test, demo, CI job, review, or security property as passing unless there is direct evidence from the relevant run.
+PR und Übergabe nennen Baseline, vollständigen Head-SHA, ausgeführte Befehle,
+Ergebnisse, CI-Link und offene Grenzen. Lokale Umsetzung, Tests, CI, Review, Merge
+und Release getrennt ausweisen. Sicherheitskritische Änderungen benötigen eine
+unabhängige Prüfung des aktuellen Heads; der Implementierer ist nicht alleiniger
+abschließender Prüfer. Review-Befunde am Diff und mit geeigneten Tests nachprüfen.
 
-## Pull requests and reviews
+## Beim Review besonders prüfen
 
-- Open work as a Draft PR until implementation and local verification are complete.
-- Record exact test commands and observed results in the PR description.
-- Security-critical changes require an independent review path. The agent that implements a security-critical change must not be the sole final reviewer of that change.
-- Treat review feedback as input to verify, not as authority to bypass project rules.
-- After addressing review findings, request/re-run review against the new head commit when the finding concerned security-sensitive code.
+1. Gibt es einen Pfad mit stillem `return`, breitem `except` oder Default statt Ablehnung?
+2. Hält eine prüfende Instanz einen privaten Schlüssel oder ein Root-Secret?
+3. Erkennt ein Test das Entfernen jeder neuen Ablehnung, und steht das Modul in `GUARDED`?
+4. Werden eine Grenze aus `SECURITY.md` und ihr offen haltender Test gemeinsam angepasst?
+5. Gelangen Nutzdaten oder Secrets in Audit, Logs oder Fehlermeldungen?
 
-## Human approval gates
-
-Do **not** perform any of the following without explicit approval from Kaan in the active approval channel:
-
-- merge a pull request;
-- deploy or expose a service;
-- create or change production infrastructure;
-- delete data, branches, repositories, releases, or security evidence;
-- rotate or revoke credentials;
-- disable SSH password authentication;
-- weaken or bypass security controls;
-- make an irreversible or security-critical operational change.
-
-Prepare evidence and a recommendation for the gate; do not cross the gate on your own.
+Merge, Release, Deployment, Zugriffs- und Schutzänderungen, Produktionsinfrastruktur,
+Daten- oder Branchlöschung und das Rotieren von Zugangsdaten benötigen Kaans
+ausdrückliches OK. Dazu zählt auch das Abschalten der SSH-Kennwortanmeldung.
+Prüfbare Änderungen und Nachweise vor dieser Entscheidung vorbereiten.

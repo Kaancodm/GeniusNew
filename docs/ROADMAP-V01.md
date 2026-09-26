@@ -115,13 +115,21 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    Nutzer zu betreiben und zu persistieren; beides ist Deployment bzw. Persistenz und
    damit außerhalb von v0.1. Ein Test hält die Grenze offen.
 
+   **Nach v0.1: Persistenz.** Mit `state_path` (im Dienst `anchor_state`) hängt der Anker
+   jeden Kopf, der ihn vorwärts bewegt, signiert und mit fsync an eine Datei an und setzt
+   nach einem Neustart beim letzten fort. Beim Start prüft er jede Zeile mit dem Public
+   Key und verlangt streng steigende Zählstände; sonst startet er nicht. Offen bleibt
+   der andere Nutzer: Wer die Datei schreiben kann, kann sie auf einen älteren, gültig
+   signierten Kopf zurückschneiden. Ein Test hält das offen.
+
    **Entscheidung zu HMAC:** blieb für v0.1. Nach v0.1 sind **Audit-Köpfe Ed25519**:
    `AuditAuthority` signiert, `AuditVerifier` hält nur den öffentlichen Schlüssel, und der
    Anker-Prozess bekommt nur diesen. Damit ist die Schlüsselfrage dieses Schritts für die
    Kette gelöst; der Anker kann einen gefälschten Kopf ablehnen, aber keinen erzeugen.
    Nach v0.1 sind auch **Handoffs Ed25519** (`HandoffSigner` nur im Orchestrator,
-   `HandoffVerifier` in Gateway, Ergebnisprüfung, Approval und Audit). Die
-   Ergebnissignatur folgt in einem eigenen Schritt. Erste Abhängigkeit:
+   `HandoffVerifier` in Gateway, Ergebnisprüfung, Approval und Audit) und **Ergebnisse
+   Ed25519** (`WorkerAuthority` signiert, `WorkerVerifier` in der Ergebnisprüfung). Damit
+   gibt es keine HMAC-Signatur mehr. Erste Abhängigkeit:
    `cryptography`, in `requirements.txt` exakt gepinnt und mit Hashes.
 
 9. **Ergebnisvertrag** — das Ergebnis wird vom Worker signiert und bei der Annahme
@@ -140,8 +148,9 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    Offen bleibt, was kein Vertrag lösen kann: die Annahme ist **nicht einmalig**. Ein
    Vertrag hält keinen Zustand; dasselbe Ergebnis zweimal anzunehmen verhindert erst die
    annehmende Instanz aus Schritt 14, so wie `approvals.py` es für Approvals tut. Ein
-   Test hält diese Grenze offen fest. Ebenso bleibt HMAC symmetrisch: die von §8
-   geforderte Unabhängigkeit ist hier organisatorisch, nicht kryptografisch.
+   Test hält diese Grenze offen fest. In v0.1 blieb zudem HMAC symmetrisch; nach v0.1
+   ist die Ergebnissignatur Ed25519 und die von §8 geforderte Unabhängigkeit damit
+   kryptografisch.
 
 10. **Worker-Schnittstelle** plus ein deterministischer Trivial-Worker als Referenz.
 
@@ -353,11 +362,10 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
     Instanz mit derselben Kennung nimmt dasselbe Ergebnis erneut an. Der Anspruch lautet
     deshalb „eine Annahme pro Handoff **pro Instanz**", und ein Test hält das fest.
 
-    **Offen bleibt die Symmetrie.** Das Ergebnis-HMAC ist symmetrisch — wer prüfen kann,
-    kann signieren. Die Unabhängigkeit ist hier eine getrennte Instanz mit eigener
-    API-Grenze, keine kryptografische; ein Test hält diese Grenze offen fest, statt sie
-    wegzubehaupten. Eine asymmetrische Ergebnissignatur ist die Abhängigkeitsentscheidung
-    aus Schritt 8 und änderte nur den Konstruktor dieser Datei.
+    **In v0.1 offen, danach geschlossen: die Symmetrie.** Das Ergebnis-HMAC war
+    symmetrisch — wer prüfen konnte, konnte signieren; ein Test hielt das offen fest.
+    Nach v0.1 ist die Ergebnissignatur Ed25519, die Instanz hält nur den
+    `WorkerVerifier`, und wie vorhergesagt änderte sich nur ihr Konstruktor.
 
     **Offen bleibt die Approval-Evidenz.** Ein approval-pflichtiger Wire trägt dauerhaft
     `PENDING_APPROVAL` — das Konsumieren schreibt ihn nicht um —, also kann diese Instanz

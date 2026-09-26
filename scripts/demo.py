@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import threading
 import urllib.error
 import urllib.request
@@ -43,6 +44,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from geniusnew.anchor_process import AnchorProcess  # noqa: E402
 from geniusnew.audit_chain import sign_head, verify  # noqa: E402
 from geniusnew.contracts import ContractError, Grant, Policy, issue, validate  # noqa: E402
 from geniusnew.http_entry import serve  # noqa: E402
@@ -67,6 +69,12 @@ def step(number: int, text: str) -> None:
 
 
 def main(root_secret: bytes, request_text: str, api_key: bytes = API_KEY) -> int:
+    with tempfile.TemporaryDirectory() as state_dir:
+        return run(root_secret, request_text, api_key,
+                   anchor_state=os.path.join(state_dir, "anchor.state"))
+
+
+def run(root_secret: bytes, request_text: str, api_key: bytes, *, anchor_state: str) -> int:
     grant = Grant("subject-demo", "user-demo", "worker-demo", "basic",
                   ("summarize",), "isolated", False)
     policy = Policy("policy-v1", "orchestrator-1", 60,
@@ -76,7 +84,8 @@ def main(root_secret: bytes, request_text: str, api_key: bytes = API_KEY) -> int
     service = build(root_secret=root_secret, policy=policy,
                     api_keys={api_key: "subject-demo"},
                     workers=(DeterministicSummarizer(),),
-                    clock=lambda: NOW, job_ids=lambda: next(ids))
+                    clock=lambda: NOW, job_ids=lambda: next(ids),
+                    anchor_state=anchor_state)
 
     step(0, "Three role keys derived from one root secret")
     line("    handoff integrity · worker result · audit — no two equal by construction")
@@ -133,6 +142,17 @@ def main(root_secret: bytes, request_text: str, api_key: bytes = API_KEY) -> int
             except Refused as refusal:
                 refused += 1
                 line(f"    [ok] {name:44s} {refusal}")
+
+        step(7, "The anchor is stopped and started again from its state file")
+        committed = service.anchor.committed
+        service.anchor.close()
+        restarted = AnchorProcess(verifier=service.audit.verifier(), state_path=anchor_state)
+        try:
+            resumed = restarted.committed == committed
+        finally:
+            restarted.close()
+        line(f"    anchor survives a restart: {resumed}")
+        line("    every head it committed is on disk, signed; it resumes from the last one")
     finally:
         server.shutdown()
         server.server_close()
@@ -142,10 +162,11 @@ def main(root_secret: bytes, request_text: str, api_key: bytes = API_KEY) -> int
     job_ok = body["status"] == "SUCCEEDED" and body["reason_code"] == "WORK_COMPLETED"
     chain_ok = verified == len(records) == 4
     attacks_ok = refused == len(attacks)
+    anchor_ok = resumed
 
     line()
     line("=" * 78)
-    if job_ok and chain_ok and attacks_ok:
+    if job_ok and chain_ok and attacks_ok and anchor_ok:
         line(f"PASS — job succeeded over HTTP, chain verified against the anchored "
              f"head, {refused}/{len(attacks)} attacks refused.")
         return 0
@@ -156,6 +177,8 @@ def main(root_secret: bytes, request_text: str, api_key: bytes = API_KEY) -> int
         reasons.append(f"chain verified {verified} of {len(records)} entries")
     if not attacks_ok:
         reasons.append(f"{len(attacks) - refused} attack(s) not refused")
+    if not anchor_ok:
+        reasons.append("the anchor did not resume from its state file")
     line(f"FAIL — {'; '.join(reasons)}.")
     return 1
 
@@ -225,7 +248,7 @@ def build_attacks(service, url, api_key, request_text, records, head):
 
     fresh = ResultVerifier(verifier_id="verifier-2",
                            handoff_verifier=service.handoff_verifier,
-                           result_key=keys.result_key)
+                           worker_verifier=authority.verifier())
 
     return [
         # --- what a stranger at the socket can try ---------------------------
@@ -253,6 +276,10 @@ def build_attacks(service, url, api_key, request_text, records, head):
         ("Mint a handoff with the gateway's key",
          lambda: issue({"text": "x"}, subject="subject-demo", job_id="job-demo-minted",
                        policy=policy, signer=service.gateway._handoff_verifier, now=NOW)),
+        ("Sign a result with the verifier's key",
+         lambda: produce({"text": "x"}, handoff=handoff, status="SUCCEEDED",
+                         reason_code="WORK_COMPLETED",
+                         authority=service.verifier._worker_verifier, now=NOW)),
         ("Swap the payload after validation", swap_payload),
         ("Dispatch without a gateway permit",
          lambda: service.orchestrator._workers["worker-demo"].dispatch(
