@@ -1,6 +1,7 @@
 # GeniusNew — Projektstand
 
-**Stand: 26.09.2026.** Dieses Dokument ist in sich geschlossen gedacht: als Quelle für
+**Stand: 26.09.2026.** Teil der Wissensdatenbank, geführt von Gemini Pro und NotebookLM
+(`docs/COLLABORATION.md`); Entscheidungen stehen in `docs/DECISIONS.md`. Dieses Dokument ist in sich geschlossen gedacht: als Quelle für
 NotebookLM, Microsoft 365 Copilot oder jeden anderen Assistenten, der das Repository
 nicht selbst lesen kann. Verbindlich bleiben der Code, `SECURITY.md` und
 `docs/ROADMAP-V01.md`. Bei Widerspruch gilt das Repository.
@@ -82,13 +83,19 @@ Vollständig in `SECURITY.md`. Die wichtigsten:
 1. Tag `v0.1` auf `3a0e1bc` anlegen (Projektverantwortlicher).
 2. `docs/STATUS.md` in NotebookLM als Quelle hochladen und in OneDrive/SharePoint für
    Microsoft 365 Copilot ablegen.
-3. Einträge in Job- und Annahme-Ledger ablaufen lassen, statt bei 100 000 alles
-   abzulehnen.
-4. Beide Ledger persistent machen: Ein Neustart nimmt nichts doppelt an.
-5. Den Anker als eigenständigen Dienst unter eigenem Nutzer betreiben.
-6. Das Gateway in einen eigenen Prozess legen.
-7. Eine Rolle für Freigebende mit eigener HTTP-Route einführen.
-8. Wartende Jobs sollen einen Neustart überstehen.
+3. **Datenbank-Design (Gemini Pro, Head der Datenbank):** `docs/DATABASE.md` mit
+   Betriebsort von Portal und Kern, Technikvergleich und Empfehlung, Schema (auch für
+   das Portal) und Migrationen. Danach entscheidet Kaan Betriebsort und Technik.
+4. **Datenbank umsetzen (Codex, je ein PR mit Gemini-Freigabe):** Job- und
+   Annahme-Ledger mit Ablauf, wartende Jobs, Audit-Kette, Anker-Zustand in einem
+   eigenen Speicher, getrennt von der Kette.
+5. **Portal aufbauen (Codex, auf der Datenbank):** Nutzer, Sitzungen,
+   Auftragsverlauf, Freigaben über die Weboberfläche. Neu gebaut nach dem Gate in
+   `docs/MIGRATION-MATRIX.md`; der Browser gilt als nicht vertrauenswürdig.
+6. Den Anker als eigenständigen Dienst unter eigenem Nutzer betreiben.
+7. Das Gateway in einen eigenen Prozess legen.
+8. Eine Rolle für Freigebende mit eigener HTTP-Route einführen (Voraussetzung für
+   Freigaben im Portal).
 9. Einen Schlüssel pro Worker einführen.
 10. Doku zu TLS und Rate-Limiting mit Reverse-Proxy-Beispiel.
 11. Die Tests zusätzlich unter macOS in der CI.
@@ -97,15 +104,24 @@ Vollständig in `SECURITY.md`. Die wichtigsten:
 
 ## Zusammenarbeit der Werkzeuge
 
+Ab 26.09.2026 gilt `docs/COLLABORATION.md`. **Codex setzt um und mergt.** **Gemini Pro
+und NotebookLM führen die Wissensdatenbank** (dieses Dokument und
+`docs/DECISIONS.md`); Gemini reviewt außerdem jeden PR automatisch. Kaan entscheidet.
+Copilot prüft zusätzlich. Microsoft 365 Copilot liest aus OneDrive. Claude Code sorgt für
+Ordnung und Struktur, löst Konflikte zwischen den Plattformen mit Überschreibrecht und
+hilft, wenn Codex feststeckt.
+
 | Werkzeug | Rolle | Liest |
 | --- | --- | --- |
-| Claude Code | Umsetzung, PRs, CI bis grün | `AGENTS.md` |
-| ChatGPT Pro / Codex | Umsetzung und Reviews, z. B. Quickstart-Review #33 | `AGENTS.md` |
-| GitHub Copilot Pro | Vervollständigung im Editor, PR-Reviews | `.github/copilot-instructions.md` |
-| NotebookLM (Gemini) | Fragen an den Projektstand, Zusammenfassungen | dieses Dokument, `SECURITY.md`, `docs/ROADMAP-V01.md` als Quellen |
-| Microsoft 365 Copilot | Berichte, Präsentationen, E-Mails zum Stand | dieses Dokument (in OneDrive/SharePoint abgelegt) |
+| Gemini Pro | **Head der Datenbank im Code**, **Leitung der Wissensdatenbank**, automatisches Review jedes PRs, Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung | `GEMINI.md`, `.gemini/styleguide.md` |
+| NotebookLM | **Wissensdatenbank**: Auskunft für alle, mit Quelle | dieses Dokument, `docs/DECISIONS.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`, `AGENTS.md` |
+| ChatGPT Pro / Codex | **Umsetzung**, ein Thema pro PR (`codex/<thema>`), mit Wissensblock | `AGENTS.md`, `docs/COLLABORATION.md` |
+| GitHub Copilot Pro | Editor und Review jedes PRs | `.github/copilot-instructions.md` |
+| Microsoft 365 Copilot | Berichte, E-Mails, Folien | OneDrive-Ordner `GeniusNew` |
+| Claude Code | **Ordnung, Struktur, Konfliktlöser mit Überschreibrecht**, Hilfe bei Hilferuf von Codex | `AGENTS.md`, `docs/COLLABORATION.md` |
 
 Übergaben zwischen den Werkzeugen laufen über die zwei Prompts in `docs/HANDOVER.md`.
 
-Regel für alle: Gemergt wird nur mit ausdrücklichem OK des Projektverantwortlichen, und
-jede Änderung läuft über einen PR mit grüner CI.
+Regel für alle: Jede Änderung läuft über einen PR mit grüner CI. Codex mergt eigene PRs
+selbst, Gemini seine Wissens-PRs; neue Abhängigkeiten, geänderte `SECURITY.md`-Grenzen
+und Tags brauchen Kaans OK.

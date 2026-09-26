@@ -10,8 +10,8 @@ Prompt vor dem Kopieren aus `docs/STATUS.md` aktualisieren.
 ```text
 Du übernimmst die Mitarbeit am Projekt GeniusNew (GitHub: Kaancodm/GeniusNew).
 
-Lies zuerst, in dieser Reihenfolge: AGENTS.md, docs/STATUS.md, SECURITY.md,
-docs/ROADMAP-V01.md. Ohne Zugriff aufs Repo: docs/STATUS.md als Quelle nutzen.
+Lies zuerst, in dieser Reihenfolge: AGENTS.md, docs/COLLABORATION.md, docs/STATUS.md,
+docs/DECISIONS.md, SECURITY.md, docs/ROADMAP-V01.md. Ohne Zugriff aufs Repo: docs/STATUS.md als Quelle nutzen.
 
 Stand: siehe docs/STATUS.md (Datum oben im Dokument).
 
@@ -19,7 +19,7 @@ Regeln (verbindlich):
 - Fail closed, keine Secrets, keine Tests abschwächen oder überspringen.
 - Jede Ablehnung braucht einen Test, der ihr Fehlen bemerkt (scripts/refusals.py).
 - Nur signierende Rollen halten private Schlüssel.
-- Ein Thema pro PR, als Draft. Mergen nur mit Kaans ausdrücklichem OK.
+- Ein Thema pro PR, als Draft. Wer mergen darf und wann: docs/COLLABORATION.md.
 - Doku Deutsch, Code und Kommentare Englisch.
 
 Nächste Aufgabe: <Schritt aus docs/STATUS.md, "Nächste Schritte">
@@ -45,5 +45,6 @@ Keine Secrets, keine Tokens. Nur Aussagen, die du belegen kannst (SHA, PR-Link,
 Befehlsausgabe).
 ```
 
-Die Antwort auf Prompt 2 fließt in `docs/STATUS.md` ein, bevor das nächste Werkzeug
-Prompt 1 bekommt.
+Die Antwort auf Prompt 2 geht an Gemini Pro. Gemini überträgt sie in die
+Wissensdatenbank (`docs/STATUS.md`, `docs/DECISIONS.md`, NotebookLM), bevor das nächste
+Werkzeug Prompt 1 bekommt.
