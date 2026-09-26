@@ -14,7 +14,7 @@ Nur tatsächlich ausgeführte Prüfungen eintragen; nicht Geprüftes als `UNKNOW
 
 | Prüfung | Ergebnis / Beleg |
 | --- | --- |
-| Tests (`unittest discover -s tests`) | |
+| Tests (`python3 -W error::ResourceWarning -m unittest discover -s tests`) | |
 | Demo (`./scripts/demo.sh`) | |
 | Refusal-Guard der geänderten Module | |
 | CI auf dem aktuellen Head | |

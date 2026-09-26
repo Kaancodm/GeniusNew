@@ -80,12 +80,13 @@ Vollständig in `SECURITY.md`. Die wichtigsten:
 
 ## Nächste Schritte (v0.2)
 
-1. Tag `v0.1` auf `3a0e1bc` anlegen (Projektverantwortlicher).
+1. Tag `v0.1` auf `3a0e1bc`: **erledigt** (26.09.2026).
 2. `docs/STATUS.md` in NotebookLM als Quelle hochladen und in OneDrive/SharePoint für
    Microsoft 365 Copilot ablegen.
 3. **Datenbank-Design (Gemini Pro, Head der Datenbank):** `docs/DATABASE.md` mit
-   Betriebsort von Portal und Kern, Technikvergleich und Empfehlung, Schema (auch für
-   das Portal) und Migrationen. Danach entscheidet Kaan Betriebsort und Technik.
+   Schema (auch für das Portal) und Migrationen, nach den Korrekturen aus Issue #44.
+   **Entschieden (Kaan, 26.09.2026):** Portal auf Vercel, Kern auf eigenem Server,
+   PostgreSQL mit `psycopg`, Portal-Passwörter mit `argon2-cffi` (`docs/DECISIONS.md`).
 4. **Datenbank umsetzen (Codex, je ein PR mit Gemini-Freigabe):** Job- und
    Annahme-Ledger mit Ablauf, wartende Jobs, Audit-Kette, Anker-Zustand in einem
    eigenen Speicher, getrennt von der Kette.
