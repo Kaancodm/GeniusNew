@@ -1,6 +1,7 @@
 # GeniusNew — Projektstand
 
-**Stand: 26.09.2026.** Dieses Dokument ist in sich geschlossen gedacht: als Quelle für
+**Stand: 26.09.2026.** Teil der Wissensdatenbank, geführt von Gemini Pro und NotebookLM
+(`docs/COLLABORATION.md`); Entscheidungen stehen in `docs/DECISIONS.md`. Dieses Dokument ist in sich geschlossen gedacht: als Quelle für
 NotebookLM, Microsoft 365 Copilot oder jeden anderen Assistenten, der das Repository
 nicht selbst lesen kann. Verbindlich bleiben der Code, `SECURITY.md` und
 `docs/ROADMAP-V01.md`. Bei Widerspruch gilt das Repository.
@@ -97,21 +98,23 @@ Vollständig in `SECURITY.md`. Die wichtigsten:
 
 ## Zusammenarbeit der Werkzeuge
 
-Ab 26.09.2026 gilt `docs/COLLABORATION.md`: **Codex setzt um und mergt**, Kaan
-entscheidet, Gemini reviewt jeden PR automatisch, Copilot prüft zusätzlich, NotebookLM und Microsoft 365 Copilot lesen
-`STATUS.md` aus OneDrive. Claude Code kümmert sich nur noch um Ordnung und
-Kommunikation und hilft, wenn Codex feststeckt (Hilferuf-Format dort).
+Ab 26.09.2026 gilt `docs/COLLABORATION.md`. **Codex setzt um und mergt.** **Gemini Pro
+und NotebookLM führen die Wissensdatenbank** (dieses Dokument und
+`docs/DECISIONS.md`); Gemini reviewt außerdem jeden PR automatisch. Kaan entscheidet.
+Copilot prüft zusätzlich. Microsoft 365 Copilot liest aus OneDrive. Claude Code kümmert
+sich nur um die Ordnung der Regeln und hilft, wenn Codex feststeckt.
 
 | Werkzeug | Rolle | Liest |
 | --- | --- | --- |
-| ChatGPT Pro / Codex | **Umsetzung**, ein Thema pro PR (`codex/<thema>`) | `AGENTS.md`, `docs/COLLABORATION.md` |
+| Gemini Pro | **Leitung der Wissensdatenbank**, automatisches Review jedes PRs, Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung | `GEMINI.md`, `.gemini/styleguide.md` |
+| NotebookLM | **Wissensdatenbank**: Auskunft für alle, mit Quelle | dieses Dokument, `docs/DECISIONS.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`, `AGENTS.md` |
+| ChatGPT Pro / Codex | **Umsetzung**, ein Thema pro PR (`codex/<thema>`), mit Wissensblock | `AGENTS.md`, `docs/COLLABORATION.md` |
 | GitHub Copilot Pro | Editor und Review jedes PRs | `.github/copilot-instructions.md` |
-| Gemini | **automatisches Review jedes PRs**, Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung | `GEMINI.md`, `.gemini/styleguide.md` |
-| NotebookLM | Fragen an den Projektstand | dieses Dokument, `SECURITY.md`, `docs/ROADMAP-V01.md` |
-| Microsoft 365 Copilot | Berichte, E-Mails, Folien | dieses Dokument im OneDrive-Ordner `GeniusNew` |
-| Claude Code | Ordnung, Kommunikation, Hilfe bei Hilferuf von Codex | `AGENTS.md`, `docs/COLLABORATION.md` |
+| Microsoft 365 Copilot | Berichte, E-Mails, Folien | OneDrive-Ordner `GeniusNew` |
+| Claude Code | Ordnung der Regeln, Hilfe bei Hilferuf von Codex | `AGENTS.md`, `docs/COLLABORATION.md` |
 
 Übergaben zwischen den Werkzeugen laufen über die zwei Prompts in `docs/HANDOVER.md`.
 
 Regel für alle: Jede Änderung läuft über einen PR mit grüner CI. Codex mergt eigene PRs
-selbst; neue Abhängigkeiten, geänderte `SECURITY.md`-Grenzen und Tags brauchen Kaans OK.
+selbst, Gemini seine Wissens-PRs; neue Abhängigkeiten, geänderte `SECURITY.md`-Grenzen
+und Tags brauchen Kaans OK.

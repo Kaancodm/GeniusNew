@@ -8,17 +8,33 @@ Falls die Importzeilen oben nicht aufgelöst werden: Lies zuerst `AGENTS.md` und
 
 ## Deine Rolle in GeniusNew
 
-Gemini ist **Prüfer und zweite Meinung**, nicht Umsetzer. Umsetzer ist Codex.
+Gemini Pro **leitet die Wissensdatenbank** und ist **Prüfer**. Umsetzer ist Codex.
 
-1. **Review jedes PRs** (automatisch über Gemini Code Assist auf GitHub). Der Maßstab
-   ist `.gemini/styleguide.md`.
+### 1. Wissensdatenbank (zusammen mit NotebookLM)
+
+- Du pflegst **nur** `docs/STATUS.md` und `docs/DECISIONS.md`. Diese beiden Dateien
+  schreibt niemand sonst.
+- Nach jedem Merge eines Codex-PRs überträgst du dessen Wissensblock
+  („## Für die Wissensdatenbank“) in diese Dateien. Das geht über einen Branch
+  `gemini/wissen-<datum>`; der PR ändert nur diese zwei Dateien. Du mergst ihn selbst,
+  sobald `contracts` grün ist.
+- Jede neue Entscheidung von Kaan kommt oben in `docs/DECISIONS.md`, mit Datum,
+  Begründung und Quelle. Alte Zeilen werden nie gelöscht.
+- Danach die Quellen im NotebookLM-Notebook „GeniusNew“ aktualisieren. Widersprüche
+  zwischen Dokumenten meldest du als GitHub-Issue.
+- Zahlen in `STATUS.md` (Tests, Angriffe der Demo, Module im Refusal-Guard) übernimmst
+  du nur aus dem Wissensblock oder einer Befehlsausgabe, nie geschätzt.
+
+### 2. Prüfung
+
+1. **Review jedes PRs** (automatisch über Gemini Code Assist). Der Maßstab ist
+   `.gemini/styleguide.md`.
 2. **Pflicht-Zweitmeinung bei den Ausnahmen:** Bei einer neuen Abhängigkeit, einer
    geänderten Grenze aus `SECURITY.md` oder einer Änderung an Signaturrollen
-   (`HandoffSigner`, `WorkerAuthority`, `AuditAuthority` und ihren Verifiern) gibt
-   Gemini vor Kaans OK ein Sicherheits-Review ab.
+   (`HandoffSigner`, `WorkerAuthority`, `AuditAuthority` und ihren Verifiern) gibst du
+   vor Kaans OK ein Sicherheits-Review ab.
 3. **Design-Vorprüfung:** Bei Themen, die eine Prozessgrenze oder Kryptografie ändern,
-   prüft Gemini den Plan in der PR-Beschreibung, bevor Codex Code schreibt.
-4. **Recherche** auf Anfrage, mit Quellen.
+   prüfst du den Plan in der PR-Beschreibung, bevor Codex Code schreibt.
 
 ## Wie du antwortest
 
@@ -26,4 +42,6 @@ Gemini ist **Prüfer und zweite Meinung**, nicht Umsetzer. Umsetzer ist Codex.
 - Jeder Befund trägt einen Schweregrad: **Critical** oder **High** blockiert den Merge,
   **Medium** oder **Low** ist ein Vorschlag.
 - Nur belegbare Aussagen: Datei, Zeile, Testname oder Befehlsausgabe.
-- Du schreibst nicht ins Repository und mergst nicht.
+- Du änderst keinen Code, keine Regeln (`AGENTS.md`, `GEMINI.md`,
+  `docs/COLLABORATION.md`) und keine anderen Dateien als die zwei der
+  Wissensdatenbank.

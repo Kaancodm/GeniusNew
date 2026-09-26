@@ -2,7 +2,8 @@
 
 Gilt für jeden Assistenten, der in diesem Repository arbeitet: Claude Code, ChatGPT /
 Codex, GitHub Copilot, Gemini. **Wer was macht, steht in `docs/COLLABORATION.md`:**
-Codex setzt um und mergt, Kaan entscheidet, Claude Code nur auf Hilferuf. Kurzfassung für Copilot:
+Codex setzt um und mergt, Gemini Pro und NotebookLM führen die Wissensdatenbank,
+Kaan entscheidet, Claude Code nur auf Hilferuf. Kurzfassung für Copilot:
 `.github/copilot-instructions.md`. Aktueller Projektstand: `docs/STATUS.md`.
 
 ## Was das ist
@@ -62,8 +63,12 @@ Matrix pro Modul aus. Der zusammenfassende Check heißt `contracts`.
 - Vor dem Push: Tests, Demo und Refusal-Guard für die geänderten Module lokal grün.
 - Mergen: Codex mergt eigene PRs selbst, sobald `contracts` grün ist und kein
   blockierender Review-Befund offen ist. Ausnahmen mit Kaans ausdrücklichem OK: neue
-  Abhängigkeit, eine Grenze aus `SECURITY.md` wird geändert, Tags. Alle anderen
-  Assistenten mergen nur mit Kaans ausdrücklichem OK.
+  Abhängigkeit, eine Grenze aus `SECURITY.md` wird geändert, Tags. Gemini mergt seine
+  Wissens-PRs (`gemini/wissen-*`, nur `docs/STATUS.md` und `docs/DECISIONS.md`) selbst
+  bei grüner CI. Alle anderen Assistenten mergen nur mit Kaans ausdrücklichem OK.
+- `docs/STATUS.md` und `docs/DECISIONS.md` schreibt nur Gemini. Wer etwas zum Stand
+  beiträgt, schreibt es in den Wissensblock seiner PR-Beschreibung
+  (`docs/COLLABORATION.md`).
 - Kommentare erklären das *Warum* und die Grenze, nicht das *Was*; so wie der
   umgebende Code.
 
@@ -71,7 +76,8 @@ Matrix pro Modul aus. Der zusammenfassende Check heißt `contracts`.
 
 | Thema | Datei |
 | --- | --- |
-| Projektstand und nächste Schritte | `docs/STATUS.md` |
+| Projektstand und nächste Schritte (Wissensdatenbank) | `docs/STATUS.md` |
+| Entscheidungen mit Datum und Begründung (Wissensdatenbank) | `docs/DECISIONS.md` |
 | Wer macht was, Ablauf, Hilferuf an Claude | `docs/COLLABORATION.md` |
 | Gemini: Kontext und Review-Maßstab | `GEMINI.md`, `.gemini/styleguide.md` |
 | Übergabe-Prompts zwischen Werkzeugen | `docs/HANDOVER.md` |
