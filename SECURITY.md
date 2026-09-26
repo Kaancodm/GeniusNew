@@ -50,8 +50,16 @@ Dokumentation steht.
 | Der **Audit-Anker** läuft in eigenem Prozess, wird aber vom Dienst gestartet und unter **demselben Betriebssystem-Nutzer** betrieben | Der Schreiber kann ihn nicht aus dem Speicher zurücksetzen, aber beenden. Mit `anchor_state` übersteht die Festlegung einen Neustart (nach v0.1); wer die Zustandsdatei schreiben kann, kann sie aber auf einen älteren, gültig signierten Kopf zurückschneiden. Ohne `anchor_state` vergisst ein Neustart alles | `tests/test_anchor_process.py::test_a_file_rolled_back_to_an_older_signed_head_is_accepted_and_this_is_the_boundary` (offen gehalten) |
 | **Approvals** werden nur serverseitig erteilt (`Service.approve`), wartende Jobs liegen prozesslokal | Kein HTTP-Weg für Freigebende; die Zustellung des Tokens an den Client ist Deployment. Ein Neustart verliert wartende Jobs | Docstring von `Service.approve` in `geniusnew/wiring.py` |
 | Worker-Isolation ist eine **Prozessgrenze**, keine microVM | Kein Schutz gegen bereits geladenen nativen Code oder rohe Syscalls; ohne POSIX-Limits (Windows) keine Ausführung | `docs/ISOLATION-V01.md`, `tests/test_isolation.py` |
+| Die Worker-Sandbox ist ein **Python-Audit-Hook**, der den direkten `_posixsubprocess`-Pfad nicht sperrt | Worker-Code kann über `multiprocessing.util.spawnv_passfds` einen Prozess starten, den der Hook nicht unterbindet; der schreibt außerhalb des Temp-Verzeichnisses und unterliegt keiner der Python-Sperren (Netz eingeschlossen), nur den geerbten Ressourcenlimits. Auslösen kann das nur Worker-Code, nicht ein Client. Schließen braucht eine OS-Sandbox (seccomp, Landlock, Namespaces) | `tests/test_isolation.py::test_a_spawn_below_the_audit_hook_escapes_and_this_is_the_boundary` (offen gehalten) |
+| Ein Worker darf **lesen**, was der Dienstnutzer lesen darf; gesperrt sind nur `/proc`, `/sys` und `/dev` | Seine Ausgabe geht an den Client zurück, ein Worker kann also Dateien des Hosts herausgeben | `tests/test_isolation.py::test_a_read_outside_the_temporary_directory_is_allowed_and_this_is_the_boundary` (offen gehalten) |
 | HTTP-Eingang ohne **TLS, Rate-Limiting, Sessions** | Deployment-Aufgabe; der Eingang lauscht in der Demo nur auf `127.0.0.1` | `geniusnew/http_entry.py` |
 | API-Key-Digests sind **ungesalzen** | Richtig für zufällige Maschinenschlüssel, falsch für menschlich gewählte | Modul-Docstring von `geniusnew/http_entry.py` |
+
+Seit Python 3.14 gibt es das interne Audit-Ereignis `_posixsubprocess.fork_exec`
+([Python-Dokumentation](https://docs.python.org/3.14/library/audit_events.html)).
+Der aktuelle Hook in `geniusnew/isolation.py` lehnt dieses Ereignis nicht ab; seine
+Verfügbarkeit allein schließt die Prozessstart-Lücke nicht. Die lokalen Nachweise
+dieser Änderung laufen unter Python 3.12, die CI unter Python 3.11.
 
 Eine Grenze aus dieser Liste zu schließen ist eine eigene, begründete Änderung mit Test,
 kein Nebeneffekt.
