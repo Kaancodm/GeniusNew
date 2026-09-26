@@ -69,7 +69,7 @@ class SpawnWorker(Worker):
 
 
 class NativeSpawnWorker(Worker):
-    """Starts a shell through the one spawn path that raises no audit event.
+    """Starts a shell through a spawn path the current audit hook does not deny.
 
     `spawnv_passfds` is the stdlib's own thin wrapper around
     `_posixsubprocess.fork_exec`, kept in step with it on every Python version,
@@ -554,9 +554,9 @@ class ProcessIsolationTest(unittest.TestCase):
         self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
 
     def test_a_spawn_below_the_audit_hook_escapes_and_this_is_the_boundary(self):
-        """Held open (SECURITY.md): the sandbox is an audit hook, and
-        `_posixsubprocess` raises no audit event. A worker can start a process
-        the hook never sees, and that process writes where the worker may not.
+        """Held open (SECURITY.md): the hook does not deny this spawn path.
+        Python 3.14 emits an internal audit event, but this hook ignores it.
+        The spawned process writes where the worker's Python calls may not.
         Only worker code can do this, not a client. Closing it takes an OS
         sandbox; whoever does must invert this test and update SECURITY.md.
         """

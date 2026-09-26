@@ -72,7 +72,7 @@ die Lücke vorhanden ist. Wer sie schließt, muss den jeweiligen Test umkehren u
 
 - **Prozessstart unterhalb des Audit-Hooks:** Der Weg über
   `multiprocessing.util.spawnv_passfds` zu `_posixsubprocess.fork_exec` startet einen
-  Prozess, den der Python-Audit-Hook nicht sieht. Der Testprozess schreibt eine feste
+  Prozess, den der Python-Audit-Hook nicht unterbindet. Der Testprozess schreibt eine feste
   Markierung in ein vom Test erzeugtes temporäres Verzeichnis außerhalb des
   Job-Verzeichnisses. Er erbt Ressourcenlimits, aber keine Python-Audit-Sperren.
   Der Worker wartet auf sein Ende; ein erfolgreiches Ergebnis und der tatsächliche
@@ -83,6 +83,12 @@ die Lücke vorhanden ist. Wer sie schließt, muss den jeweiligen Test umkehren u
   verwendet ausschließlich eine selbst erzeugte Datei mit einem Kanarienwert und
   prüft dessen Rückgabe im angenommenen Ergebnis.
   Test: `test_a_read_outside_the_temporary_directory_is_allowed_and_this_is_the_boundary`.
+
+Seit Python 3.14 gibt es für `_posixsubprocess.fork_exec` ein internes Audit-Ereignis
+([Python-Dokumentation](https://docs.python.org/3.14/library/audit_events.html)).
+Der aktuelle Hook lehnt dieses Ereignis nicht ab. Die Grenze hängt deshalb nicht
+allein davon ab, ob die Python-Version das Ereignis erzeugt. Die lokalen Tests dieser
+Änderung liefen unter Python 3.12; die CI verwendet Python 3.11.
 
 Beide Fälle setzen entsprechenden Worker-Code voraus. Ein Client liefert eine Payload
 und wählt den Worker nicht selbst. Das Schließen dieser Grenzen braucht durch das
