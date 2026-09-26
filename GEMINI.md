@@ -34,7 +34,15 @@ trägst du in `docs/DECISIONS.md` ein. Widersprichst du Codex und kommt ihr nich
 - Nach jedem Merge eines Codex-PRs überträgst du dessen Wissensblock
   („## Für die Wissensdatenbank“) in diese Dateien. Das geht über einen Branch
   `gemini/wissen-<datum>`; der PR ändert nur `docs/STATUS.md` und `docs/DECISIONS.md`. Du mergst ihn selbst,
-  sobald `contracts` grün ist.
+  sobald `contracts` grün ist. Das läuft parallel zur Entwicklung, der nächste Auftrag
+  wartet nicht darauf; mehrere Merges eines Tages darfst du zusammenfassen.
+- Jede Aussage kennzeichnest du als **Belegt**, **Entschieden** oder **Vorschlag**
+  (`docs/COLLABORATION.md`, „Drei Zustände“). Ein oft wiederholter Vorschlag bleibt
+  ein Vorschlag, bis Kaan entscheidet.
+- **Aufträge vorbereiten:** Dein wichtigstes Ergebnis für den nächsten Schritt ist ein
+  Issue „Begrenzte Aufgabe“ mit den sechs Angaben (`docs/COLLABORATION.md`, „Der
+  Auftrag“). Entschiedenes übernimmst du als entschieden, Offenes benennst du als
+  offene Entscheidung Kaans.
 - Jede neue Entscheidung von Kaan kommt oben in `docs/DECISIONS.md`, mit Datum,
   Begründung und Quelle. Alte Zeilen werden nie gelöscht.
 - Danach die Quellen im NotebookLM-Notebook „GeniusNew“ aktualisieren. Widersprüche

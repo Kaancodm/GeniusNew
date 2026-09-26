@@ -22,7 +22,8 @@ Regeln (verbindlich):
 - Ein Thema pro PR, als Draft. Wer mergen darf und wann: docs/COLLABORATION.md.
 - Doku Deutsch, Code und Kommentare Englisch.
 
-Nächste Aufgabe: <Schritt aus docs/STATUS.md, "Nächste Schritte">
+Nächste Aufgabe: <Link auf das Issue „Begrenzte Aufgabe“; ohne Issue: Schritt aus
+docs/STATUS.md, "Nächste Schritte">
 
 Antworte kurz: erst ein Plan in 5–10 Schritten, dann umsetzen. Vor jedem Push
 müssen Tests, Demo und Refusal-Guard der geänderten Module grün sein.
@@ -31,7 +32,15 @@ müssen Tests, Demo und Refusal-Guard der geänderten Module grün sein.
 ## 2. Übergabe verlangen
 
 ```text
-Erstelle eine Übergabe für GeniusNew (Kaancodm/GeniusNew), kurz und vollständig:
+Erstelle eine Übergabe für GeniusNew (Kaancodm/GeniusNew), kurz und vollständig.
+
+Beginne mit vier Zeilen für Kaan:
+Fertig: <Ergebnis mit PR-Link>
+Geprüft: <Tests und Reviews auf dem aktuellen Head-SHA>
+Blockiert: <keiner | Grund, und wer ihn lösen kann>
+Deine Entscheidung: <keine | Auswahl mit Empfehlung>
+
+Danach:
 
 1. Was hast du geändert? Pro PR/Branch: Nummer, Head-SHA, Status (offen/gemergt), CI-Ergebnis.
 2. Was ist lokal fertig, aber noch nicht gepusht?
@@ -46,5 +55,6 @@ Befehlsausgabe).
 ```
 
 Die Antwort auf Prompt 2 geht an Gemini Pro. Gemini überträgt sie in die
-Wissensdatenbank (`docs/STATUS.md`, `docs/DECISIONS.md`, NotebookLM), bevor das nächste
-Werkzeug Prompt 1 bekommt.
+Wissensdatenbank (`docs/STATUS.md`, `docs/DECISIONS.md`, NotebookLM). Das läuft
+parallel: Ein bereits klarer Folgeauftrag bekommt Prompt 1 sofort. Er wartet nur auf
+echte Voraussetzungen (`docs/COLLABORATION.md`, „Was wirklich wartet“).

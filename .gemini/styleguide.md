@@ -27,7 +27,8 @@ GeniusNew ist ein Zero-Trust-Agentensystem in Python. Regeln: `AGENTS.md`, Rolle
 7. **Abhängigkeiten:** Ist eine neue Abhängigkeit hinzugekommen, und ist sie in
    `requirements.txt` hash-gepinnt? Ohne Kaans OK gilt das als *High*.
 8. **Wissensblock:** Enthält die Beschreibung eines Codex-PRs den ausgefüllten Block
-   „## Für die Wissensdatenbank“? Fehlt er: *High*. Ändert ein Codex-PR
+   „## Für die Wissensdatenbank“? Fehlt er: *High*. Fehlt darin der Beleg (Head-SHA,
+   Test oder Befehl): *Medium*. Ändert ein Codex-PR
    `docs/STATUS.md` oder `docs/DECISIONS.md`? Diese Dateien gehören Gemini: *Medium*.
 
 9. **DB-PRs** (Speicher-Code, Schema, Migrationen, `docs/DATABASE.md`): Liegt der
