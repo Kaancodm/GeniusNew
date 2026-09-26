@@ -161,7 +161,9 @@ Was blockiert ist: <PR, Merge, Aufgabe>
 ```
 
 Claude Code entscheidet anhand von Code, Tests, `AGENTS.md` und `docs/DECISIONS.md` und
-begründet die Entscheidung im PR oder Issue. Die Entscheidung ist für alle Werkzeuge
+begründet die Entscheidung im PR oder Issue. **Jede Entscheidung endet mit einem fertigen
+Prompt für jedes betroffene Werkzeug**, den Kaan nur noch kopiert: was zu tun ist, in
+welcher Datei, bis wann es als erledigt gilt. Die Entscheidung ist für alle Werkzeuge
 verbindlich; Gemini trägt sie in `docs/DECISIONS.md` ein. Wo eine Datei korrigiert werden
 muss, darf Claude Code sie selbst ändern, auch die von Gemini (Überschreibrecht). Nicht
 überschreiben darf Claude Code Kaans Entscheidungen und die Ausnahmen (neue
