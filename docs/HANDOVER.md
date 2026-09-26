@@ -19,7 +19,7 @@ Regeln (verbindlich):
 - Fail closed, keine Secrets, keine Tests abschwächen oder überspringen.
 - Jede Ablehnung braucht einen Test, der ihr Fehlen bemerkt (scripts/refusals.py).
 - Nur signierende Rollen halten private Schlüssel.
-- Ein Thema pro PR, als Draft. Mergen nur mit Kaans ausdrücklichem OK.
+- Ein Thema pro PR, als Draft. Wer mergen darf und wann: docs/COLLABORATION.md.
 - Doku Deutsch, Code und Kommentare Englisch.
 
 Nächste Aufgabe: <Schritt aus docs/STATUS.md, "Nächste Schritte">

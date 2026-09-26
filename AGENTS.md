@@ -2,7 +2,7 @@
 
 Gilt für jeden Assistenten, der in diesem Repository arbeitet: Claude Code, ChatGPT /
 Codex, GitHub Copilot, Gemini. **Wer was macht, steht in `docs/COLLABORATION.md`:**
-Codex setzt um, Kaan mergt, Claude Code nur auf Hilferuf. Kurzfassung für Copilot:
+Codex setzt um und mergt, Kaan entscheidet, Claude Code nur auf Hilferuf. Kurzfassung für Copilot:
 `.github/copilot-instructions.md`. Aktueller Projektstand: `docs/STATUS.md`.
 
 ## Was das ist
@@ -60,7 +60,10 @@ Matrix pro Modul aus. Der zusammenfassende Check heißt `contracts`.
 - Klein schneiden: ein Thema pro PR, als Draft. Ein PR, der älter als etwa zwei Tage
   wird, ist zu groß.
 - Vor dem Push: Tests, Demo und Refusal-Guard für die geänderten Module lokal grün.
-- Mergen nur mit ausdrücklichem OK des Projektverantwortlichen (Kaan).
+- Mergen: Codex mergt eigene PRs selbst, sobald `contracts` grün ist und kein
+  blockierender Review-Befund offen ist. Ausnahmen mit Kaans ausdrücklichem OK: neue
+  Abhängigkeit, eine Grenze aus `SECURITY.md` wird geändert, Tags. Alle anderen
+  Assistenten mergen nur mit Kaans ausdrücklichem OK.
 - Kommentare erklären das *Warum* und die Grenze, nicht das *Was*; so wie der
   umgebende Code.
 

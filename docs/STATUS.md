@@ -97,8 +97,8 @@ Vollständig in `SECURITY.md`. Die wichtigsten:
 
 ## Zusammenarbeit der Werkzeuge
 
-Ab 26.09.2026 gilt `docs/COLLABORATION.md`: **Codex setzt um**, Kaan entscheidet und
-mergt, Copilot und Gemini prüfen, NotebookLM und Microsoft 365 Copilot lesen
+Ab 26.09.2026 gilt `docs/COLLABORATION.md`: **Codex setzt um und mergt**, Kaan
+entscheidet, Copilot und Gemini prüfen, NotebookLM und Microsoft 365 Copilot lesen
 `STATUS.md` aus OneDrive. Claude Code kümmert sich nur noch um Ordnung und
 Kommunikation und hilft, wenn Codex feststeckt (Hilferuf-Format dort).
 
@@ -113,5 +113,5 @@ Kommunikation und hilft, wenn Codex feststeckt (Hilferuf-Format dort).
 
 Übergaben zwischen den Werkzeugen laufen über die zwei Prompts in `docs/HANDOVER.md`.
 
-Regel für alle: Gemergt wird nur mit ausdrücklichem OK des Projektverantwortlichen, und
-jede Änderung läuft über einen PR mit grüner CI.
+Regel für alle: Jede Änderung läuft über einen PR mit grüner CI. Codex mergt eigene PRs
+selbst; neue Abhängigkeiten, geänderte `SECURITY.md`-Grenzen und Tags brauchen Kaans OK.

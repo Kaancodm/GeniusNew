@@ -1,15 +1,15 @@
 # Zusammenarbeit der Werkzeuge
 
 Ziel: So wenig Abstimmung wie möglich. Es gibt **eine Quelle der Wahrheit** (den
-`main`-Zweig dieses Repositories), **einen Umsetzer** (Codex) und **eine Person, die
-entscheidet** (Kaan). Alle anderen Werkzeuge lesen nur mit oder prüfen.
+`main`-Zweig dieses Repositories), **einen Umsetzer, der auch mergt** (Codex) und
+**eine Person, die entscheidet** (Kaan). Alle anderen Werkzeuge lesen nur mit oder prüfen.
 
 ## Rollen
 
 | Wer | Macht | Macht nicht |
 | --- | --- | --- |
-| **Kaan** | entscheidet, mergt, legt Tags an, legt `docs/STATUS.md` in OneDrive und NotebookLM ab | — |
-| **Codex** (ChatGPT Pro) | setzt um: ein Thema pro PR, Branch `codex/<thema>`, aktualisiert `docs/STATUS.md` im selben PR | mergen, Tags anlegen, Grenzen aus `SECURITY.md` nebenbei ändern |
+| **Kaan** | entscheidet, gibt die Ausnahmen frei (siehe unten), legt Tags an, legt `docs/STATUS.md` in OneDrive und NotebookLM ab | — |
+| **Codex** (ChatGPT Pro) | setzt um und **mergt selbst**: ein Thema pro PR, Branch `codex/<thema>`, aktualisiert `docs/STATUS.md` im selben PR | Ausnahmen ohne Kaans OK mergen, Tags anlegen |
 | **ChatGPT** (Chat) | plant, formuliert Prompts, erklärt | ins Repo schreiben |
 | **GitHub Copilot Pro** | Vervollständigung im Editor; Review jedes PRs nach der Checkliste in `.github/copilot-instructions.md` | eigene PRs ohne Auftrag |
 | **Gemini** | zweite Meinung zu Design und Review, Recherche | ins Repo schreiben |
@@ -24,7 +24,10 @@ entscheidet** (Kaan). Alle anderen Werkzeuge lesen nur mit oder prüfen.
 2. Codex öffnet einen Draft-PR `codex/<thema>` und aktualisiert `docs/STATUS.md` im
    selben PR (Abschnitte „Seit v0.1 gemergt“, „Nächste Schritte“).
 3. Copilot reviewt den PR, Gemini auf Wunsch als zweite Meinung.
-4. Die CI muss grün sein (`contracts`). Erst dann mergt Kaan.
+4. **Codex mergt selbst**, sobald die CI grün ist (`contracts`) und kein blockierender
+   Review-Befund offen ist. Kaans ausdrückliches OK braucht es nur für die
+   Ausnahmen: eine neue Abhängigkeit, eine geänderte Grenze aus `SECURITY.md`
+   (offen gehaltener Test umgekehrt) und Tags.
 5. Nach dem Merge legt Kaan die neue `docs/STATUS.md` in den OneDrive-Ordner
    `GeniusNew` und aktualisiert die Quelle in NotebookLM.
 
