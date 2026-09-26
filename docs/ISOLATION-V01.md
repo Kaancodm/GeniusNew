@@ -28,18 +28,29 @@ For the v0.1 Python worker path the child process:
   readable (see Known gaps);
 - refuses process creation, exec, shell launch, and signals aimed at other processes
   through the Python APIs that raise audit events (`os.fork`, `os.exec*`, `os.spawn*`,
-  `os.posix_spawn`, `os.system`, `subprocess.Popen`, `os.kill`); `_posixsubprocess`
-  raises none and is not covered (see Known gaps);
+  `os.posix_spawn`, `os.system`, `subprocess.Popen`, `os.kill`);
+- is killed by the kernel when it tries to start a process or program at all, whether
+  or not Python raises an audit event (`_posixsubprocess` raises none). A seccomp
+  filter, installed before the audit hook and irremovable afterwards, kills the child
+  on `fork`, `vfork`, `execve`, `execveat`, `clone` without `CLONE_THREAD`, and any
+  syscall from a foreign ABI (x32, or i386 on x86_64). `clone3` gets `ENOSYS`, because
+  its flags are in memory the filter cannot read; libc then falls back to `clone`.
+  Threads stay allowed;
 - refuses `ctypes` audit operations;
 - refuses writes opened outside the temporary directory and low-level write opens whose
   `dir_fd` cannot be proven safe;
 - refuses filesystem mutation APIs such as rename, remove, link, symlink, chmod, and
   truncate from worker code.
 
-A denied operation becomes a signed `FAILED / ISOLATION_VIOLATED` result. A wall-clock
-or process-resource termination becomes `FAILED / RESOURCE_EXHAUSTED`. Worker
+A denied operation becomes a signed `FAILED / ISOLATION_VIOLATED` result, and so does a
+child the filter killed: only seccomp sends `SIGSYS`. A wall-clock or other
+process-resource termination becomes `FAILED / RESOURCE_EXHAUSTED`. Worker
 exceptions become `FAILED / WORKER_FAILED`; their exception text never crosses the
 process boundary.
+
+The filter exists for Linux on x86_64 and aarch64 with a 64-bit interpreter. Anywhere
+else, including Windows and macOS, `IsolatedWorkerRunner` refuses to start (fail
+closed), just as it does without POSIX resource limits.
 
 ## Tests are the claim
 
@@ -52,6 +63,13 @@ process boundary.
 - a write outside the sandbox cannot create its target;
 - a write inside the sandbox is allowed and the directory is deleted before return;
 - a child cannot fork another process through the Python API;
+- a child that starts a shell through `_posixsubprocess` is killed before the shell can
+  write anything, and the result is `ISOLATION_VIOLATED`;
+- a worker can still start a thread;
+- each filter rule holds on its own: a raw `fork`, `vfork`, `execve`, `execveat`, `clone`
+  without `CLONE_THREAD`, x32 syscall and foreign-ABI syscall is killed, `clone3` gets
+  `ENOSYS`, and `getpid` passes. The test names these syscalls itself instead of
+  reading the filter's table, so an entry missing from the table is noticed;
 - the child cannot read the parent environment through `/proc` or replace its resource
   limits;
 - an overlong worker is killed by the parent deadline;
@@ -64,28 +82,27 @@ security refusal must make the CI suite fail.
 
 ## Known gaps (held open)
 
-Two gaps are measured rather than assumed. Each has a test that asserts the gap
-exists, so closing it without updating `SECURITY.md` turns the suite red:
+One gap is measured rather than assumed. Its test asserts that the gap exists, so
+closing it without updating `SECURITY.md` turns the suite red:
 
-- **Spawning below the hook.** The sandbox is a Python audit hook, and
-  `_posixsubprocess.fork_exec` raises no audit event. Worker code reaching it, for
-  example through `multiprocessing.util.spawnv_passfds`, starts a process the hook never
-  sees; that process writes outside the temporary directory and is bound only by the
-  inherited resource limits.
-  `test_a_spawn_below_the_audit_hook_escapes_and_this_is_the_boundary`.
 - **Reading the host.** Reads outside `/proc`, `/sys` and `/dev` are allowed, and a
   worker's output goes back to the client.
   `test_a_read_outside_the_temporary_directory_is_allowed_and_this_is_the_boundary`.
 
-Both need worker code to be hostile; a client chooses a payload, never the worker.
-Closing them takes an OS-enforced sandbox (seccomp, Landlock, namespaces), not another
-hook rule: a module already imported by the child raises no import event either.
+It takes worker code that is hostile: a client chooses a payload, never the worker.
+Closing it takes a kernel-enforced path allowlist (Landlock), not another hook rule: a
+module the child has already imported raises no import event either.
+
+Spawning below the hook was the second held-open gap. The seccomp filter closes it,
+and `test_a_spawn_below_the_audit_hook_is_killed_by_the_kernel` now asserts the
+refusal.
 
 ## Deliberate non-goals
 
 This is process-level isolation for the Python v0.1 worker path. It is not a microVM,
-container security boundary, seccomp profile, or proof against hostile native code,
-preloaded FFI objects, kernel exploits, or direct raw syscalls. The roadmap explicitly
+container security boundary, or proof against hostile native code, preloaded FFI objects
+or kernel exploits. The seccomp filter covers starting processes and programs only.
+Raw network and file syscalls are still checked by nothing but the audit hook. The roadmap explicitly
 keeps Firecracker/microVM isolation outside v0.1.
 
 If GeniusNew later executes arbitrary native extensions or adversarial third-party code,

@@ -1,5 +1,8 @@
+import errno
 import os
+import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -12,7 +15,17 @@ import geniusnew.isolation as isolation_module
 import geniusnew.isolation_child as isolation_child_module
 from geniusnew.isolation import IsolationLimits, IsolatedWorkerRunner
 from geniusnew.results import WorkerAuthority, accept
-from geniusnew.workers import DeterministicSummarizer, Worker, WorkerRunner
+from geniusnew.workers import (
+    DeterministicSummarizer,
+    Worker,
+    WorkerRunner,
+    _WorkerIsolationViolation,
+    _WorkerResourceExhausted,
+)
+
+# The runner refuses to start without both; elsewhere only its refusal is tested.
+_ISOLATION_SUPPORTED = (isolation_module._resource_supported()
+                        and isolation_module._process_filter_supported())
 
 
 class ReturningWorker(Worker):
@@ -88,6 +101,21 @@ class NativeSpawnWorker(Worker):
         spawnv_passfds(b"/bin/sh", [b"/bin/sh", b"-c", b'echo escaped > "$0"',
                                     os.fsencode(self.path)], ())
         return {"text": "spawned"}
+
+
+class ThreadWorker(Worker):
+    """Starts a thread: the filter must tell a thread from a new process."""
+
+    tool = "summarize"
+
+    def run(self, payload):
+        import threading
+
+        seen = []
+        thread = threading.Thread(target=seen.append, args=(payload["text"],))
+        thread.start()
+        thread.join()
+        return {"text": seen[0]}
 
 
 class OutsideReadWorker(Worker):
@@ -233,7 +261,7 @@ class IsolationLimitsTest(unittest.TestCase):
         self.assertEqual(IsolationLimits(max_file_bytes=4096).max_file_bytes, 4096)
         self.assertEqual(IsolationLimits(max_open_files=16).max_open_files, 16)
 
-    @unittest.skipUnless(isolation_module._resource_supported(), "POSIX resource limits required")
+    @unittest.skipUnless(_ISOLATION_SUPPORTED, "POSIX limits and a seccomp filter required")
     def test_runner_requires_a_limits_object(self):
         authority = WorkerAuthority(result_key=b"a-separate-result-key-of-32bytes!")
         with self.assertRaisesRegex(ContractError, "IsolationLimits"):
@@ -245,6 +273,13 @@ class IsolationLimitsTest(unittest.TestCase):
         authority = WorkerAuthority(result_key=b"a-separate-result-key-of-32bytes!")
         with patch.object(isolation_module, "_resource_supported", return_value=False):
             with self.assertRaisesRegex(ContractError, "POSIX resource limits"):
+                IsolatedWorkerRunner(DeterministicSummarizer(), authority=authority)
+
+    def test_runner_fails_closed_without_a_process_filter(self):
+        authority = WorkerAuthority(result_key=b"a-separate-result-key-of-32bytes!")
+        with patch.object(isolation_module, "_resource_supported", return_value=True), \
+                patch.object(isolation_module, "_process_filter_supported", return_value=False):
+            with self.assertRaisesRegex(ContractError, "seccomp process filter"):
                 IsolatedWorkerRunner(DeterministicSummarizer(), authority=authority)
 
     def test_local_worker_classes_are_not_accepted_for_exec_isolation(self):
@@ -366,7 +401,125 @@ class IsolationChildContractTest(unittest.TestCase):
             isolation_child_module._resolve_worker(self.good_spec(tool="other"))
 
 
-@unittest.skipUnless(isolation_module._resource_supported(), "POSIX resource limits required")
+# Written out again rather than read from `_FILTER_ARCHES`: a test that iterates
+# the table it checks cannot notice an entry missing from it. `getpid` is the
+# control that shows a probe can pass at all.
+_SYSCALLS = {
+    "x86_64": {"getpid": 39, "clone": 56, "fork": 57, "vfork": 58, "execve": 59,
+               "execveat": 322, "clone3": 435},
+    "aarch64": {"getpid": 172, "clone": 220, "execve": 221, "execveat": 281,
+                "clone3": 435},
+}
+_PROBE = r"""
+import ctypes, os, sys
+import geniusnew.isolation as isolation
+
+machine = os.uname().machine
+if sys.argv[1] == "foreign-arch":
+    isolation._FILTER_ARCHES[machine] = dict(isolation._FILTER_ARCHES[machine], arch=0)
+syscall = ctypes.CDLL(None, use_errno=True).syscall
+syscall.restype = ctypes.c_long
+syscall.argtypes = (ctypes.c_long,) * 6
+values = [int(value) for value in sys.argv[2:]]
+isolation._install_process_filter()
+result = syscall(*values, *[0] * (6 - len(values)))
+os._exit(100 + ctypes.get_errno() if result < 0 else 0)
+"""
+
+
+class ProcessFilterContractTest(unittest.TestCase):
+    def test_an_unknown_architecture_gets_no_filter(self):
+        with self.assertRaisesRegex(ContractError, "architecture"):
+            isolation_module._process_filter("sparc64")
+
+    def test_sigsys_from_the_child_is_an_isolation_violation(self):
+        if isolation_module._SIGSYS is None:
+            self.skipTest("no SIGSYS on this platform")
+        with self.assertRaises(_WorkerIsolationViolation):
+            isolation_module._decode_child_message(b"", -signal.SIGSYS)
+        # Any other signal is still a resource termination.
+        with self.assertRaises(_WorkerResourceExhausted):
+            isolation_module._decode_child_message(b"", -signal.SIGKILL)
+
+    @unittest.skipUnless(isolation_module._process_filter_supported(), "Linux seccomp filter required")
+    def test_install_refuses_when_no_new_privs_cannot_be_set(self):
+        calls = []
+
+        def prctl(option, *args):
+            calls.append(option)
+            return -1 if option == isolation_module._PR_SET_NO_NEW_PRIVS else 0
+
+        with self.assertRaisesRegex(ContractError, "no_new_privs"):
+            isolation_module._install_process_filter(prctl)
+        self.assertEqual(calls, [isolation_module._PR_SET_NO_NEW_PRIVS])
+
+    @unittest.skipUnless(isolation_module._process_filter_supported(), "Linux seccomp filter required")
+    def test_install_refuses_when_the_kernel_rejects_the_filter(self):
+        calls = []
+
+        def prctl(option, *args):
+            calls.append((option, args))
+            return -1 if option == isolation_module._PR_SET_SECCOMP else 0
+
+        with self.assertRaisesRegex(ContractError, "seccomp filter"):
+            isolation_module._install_process_filter(prctl)
+        self.assertEqual(calls[0], (isolation_module._PR_SET_NO_NEW_PRIVS, (1, 0, 0, 0)))
+        option, (mode, pointer, *rest) = calls[1]
+        self.assertEqual((option, mode, rest), (
+            isolation_module._PR_SET_SECCOMP, isolation_module._SECCOMP_MODE_FILTER, [0, 0]))
+        self.assertNotEqual(pointer, 0)
+
+
+@unittest.skipUnless(isolation_module._process_filter_supported(), "Linux seccomp filter required")
+class ProcessFilterTest(unittest.TestCase):
+    """Each rule of the filter, driven by one raw syscall in a throwaway process.
+
+    The worker tests reach the filter only through whatever Python and libc
+    happen to call. These name each syscall the filter must stop, so a rule
+    dropped from the table cannot go unnoticed.
+    """
+
+    def setUp(self):
+        self.syscalls = _SYSCALLS[os.uname().machine]
+
+    def probe(self, mode, number, *args):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(isolation_module.__file__)))
+        completed = subprocess.run(
+            [sys.executable, "-c", _PROBE, mode, str(number), *map(str, args)],
+            cwd=root, capture_output=True, timeout=10,
+        )
+        return completed.returncode
+
+    def test_an_ordinary_syscall_passes(self):
+        self.assertEqual(self.probe("native", self.syscalls["getpid"]), 0)
+
+    def test_every_process_or_program_start_syscall_is_killed(self):
+        for name in ("fork", "vfork", "execve", "execveat"):
+            if name not in self.syscalls:
+                continue  # aarch64 has no fork or vfork syscall
+            with self.subTest(syscall=name):
+                self.assertEqual(self.probe("native", self.syscalls[name]), -signal.SIGSYS)
+
+    def test_clone_without_clone_thread_is_killed(self):
+        self.assertEqual(
+            self.probe("native", self.syscalls["clone"], signal.SIGCHLD), -signal.SIGSYS)
+
+    def test_clone3_is_refused_with_enosys_so_libc_falls_back_to_clone(self):
+        self.assertEqual(self.probe("native", self.syscalls["clone3"]), 100 + errno.ENOSYS)
+
+    def test_a_foreign_syscall_abi_is_killed(self):
+        # Pretend the native ABI is foreign: then even getpid must die.
+        self.assertEqual(
+            self.probe("foreign-arch", self.syscalls["getpid"]), -signal.SIGSYS)
+
+    @unittest.skipUnless(sys.platform.startswith("linux") and os.uname().machine == "x86_64",
+                         "x32 exists only on x86_64")
+    def test_x32_syscall_numbers_are_killed(self):
+        number = 0x40000000 | self.syscalls["getpid"]
+        self.assertEqual(self.probe("native", number), -signal.SIGSYS)
+
+
+@unittest.skipUnless(_ISOLATION_SUPPORTED, "POSIX limits and a seccomp filter required")
 class ProcessIsolationTest(unittest.TestCase):
     def setUp(self):
         self.signer = HandoffSigner(integrity_key=b"phase-2-test-integrity-key-32bytes")
@@ -550,29 +703,28 @@ class ProcessIsolationTest(unittest.TestCase):
         self.assertFalse(taken.succeeded)
         self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
 
-    def test_a_spawn_below_the_audit_hook_escapes_and_this_is_the_boundary(self):
-        """Held open (SECURITY.md): the sandbox is an audit hook, and
-        `_posixsubprocess` raises no audit event. A worker can start a process
-        the hook never sees, and that process writes where the worker may not.
-        Only worker code can do this, not a client. Closing it takes an OS
-        sandbox; whoever does must invert this test and update SECURITY.md.
+    def test_a_spawn_below_the_audit_hook_is_killed_by_the_kernel(self):
+        """`_posixsubprocess` raises no audit event, so the hook never sees this
+        spawn. The seccomp filter does: the kernel kills the child at the
+        syscall, before a shell exists that could write anything, and the
+        kill cannot be caught by the worker.
         """
         with tempfile.TemporaryDirectory() as outside:
             target = os.path.join(outside, "escape.txt")
             taken = self.taken(
                 self.runner(NativeSpawnWorker(target)).execute(self.permit_for(self.handoff), now=110)
             )
-            # The shell is not waited for by anyone, so give it a moment.
-            deadline = time.monotonic() + 5
-            written = None
-            while written != "escaped\n" and time.monotonic() < deadline:
-                if os.path.exists(target):
-                    with open(target, encoding="utf-8") as handle:
-                        written = handle.read()
-                if written != "escaped\n":
-                    time.sleep(0.01)
+            self.assertFalse(os.path.exists(target))
+        self.assertFalse(taken.succeeded)
+        self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
+        self.assertIsNone(taken.output)
+
+    def test_a_worker_may_still_start_a_thread(self):
+        taken = self.taken(
+            self.runner(ThreadWorker()).execute(self.permit_for(self.handoff), now=110)
+        )
         self.assertTrue(taken.succeeded)
-        self.assertEqual(written, "escaped\n")
+        self.assertEqual(taken.output, {"text": "the quick brown fox"})
 
     def test_a_read_outside_the_temporary_directory_is_allowed_and_this_is_the_boundary(self):
         """Held open (SECURITY.md): only `/proc`, `/sys` and `/dev` are refused
