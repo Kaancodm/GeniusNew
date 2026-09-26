@@ -22,8 +22,10 @@ import urllib.request
 from geniusnew import wiring
 
 from geniusnew.anchor_process import AnchorProcess
+from geniusnew.approvals import ApprovalStore
 from geniusnew.audit_chain import AuditAnchor, sign_head, verify
 from geniusnew.contracts import ContractError, Grant, Policy
+from geniusnew.gateway import Gateway
 from geniusnew.http_entry import serve
 from geniusnew.isolation import IsolatedWorkerRunner
 from geniusnew.results import WorkerAuthority, accept
@@ -73,6 +75,19 @@ class MalformedResultRunner(WorkerRunner):
         # then return bytes the independent verifier must refuse.
         super().execute(permit, now=now)
         return b'{}'
+
+
+class ObservingRunner(WorkerRunner):
+    """Test seam: reads the audit chain at the moment the work starts."""
+
+    service = None
+    seen = None
+
+    def execute(self, permit, *, now):
+        self.seen = [(record.event.actor.component, record.event.actor.instance_id,
+                      record.event.action, record.event.occurred_at)
+                     for record in self.service.chain.records]
+        return super().execute(permit, now=now)
 
 
 class Fixture:
@@ -364,6 +379,97 @@ class EndToEndTest(Fixture, unittest.TestCase):
         self.assertEqual([record.event.actor.component for record in records],
                          ['orchestrator', 'gateway', 'orchestrator', 'monitor'])
         self.assertEqual(records[-1].event.reason_code, 'RESULT_NOT_VALID')
+
+    # --- the gateway's admission is on the chain when it happens -------------
+    # Review finding LOW-1 (26.09.2026): it used to be appended after the worker
+    # returned, inferred by the composition root rather than read off the permit.
+
+    def test_the_admission_is_on_the_chain_before_the_worker_runs(self):
+        """A process that dies mid-execution still leaves the admission behind."""
+        keys = self.service.keys
+        runners = []
+
+        def factory(worker):
+            runners.append(ObservingRunner(worker, authority=WorkerAuthority(
+                result_key=keys.result_key, integrity_key=keys.integrity_key)))
+            return runners[-1]
+
+        service = build(
+            root_secret=ROOT_SECRET, policy=self.policy_for(),
+            api_keys={API_KEY: 'subject-demo'},
+            workers=(DeterministicSummarizer(),), clock=lambda: self.clock[0],
+            runner_factory=factory)
+        self.addCleanup(service.close)
+        [runner] = runners
+        runner.service = service
+        self.assertEqual(self.post(url=self.url_for(service))[1]['status'], 'SUCCEEDED')
+        self.assertEqual(runner.seen, [
+            ('orchestrator', 'orchestrator-1', 'HANDOFF_ISSUED', self.clock[0]),
+            ('gateway', 'gateway-1', 'HANDOFF_ADMITTED', self.clock[0])])
+        self.assertEqual(len(service.chain.records), 4)
+        # Read off the permit, and still the same job's trace.
+        self.assertEqual(len({record.event.trace_id for record in service.chain.records}), 1)
+
+    def test_a_lost_race_for_the_job_id_records_the_admission_before_the_denial(self):
+        """The gateway admitted; the orchestrator's reservation then refused.
+
+        Job ids are minted at random, so the race needs two callers presenting
+        the same id and both passing the early availability check before
+        either reserves. A fixed id and a skipped early check are that
+        interleaving, deterministically.
+        """
+        service = build(
+            root_secret=ROOT_SECRET, policy=self.policy_for(),
+            api_keys={API_KEY: 'subject-demo'},
+            workers=(DeterministicSummarizer(),), clock=lambda: self.clock[0],
+            job_ids=lambda: 'job-contested')
+        self.addCleanup(service.close)
+        url = self.url_for(service)
+        self.assertEqual(self.post(url=url)[0], 202)
+        with unittest.mock.patch.object(service.orchestrator, '_available'):
+            self.assertEqual(self.post(url=url), (409, {'error': 'REJECTED'}))
+        records = service.chain.records
+        self.assertEqual(
+            [(record.event.actor.component, record.event.action, record.event.reason_code)
+             for record in records[4:]],
+            [('orchestrator', 'HANDOFF_ISSUED', 'POLICY_SATISFIED'),
+             ('gateway', 'HANDOFF_ADMITTED', 'POLICY_SATISFIED'),
+             ('orchestrator', 'HANDOFF_REJECTED', 'JOB_ID_REUSED')])
+        self.assertEqual(verify(records, service.head(), authority=service.audit,
+                                anchor=service.anchor), 7)
+
+    def test_admission_evidence_comes_only_from_this_gateway_s_permit(self):
+        """The orchestrator hands the recorder a permit, and cannot say more."""
+        import types
+        record = self.service.orchestrator._on_admitted
+        wire = self.service.orchestrator.admit(
+            {'text': REQUEST}, subject='subject-demo', job_id='job-foreign',
+            policy=self.service.policy, now=self.clock[0]).wire
+        foreign = Gateway(gateway_id='gateway-other',
+                          handoff_verifier=self.service.handoff_verifier,
+                          approval_store=ApprovalStore()).admit(
+            wire, subject='subject-demo', job_id='job-foreign',
+            policy=self.service.policy, now=self.clock[0])
+        claimed = types.SimpleNamespace(**{
+            field: getattr(foreign, field) for field in (
+                'handoff', 'handoff_sha256', 'admitted_at', 'approval_record_hash')},
+            gateway_id='gateway-1')
+        with self.assertRaisesRegex(ContractError, 'gateway-minted DispatchPermit'):
+            record(claimed)
+        with self.assertRaisesRegex(ContractError, 'did not wire'):
+            record(foreign)
+        self.assertEqual(self.service.chain.records, ())
+
+    def url_for(self, service):
+        server = serve(service.entry)
+        thread = threading.Thread(target=server.serve_forever,
+                                  kwargs={'poll_interval': 0.01}, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        host, port = server.server_address
+        return f'http://{host}:{port}/jobs'
 
     def test_the_wiring_refuses_a_worker_no_grant_names(self):
         with self.assertRaisesRegex(ContractError, 'no grant in this policy'):
