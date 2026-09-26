@@ -68,6 +68,7 @@ Matrix pro Modul aus. Der zusammenfassende Check heißt `contracts`.
 | Thema | Datei |
 | --- | --- |
 | Projektstand und nächste Schritte | `docs/STATUS.md` |
+| Übergabe-Prompts zwischen Werkzeugen | `docs/HANDOVER.md` |
 | Roadmap v0.1 mit Status je Schritt | `docs/ROADMAP-V01.md` |
 | Bekannte Grenzen | `SECURITY.md` |
 | Verfassung (Rollen, §7 Audit, §8 Trennung) | `docs/CONSTITUTION-V1-DRAFT.md` |
