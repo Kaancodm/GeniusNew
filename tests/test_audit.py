@@ -2,8 +2,9 @@ import unittest
 from dataclasses import replace
 
 from geniusnew.audit import (CONSTITUTION_VERSION, AuditAuthority, AuditEvent,
-                             ComponentActor, event_from_handoff)
-from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, issue, validate
+                             ComponentActor, event_from_handoff, rehydrate_event)
+from geniusnew.contracts import (ContractError, Grant, HandoffSigner, Policy, issue, validate,
+                                 validate_pending)
 
 # A canary, deliberately shaped so no scanner mistakes it for a credential:
 # readable, zero entropy, and self-describing. Its only job is to be
@@ -109,6 +110,7 @@ class AuditEventTest(EventFixture, unittest.TestCase):
             handoff_sha256='0' * 64,
             payload_sha256='1' * 64,
             occurred_at=2 ** 31,
+            approval_record_hash='2' * 64,
         )
         self.assertLess(len(largest.to_bytes()), 2048)
 
@@ -209,6 +211,75 @@ class AuditEventTest(EventFixture, unittest.TestCase):
         self.handoff = other
         self.assertNotEqual(changed.payload_sha256, self.event().payload_sha256)
         self.assertNotEqual(changed.handoff_sha256, self.event().handoff_sha256)
+
+
+class ApprovalRecordTest(EventFixture, unittest.TestCase):
+    """Which approval a decision rests on, and only where there was one."""
+
+    RECORD = 'ab' * 32
+
+    def setUp(self):
+        super().setUp()
+        grant = Grant('subject-demo', 'user-demo', 'worker-demo', 'basic',
+                      ('summarize',), 'isolated', True)
+        policy = Policy('policy-v1', 'orchestrator-demo', 60,
+                        ('summarize',), ('isolated',), (grant,))
+        wire = issue({'text': 'ordinary'}, subject='subject-demo', job_id='job-approved',
+                     policy=policy, signer=self.key, now=100)
+        self.pending = validate_pending(wire, subject='subject-demo', job_id='job-approved',
+                                        policy=policy, verifier=self.key, now=101)
+
+    def approved(self, approval_record_hash=RECORD):
+        return event_from_handoff(
+            self.pending, trace_id='trace-demo', actor=self.actor,
+            action='HANDOFF_ADMITTED', decision='ALLOWED',
+            reason_code='POLICY_SATISFIED', occurred_at=101,
+            approval_record_hash=approval_record_hash)
+
+    def test_an_approval_bound_decision_names_its_approval_record(self):
+        event = self.approved()
+        self.assertEqual(event.to_dict()['approval_record_hash'], self.RECORD)
+        self.assertIn(f'"approval_record_hash":"{self.RECORD}"'.encode(), event.to_bytes())
+
+    def test_a_decision_without_an_approval_records_null_not_nothing(self):
+        """One shape for every event: the key is there, and it says none."""
+        event = self.event()
+        self.assertIsNone(event.to_dict()['approval_record_hash'])
+        self.assertIn(b'"approval_record_hash":null', event.to_bytes())
+
+    def test_the_event_hash_binds_the_approval_record(self):
+        self.assertNotEqual(self.approved().event_sha256(),
+                            self.approved(approval_record_hash=None).event_sha256())
+        self.assertNotEqual(self.approved().event_sha256(),
+                            self.approved(approval_record_hash='cd' * 32).event_sha256())
+
+    def test_an_approval_record_must_be_a_digest(self):
+        for bad in (PAYLOAD_CANARY, 'g' * 64, 'A' * 64, 'abc', '', 42, b'ab' * 32, []):
+            with self.subTest(bad=bad), self.assertRaises(ContractError):
+                self.approved(approval_record_hash=bad)
+            with self.subTest(bad=bad, via='replace'), self.assertRaises(ContractError):
+                replace(self.approved(), approval_record_hash=bad)
+
+    def test_an_approval_cannot_be_attached_to_a_job_that_needed_none(self):
+        with self.assertRaisesRegex(ContractError, 'needs no approval'):
+            self.event(approval_record_hash=self.RECORD)
+
+    def test_an_event_read_back_keeps_its_approval_record(self):
+        for event in (self.approved(), self.approved(approval_record_hash=None), self.event()):
+            with self.subTest(record=event.approval_record_hash):
+                rebuilt = rehydrate_event(event.to_dict())
+                self.assertEqual(rebuilt, event)
+                self.assertEqual(rebuilt.to_bytes(), event.to_bytes())
+
+    def test_an_event_read_back_without_the_field_or_with_a_bad_one_is_refused(self):
+        """The pre-field shape is not silently read as \"no approval\"."""
+        stored = self.approved().to_dict()
+        del stored['approval_record_hash']
+        with self.assertRaisesRegex(ContractError, 'malformed event'):
+            rehydrate_event(stored)
+        for bad in ('A' * 64, 'abc', 42):
+            with self.subTest(bad=bad), self.assertRaises(ContractError):
+                rehydrate_event({**self.approved().to_dict(), 'approval_record_hash': bad})
 
 
 class UncoveredRefusalsTest(EventFixture, unittest.TestCase):
