@@ -1,70 +1,74 @@
-# Process Isolation v0.1
+# Prozessisolation v0.1
 
-This document states exactly what GeniusNew's step-11 worker boundary enforces.
+Dieses Dokument beschreibt genau, was die Worker-Grenze aus Schritt 11 erzwingt.
 
-## Trust split
+## Vertrauensgrenze
 
-`IsolatedWorkerRunner` keeps the `WorkerAuthority` and result signing key in the
-parent process. The worker is launched through **exec into a fresh Python interpreter**;
-there is no forked copy of the parent's address space. Only an importable worker class
-identifier, canonical-JSON instance state, limits and a copy of the payload cross that
-boundary. The child returns an untrusted, bounded canonical-JSON message; the parent
-applies the normal result contract before signing anything.
+**IsolatedWorkerRunner** behält **WorkerAuthority** und den privaten
+Ergebnis-Signierschlüssel im Elternprozess. Der Worker startet per **exec in einem
+frischen Python-Interpreter**; er erbt keine Kopie des Adressraums. Nur die Kennung
+einer importierbaren Worker-Klasse, kanonischer JSON-Instanzzustand, Limits und eine
+Kopie der Nutzlast überschreiten diese Grenze. Die Antwort des Kindes ist eine nicht
+vertrauenswürdige, größenbegrenzte kanonische JSON-Nachricht. Erst der Elternprozess
+prüft den normalen Ergebnisvertrag und signiert.
 
-## Enforced boundary
+## Erzwungene Grenze
 
-For the v0.1 Python worker path the child process:
+Für den Python-Worker-Pfad v0.1 gilt:
 
-- starts in a fresh interpreter with inherited file descriptors closed, stdin isolated,
-  and stdout/stderr detached from worker-controlled protocol output;
-- starts in a fresh per-job temporary directory;
-- has a wall-clock deadline enforced by the parent;
-- receives POSIX limits for CPU time, address space, file size, open file descriptors,
-  and core dumps;
-- has its environment replaced with values rooted in the temporary directory;
-- refuses Python socket operations;
-- refuses worker reads through `/proc`, `/sys`, and `/dev`, including the parent
-  process environment/FD view;
-- refuses process creation, exec, shell launch, and signals aimed at other processes;
-- refuses `ctypes` audit operations;
-- refuses writes opened outside the temporary directory and low-level write opens whose
-  `dir_fd` cannot be proven safe;
-- refuses filesystem mutation APIs such as rename, remove, link, symlink, chmod, and
-  truncate from worker code.
+- Frischer Interpreter; geerbte Dateideskriptoren sind geschlossen, stdin ist
+  isoliert und stdout/stderr sind vom Worker-Protokoll getrennt.
+- Jeder Job erhält ein frisches temporäres Verzeichnis.
+- Der Elternprozess erzwingt die maximale Laufzeit.
+- POSIX-Limits begrenzen CPU-Zeit, Adressraum, Größe einer einzelnen Datei, offene
+  Deskriptoren und Core-Dumps.
+- Höchstens acht unterschiedliche Dateien dürfen standardmäßig angelegt werden. Mit
+  dem Einzellimit von 1 MiB ergibt das zusätzlich eine logische Job-Obergrenze von
+  8 MiB; beide Werte sind eng begrenzt konfigurierbar.
+- Die Umgebung wird durch Werte ersetzt, die auf das Job-Verzeichnis zeigen.
+- Python-Socketzugriffe, neue Prozesse, exec, Shell-Starts, fremde Signale und
+  **ctypes**-Auditereignisse werden verweigert.
+- Lesen ist nur im Job-Verzeichnis sowie für Python-Laufzeitcode (.py, .pyc und
+  native Importmodule) unter den beim Start festgelegten Importwurzeln erlaubt.
+  Andere Hostdateien, Dateideskriptor-Aliase und Datenressourcen werden verweigert.
+- Schreibzugriffe außerhalb des Job-Verzeichnisses sowie Low-Level-Write-Opens, deren
+  **dir_fd** nicht sicher geprüft werden kann, werden verweigert.
+- Dateisystemmutationen wie rename, remove, link, symlink, chmod und truncate werden
+  verweigert.
 
-A denied operation becomes a signed `FAILED / ISOLATION_VIOLATED` result. A wall-clock
-or process-resource termination becomes `FAILED / RESOURCE_EXHAUSTED`. Worker
-exceptions become `FAILED / WORKER_FAILED`; their exception text never crosses the
-process boundary.
+Eine verbotene Operation wird zu einem signierten
+**FAILED / ISOLATION_VIOLATED**-Ergebnis. Laufzeit- oder Ressourcenabbrüche werden zu
+**FAILED / RESOURCE_EXHAUSTED**. Worker-Ausnahmen werden zu
+**FAILED / WORKER_FAILED**; ihr Text verlässt den Kindprozess nicht.
 
-## Tests are the claim
+## Tests sind der Nachweis
 
-`tests/test_isolation.py` verifies that:
+**tests/test_isolation.py** prüft unter anderem:
 
-- the deterministic reference worker returns the same signed result in and out of the
-  process boundary;
-- no `WorkerAuthority` instance exists in the fresh worker interpreter;
-- socket creation is denied;
-- a write outside the sandbox cannot create its target;
-- a write inside the sandbox is allowed and the directory is deleted before return;
-- a child cannot fork another process through the Python API;
-- the child cannot read the parent environment through `/proc` or replace its resource
-  limits;
-- an overlong worker is killed by the parent deadline;
-- configured POSIX resource limits are visible inside the child;
-- exception text does not leak;
-- malformed output still passes through the parent-side result contract.
+- Der deterministische Referenz-Worker liefert innerhalb und außerhalb der
+  Prozessgrenze dasselbe signierte Ergebnis.
+- Im Kindprozess existiert keine **WorkerAuthority**.
+- Netzwerkzugriff, Prozessstart, **ctypes**, Ressourcenerhöhung und Schreiben außerhalb
+  der Sandbox werden verweigert.
+- Eine Hostdatei außerhalb der Sandbox kann nicht gelesen oder über das signierte
+  Ergebnis herausgegeben werden; ein normaler Python-Import bleibt funktionsfähig.
+- Schreiben innerhalb der Sandbox funktioniert, das Verzeichnis wird anschließend
+  entfernt und die Zahl unterschiedlicher Dateien ist begrenzt.
+- Überlange Worker werden beendet; Ausnahmeinformationen lecken nicht und fehlerhafte
+  Ausgaben durchlaufen weiterhin den Ergebnisvertrag des Elternprozesses.
 
-`geniusnew/isolation.py` is also included in `scripts/refusals.py`, so deleting any
-security refusal must make the CI suite fail.
+**geniusnew/isolation.py** und **geniusnew/isolation_child.py** sind außerdem durch
+**scripts/refusals.py** geschützt. Das Entfernen einer erkannten
+Sicherheitsablehnung muss die CI fehlschlagen lassen.
 
-## Deliberate non-goals
+## Bewusste Nicht-Ziele
 
-This is process-level isolation for the Python v0.1 worker path. It is not a microVM,
-container security boundary, seccomp profile, or proof against hostile native code,
-preloaded FFI objects, kernel exploits, or direct raw syscalls. The roadmap explicitly
-keeps Firecracker/microVM isolation outside v0.1.
+Dies ist Prozessisolation für den Python-Pfad v0.1, keine microVM, kein
+Container-Sicherheitsnachweis, kein seccomp-Profil und kein Schutzbeweis gegen
+bösartigen nativen Code, vorgeladene FFI-Objekte, Kernel-Exploits oder direkte
+Syscalls. Die Roadmap hält Firecracker/microVM-Isolation ausdrücklich außerhalb von
+v0.1.
 
-If GeniusNew later executes arbitrary native extensions or adversarial third-party code,
-this boundary must be replaced or wrapped by an OS-enforced sandbox rather than described
-as stronger than it is.
+Vor der Ausführung beliebiger nativer Erweiterungen oder fremden Drittanbieter-Codes
+muss diese Grenze durch eine vom Betriebssystem erzwungene Sandbox ersetzt oder
+umschlossen werden.

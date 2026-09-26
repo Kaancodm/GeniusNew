@@ -65,6 +65,7 @@ from .workers import Worker, WorkerRunner
 
 _TRACE_PREFIX = "trace-"
 _MAX_PENDING = 1000
+_MAX_PENDING_PER_SUBJECT = 20
 _APPROVAL_TTL_SECONDS = 60
 
 
@@ -99,6 +100,10 @@ class PendingJobs:
                 del self._jobs[stale]
             if job_id in self._jobs:
                 _fail("a job with this id is already waiting for approval")
+            subject_pending = sum(
+                value.subject == waiting.subject for value in self._jobs.values())
+            if subject_pending >= _MAX_PENDING_PER_SUBJECT:
+                _fail("too many jobs are waiting for approval for this subject")
             if len(self._jobs) >= _MAX_PENDING:
                 _fail("too many jobs are waiting for approval")
             self._jobs[job_id] = waiting

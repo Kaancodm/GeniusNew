@@ -532,9 +532,9 @@ class ApprovalOverHttpTest(Fixture, unittest.TestCase):
 
 
 class PendingJobsTest(unittest.TestCase):
-    def waiting(self, expires_at=100):
+    def waiting(self, expires_at=100, subject='subject-demo'):
         handoff = type('Handoff', (), {'expires_at': expires_at})()
-        return wiring._Waiting('subject-demo', b'wire', handoff, 'trace-x')
+        return wiring._Waiting(subject, b'wire', handoff, 'trace-x')
 
     def test_a_job_id_waits_once(self):
         jobs = wiring.PendingJobs()
@@ -552,6 +552,15 @@ class PendingJobsTest(unittest.TestCase):
             jobs.add('job-3', self.waiting(), now=20)
         with self.assertRaisesRegex(ContractError, 'no job is waiting'):
             jobs.peek('job-1')
+
+    def test_one_subject_cannot_consume_another_subjects_capacity(self):
+        jobs = wiring.PendingJobs()
+        with unittest.mock.patch.object(wiring, '_MAX_PENDING_PER_SUBJECT', 1):
+            jobs.add('job-a-1', self.waiting(subject='subject-a'), now=10)
+            with self.assertRaisesRegex(ContractError, 'for this subject'):
+                jobs.add('job-a-2', self.waiting(subject='subject-a'), now=10)
+            jobs.add('job-b-1', self.waiting(subject='subject-b'), now=10)
+        self.assertEqual(jobs.peek('job-b-1').subject, 'subject-b')
 
 
 if __name__ == '__main__':

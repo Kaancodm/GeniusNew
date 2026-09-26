@@ -66,7 +66,7 @@ _FORBIDDEN_PROCESS_EVENTS = frozenset({
     "resource.setrlimit",
     "resource.prlimit",
 })
-_FORBIDDEN_READ_ROOTS = ("/proc", "/sys", "/dev")
+_RUNTIME_READ_SUFFIXES = frozenset({".py", ".pyc", ".so", ".pyd", ".dll", ".dylib"})
 
 
 def _fail(message: str) -> None:
@@ -82,6 +82,7 @@ class IsolationLimits:
     memory_bytes: int = 512 * 1024 * 1024
     max_file_bytes: int = 1024 * 1024
     max_open_files: int = 64
+    max_created_files: int = 8
 
     def __post_init__(self) -> None:
         if (type(self.wall_seconds) not in (int, float)
@@ -98,6 +99,8 @@ class IsolationLimits:
             _fail("max_file_bytes must be between 4 KiB and 16 MiB")
         if type(self.max_open_files) is not int or not 16 <= self.max_open_files <= 256:
             _fail("max_open_files must be between 16 and 256")
+        if type(self.max_created_files) is not int or not 1 <= self.max_created_files <= 32:
+            _fail("max_created_files must be between 1 and 32")
 
 
 class _SandboxDenied(BaseException):
@@ -116,14 +119,20 @@ def _resource_supported() -> bool:
     return True
 
 
-def _path_is_inside(root: str, value: Any) -> bool:
+def _resolved_path(value: Any) -> str | None:
     if isinstance(value, int):
-        return True
+        return None
     try:
         path = os.fsdecode(os.fspath(value))
     except TypeError:
+        return None
+    return os.path.realpath(os.path.abspath(path))
+
+
+def _path_is_inside(root: str, value: Any) -> bool:
+    target = _resolved_path(value)
+    if target is None:
         return False
-    target = os.path.realpath(os.path.abspath(path))
     try:
         return os.path.commonpath((root, target)) == root
     except ValueError:
@@ -136,20 +145,30 @@ def _open_is_write(mode: Any, flags: Any) -> bool:
     return isinstance(flags, int) and bool(flags & _WRITE_FLAGS)
 
 
-def _sensitive_read(value: Any) -> bool:
-    if isinstance(value, int):
+def _runtime_read_roots() -> tuple[str, ...]:
+    roots: list[str] = []
+    for value in sys.path:
+        if not isinstance(value, str):
+            continue
+        root = os.path.realpath(os.path.abspath(value or os.getcwd()))
+        if root not in roots:
+            roots.append(root)
+    return tuple(roots)
+
+
+def _read_is_allowed(root: str, runtime_roots: tuple[str, ...], value: Any) -> bool:
+    target = _resolved_path(value)
+    if target is None:
         return False
-    try:
-        target = os.path.realpath(os.path.abspath(os.fsdecode(os.fspath(value))))
-    except TypeError:
+    if _path_is_inside(root, target):
         return True
-    return any(
-        target == root or target.startswith(root + os.sep)
-        for root in _FORBIDDEN_READ_ROOTS
-    )
+    if os.path.splitext(target)[1].lower() not in _RUNTIME_READ_SUFFIXES:
+        return False
+    return any(_path_is_inside(runtime_root, target) for runtime_root in runtime_roots)
 
 
-def _audit_hook(root: str, state: dict[str, bool]):
+def _audit_hook(root: str, runtime_roots: tuple[str, ...],
+                max_created_files: int, state: dict[str, Any]):
     """Return the child-side audit hook."""
 
     def deny() -> None:
@@ -172,12 +191,17 @@ def _audit_hook(root: str, state: dict[str, bool]):
                 # Low-level os.open write calls are refused entirely because
                 # the audit event does not expose dir_fd. Normal builtins.open
                 # writes are accepted only under the empty per-job sandbox.
-                if args[1] is None or not _path_is_inside(root, args[0]):
+                target = _resolved_path(args[0])
+                if args[1] is None or target is None or not _path_is_inside(root, target):
                     deny()
-            elif _sensitive_read(args[0]):
-                # The child gets a minimal environment and no inherited parent
-                # descriptors. Blocking proc/sys/dev reads closes the obvious
-                # path back into the parent's environment, memory and FDs.
+                written_paths = state["written_paths"]
+                if target not in written_paths:
+                    if len(written_paths) >= max_created_files:
+                        deny()
+                    written_paths.add(target)
+            elif not _read_is_allowed(root, runtime_roots, args[0]):
+                # A worker may read only its job directory and immutable Python
+                # runtime code needed for imports. Host data is not an input.
                 deny()
 
     return hook

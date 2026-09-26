@@ -77,6 +77,37 @@ class ParentProcReadWorker(Worker):
         return {"text": str(len(data))}
 
 
+class OutsideReadWorker(Worker):
+    tool = "summarize"
+
+    def __init__(self, path):
+        self.path = path
+
+    def run(self, payload):
+        from pathlib import Path
+
+        return {"text": Path(self.path).read_text(encoding="utf-8")}
+
+
+class RuntimeImportWorker(Worker):
+    tool = "summarize"
+
+    def run(self, payload):
+        from fractions import Fraction
+
+        return {"text": str(Fraction(2, 4))}
+
+
+class ManyFilesWorker(Worker):
+    tool = "summarize"
+
+    def run(self, payload):
+        for index in range(3):
+            with open(f"file-{index}.txt", "w", encoding="utf-8") as handle:
+                handle.write(payload["text"])
+        return {"text": "created too many files"}
+
+
 class CtypesWorker(Worker):
     tool = "summarize"
 
@@ -184,6 +215,9 @@ class IsolationLimitsTest(unittest.TestCase):
             {"max_file_bytes": 32 * 1024 * 1024},
             {"max_open_files": 8},
             {"max_open_files": 512},
+            {"max_created_files": 0},
+            {"max_created_files": 33},
+            {"max_created_files": True},
         ]
         for over in cases:
             with self.subTest(over=over), self.assertRaises(ContractError):
@@ -199,6 +233,7 @@ class IsolationLimitsTest(unittest.TestCase):
         )
         self.assertEqual(IsolationLimits(max_file_bytes=4096).max_file_bytes, 4096)
         self.assertEqual(IsolationLimits(max_open_files=16).max_open_files, 16)
+        self.assertEqual(IsolationLimits(max_created_files=1).max_created_files, 1)
 
     @unittest.skipUnless(isolation_module._resource_supported(), "POSIX resource limits required")
     def test_runner_requires_a_limits_object(self):
@@ -237,6 +272,35 @@ class IsolationLimitsTest(unittest.TestCase):
                 worker, {"text": "payload"}, IsolationLimits()
             )
 
+    def test_read_policy_allows_only_sandbox_and_runtime_code(self):
+        with tempfile.TemporaryDirectory() as sandbox, tempfile.TemporaryDirectory() as runtime:
+            inside = os.path.join(sandbox, "input.txt")
+            runtime_code = os.path.join(runtime, "worker.py")
+            runtime_data = os.path.join(runtime, "secret.txt")
+            outside_code = os.path.join(os.path.dirname(runtime), "secret.py")
+            self.assertTrue(isolation_module._read_is_allowed(
+                os.path.realpath(sandbox), (os.path.realpath(runtime),), inside))
+            self.assertTrue(isolation_module._read_is_allowed(
+                os.path.realpath(sandbox), (os.path.realpath(runtime),), runtime_code))
+            self.assertFalse(isolation_module._read_is_allowed(
+                os.path.realpath(sandbox), (os.path.realpath(runtime),), runtime_data))
+            self.assertFalse(isolation_module._read_is_allowed(
+                os.path.realpath(sandbox), (os.path.realpath(runtime),), outside_code))
+            self.assertFalse(isolation_module._read_is_allowed(
+                os.path.realpath(sandbox), (os.path.realpath(runtime),), 3))
+
+    def test_audit_hook_bounds_unique_created_files(self):
+        with tempfile.TemporaryDirectory() as sandbox:
+            root = os.path.realpath(sandbox)
+            state = {"violated": False, "written_paths": set()}
+            hook = isolation_module._audit_hook(root, (), 2, state)
+            hook("open", (os.path.join(root, "one.txt"), "w", os.O_WRONLY))
+            hook("open", (os.path.join(root, "two.txt"), "w", os.O_WRONLY))
+            hook("open", (os.path.join(root, "one.txt"), "a", os.O_WRONLY))
+            with self.assertRaises(isolation_module._SandboxDenied):
+                hook("open", (os.path.join(root, "three.txt"), "w", os.O_WRONLY))
+            self.assertTrue(state["violated"])
+
 
 class IsolationChildContractTest(unittest.TestCase):
     def request_value(self, **over):
@@ -255,6 +319,7 @@ class IsolationChildContractTest(unittest.TestCase):
                 "memory_bytes": 512 * 1024 * 1024,
                 "max_file_bytes": 1024 * 1024,
                 "max_open_files": 64,
+                "max_created_files": 8,
             },
         }
         value.update(over)
@@ -512,6 +577,15 @@ class ProcessIsolationTest(unittest.TestCase):
             "the per-job temporary directory must be removed before execute returns",
         )
 
+    def test_aggregate_file_count_is_bounded(self):
+        limits = IsolationLimits(max_created_files=2)
+        taken = self.taken(
+            self.runner(ManyFilesWorker(), limits).execute(
+                self.permit_for(self.handoff), now=110)
+        )
+        self.assertFalse(taken.succeeded)
+        self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
+
     def test_process_spawn_is_denied(self):
         taken = self.taken(self.runner(SpawnWorker()).execute(self.permit_for(self.handoff), now=110))
         self.assertFalse(taken.succeeded)
@@ -523,6 +597,25 @@ class ProcessIsolationTest(unittest.TestCase):
         )
         self.assertFalse(taken.succeeded)
         self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
+
+    def test_worker_cannot_read_a_host_file_outside_the_sandbox(self):
+        with tempfile.TemporaryDirectory() as outside:
+            target = os.path.join(outside, "canary.py")
+            with open(target, "w", encoding="utf-8") as handle:
+                handle.write("HOST-CANARY-MUST-NOT-LEAVE")
+            wire = self.runner(OutsideReadWorker(target)).execute(
+                self.permit_for(self.handoff), now=110)
+        self.assertNotIn(b"HOST-CANARY-MUST-NOT-LEAVE", wire)
+        taken = self.taken(wire)
+        self.assertFalse(taken.succeeded)
+        self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
+
+    def test_runtime_python_imports_remain_available(self):
+        taken = self.taken(
+            self.runner(RuntimeImportWorker()).execute(self.permit_for(self.handoff), now=110)
+        )
+        self.assertTrue(taken.succeeded)
+        self.assertEqual(taken.output, {"text": "1/2"})
 
     def test_ctypes_native_loader_is_denied(self):
         taken = self.taken(self.runner(CtypesWorker()).execute(self.permit_for(self.handoff), now=110))
@@ -559,6 +652,7 @@ class ProcessIsolationTest(unittest.TestCase):
             memory_bytes=256 * 1024 * 1024,
             max_file_bytes=8192,
             max_open_files=32,
+            max_created_files=4,
         )
         taken = self.taken(
             self.runner(LimitsWorker(), limits).execute(self.permit_for(self.handoff), now=110)

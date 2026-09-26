@@ -15,6 +15,7 @@ from .isolation import (
     _MAX_CHILD_REQUEST_BYTES,
     _SandboxDenied,
     _audit_hook,
+    _runtime_read_roots,
     _set_resource_limits,
     _write_message,
 )
@@ -75,13 +76,15 @@ def child_entry(root: str) -> int:
         request = _decode_request(request_data)
         limits = IsolationLimits(**request["limits"])
         _set_resource_limits(limits)
+        runtime_roots = _runtime_read_roots()
         root = os.path.realpath(root)
         os.chdir(root)
         os.environ.clear()
         os.environ.update({"HOME": root, "TMPDIR": root, "TEMP": root, "TMP": root})
         tempfile.tempdir = root
-        state = {"violated": False}
-        sys.addaudithook(_audit_hook(root, state))
+        state = {"violated": False, "written_paths": set()}
+        sys.addaudithook(_audit_hook(
+            root, runtime_roots, limits.max_created_files, state))
 
         try:
             worker = _resolve_worker(request["worker"])
