@@ -196,9 +196,32 @@ Frage an Claude: <konkret>
 Claude antwortet mit einer Diagnose und einem Vorschlag. Codex setzt ihn im eigenen PR
 um; Claude pusht nur, wenn Kaan es ausdrücklich sagt.
 
+## Geräte
+
+| Gerät | Arbeit |
+| --- | --- |
+| iPad Pro | ChatGPT, Gemini, NotebookLM, GitHub (auch Copilot-Aufträge über GitHub Mobile), OneDrive/OneNote, Reviews |
+| Laptop (Linux/WSL) | Codex, Git-Checkout, lokale Tests; ein Implementierer je Branch, Tests nacheinander |
+
+Zugriff vom iPad auf den Laptop über SSH (z. B. mit Tailscale) in eine WSL-Sitzung mit
+`tmux`. Hostnamen, Zugangsdaten und private Adressen gehören nur in die private
+Zugangsdokumentation, nie in dieses öffentliche Repository.
+
+**Aufgaben** entstehen über das Issue-Formular „Begrenzte Aufgabe“
+(`.github/ISSUE_TEMPLATE/agent-task.yml`), **PRs** über
+`.github/PULL_REQUEST_TEMPLATE.md` (mit Wissensblock). Für Copilot-Cloud-Aufträge
+liegt eine Umgebungsvorlage in `docs/setup/copilot-setup-steps.yml`. Aktiv wird sie
+erst als `.github/workflows/copilot-setup-steps.yml` auf `main`; das ist Kaans
+Schritt, weil es Workflow-Schreibrechte braucht.
+
 ## Ablage in OneDrive (für Microsoft 365 Copilot)
 
 Ordner `GeniusNew` mit genau vier Dateien, die nach jeder Pflege der Wissensdatenbank
 ersetzt werden: `STATUS.md`, `DECISIONS.md`, `SECURITY.md`, `ROADMAP-V01.md`. Keine
 eigenen Kopien bearbeiten: Was dort falsch ist, korrigiert Gemini in der
-Wissensdatenbank, danach werden die Dateien neu abgelegt.
+Wissensdatenbank, danach werden die Dateien neu abgelegt. Die Git-Arbeitskopie liegt
+**außerhalb** des synchronisierten OneDrive-Ordners, damit sich Synchronisation und Git
+nicht in die Quere kommen. In OneNote ein Notizbuch `GeniusNew` mit den Abschnitten
+`Start`, `Entscheidungen`, `Reviews` und `Ideen`; Aufgaben und Freigaben werden aus
+GitHub verlinkt. Quellenpakete für NotebookLM oder Gemini tragen Datum und vollen
+Commit-SHA; ein Merge aktualisiert statische Uploads nicht von selbst.

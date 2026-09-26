@@ -1,0 +1,58 @@
+name: Begrenzte Aufgabe
+description: Eine prüfbare Aufgabe für eine Person oder einen Assistenten (Codex, Gemini, Copilot).
+title: "task: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Dieses Repository ist öffentlich. Keine Zugangsdaten, privaten Endpunkte,
+        persönlichen Unterlagen oder sensiblen Schwachstellendetails eintragen.
+        Rollen und Merge-Regeln: docs/COLLABORATION.md.
+  - type: dropdown
+    id: owner
+    attributes:
+      label: Zuständig
+      options:
+        - Codex (Umsetzung)
+        - Gemini Pro (Datenbank / Wissensdatenbank)
+        - Copilot (begrenzte Umsetzung auf eigenem Branch)
+        - Claude Code (Ordnung / Konflikt)
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Erwartetes Ergebnis
+      description: Eine konkrete Änderung und warum sie nötig ist.
+    validations:
+      required: true
+  - type: input
+    id: baseline
+    attributes:
+      label: Geprüfte Baseline
+      description: Voller Commit-SHA und, falls relevant, der abhängige PR.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope und Grenzen
+      description: Dateien oder Verhalten im Scope, zu erhaltende Arbeit, Ausschlüsse.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Abnahme
+      description: Beobachtbares Ergebnis, Prüfbefehle, erwartetes Ablehnungsverhalten.
+    validations:
+      required: true
+  - type: textarea
+    id: handoff
+    attributes:
+      label: Übergabe
+      value: |
+        Draft-PR mit vollem Head-SHA, Diff-Zusammenfassung, tatsächlich ausgeführten
+        Prüfungen, offenen Grenzen und dem Wissensblock. Merge nach docs/COLLABORATION.md.
+    validations:
+      required: true
