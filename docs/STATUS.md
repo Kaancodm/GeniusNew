@@ -21,8 +21,9 @@ Audit-Kette festgehalten.
 3. **Gateway:** prüft den Handoff unabhängig nur mit dem öffentlichen Schlüssel,
    verbraucht bei Bedarf ein einmaliges Approval-Token und mintet einen einmaligen
    `DispatchPermit`.
-4. **Worker:** läuft in einem eigenen Prozess ohne Netz, mit Ressourcenlimits und
-   ohne Schreibzugriff außerhalb eines temporären Verzeichnisses.
+4. **Worker:** läuft in einem eigenen Prozess mit Ressourcenlimits; Netz, Prozessstart
+   und Schreiben außerhalb eines temporären Verzeichnisses sperrt ein Python-Audit-Hook,
+   den Worker-Code umgehen kann (`SECURITY.md`).
 5. **Ergebnisprüfung:** nimmt das signierte Ergebnis an, und zwar nur einmal pro
    Handoff und nur innerhalb der Gültigkeit. Sie hält nur öffentliche Schlüssel und
    könnte kein Ergebnis fälschen.
@@ -76,7 +77,8 @@ Vollständig in `SECURITY.md`. Die wichtigsten:
 - Freigaben (Approvals) erteilt nur der Server. Es gibt keine eigene Rolle für
   Freigebende.
 - Die Worker-Isolation ist eine Prozessgrenze, keine microVM. Unter Windows läuft kein
-  Worker (fail closed).
+  Worker (fail closed). Worker-Code kann den Audit-Hook über `_posixsubprocess`
+  umgehen und Dateien des Hosts lesen; beides halten Tests offen.
 - Der HTTP-Eingang hat kein TLS, kein Rate-Limiting und keine Sessions. Das ist
   Deployment-Aufgabe.
 

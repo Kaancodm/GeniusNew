@@ -24,8 +24,12 @@ For the v0.1 Python worker path the child process:
 - has its environment replaced with values rooted in the temporary directory;
 - refuses Python socket operations;
 - refuses worker reads through `/proc`, `/sys`, and `/dev`, including the parent
-  process environment/FD view;
-- refuses process creation, exec, shell launch, and signals aimed at other processes;
+  process environment/FD view; every other path the service user can read stays
+  readable (see Known gaps);
+- refuses process creation, exec, shell launch, and signals aimed at other processes
+  through the Python APIs that raise audit events (`os.fork`, `os.exec*`, `os.spawn*`,
+  `os.posix_spawn`, `os.system`, `subprocess.Popen`, `os.kill`); `_posixsubprocess`
+  raises none and is not covered (see Known gaps);
 - refuses `ctypes` audit operations;
 - refuses writes opened outside the temporary directory and low-level write opens whose
   `dir_fd` cannot be proven safe;
@@ -57,6 +61,25 @@ process boundary.
 
 `geniusnew/isolation.py` is also included in `scripts/refusals.py`, so deleting any
 security refusal must make the CI suite fail.
+
+## Known gaps (held open)
+
+Two gaps are measured rather than assumed. Each has a test that asserts the gap
+exists, so closing it without updating `SECURITY.md` turns the suite red:
+
+- **Spawning below the hook.** The sandbox is a Python audit hook, and
+  `_posixsubprocess.fork_exec` raises no audit event. Worker code reaching it, for
+  example through `multiprocessing.util.spawnv_passfds`, starts a process the hook never
+  sees; that process writes outside the temporary directory and is bound only by the
+  inherited resource limits.
+  `test_a_spawn_below_the_audit_hook_escapes_and_this_is_the_boundary`.
+- **Reading the host.** Reads outside `/proc`, `/sys` and `/dev` are allowed, and a
+  worker's output goes back to the client.
+  `test_a_read_outside_the_temporary_directory_is_allowed_and_this_is_the_boundary`.
+
+Both need worker code to be hostile; a client chooses a payload, never the worker.
+Closing them takes an OS-enforced sandbox (seccomp, Landlock, namespaces), not another
+hook rule: a module already imported by the child raises no import event either.
 
 ## Deliberate non-goals
 
