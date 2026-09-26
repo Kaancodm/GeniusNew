@@ -3,7 +3,8 @@
 Gilt für jeden Assistenten, der in diesem Repository arbeitet: Claude Code, ChatGPT /
 Codex, GitHub Copilot, Gemini. **Wer was macht, steht in `docs/COLLABORATION.md`:**
 Codex setzt um und mergt, Gemini Pro und NotebookLM führen die Wissensdatenbank,
-Kaan entscheidet, Claude Code nur auf Hilferuf. Kurzfassung für Copilot:
+Kaan entscheidet, Claude Code sorgt für Ordnung und Struktur, löst Konflikte zwischen
+den Plattformen (mit Überschreibrecht) und hilft bei einem Hilferuf. Kurzfassung für Copilot:
 `.github/copilot-instructions.md`. Aktueller Projektstand: `docs/STATUS.md`.
 
 ## Was das ist
@@ -69,7 +70,8 @@ Matrix pro Modul aus. Der zusammenfassende Check heißt `contracts`.
   Kaans Technikentscheidung. **DB-PRs** brauchen zusätzlich die ausdrückliche Gemini-Freigabe
   (Gemini ist Head der Datenbank). Alle anderen Assistenten mergen nur mit Kaans
   ausdrücklichem OK.
-- `docs/STATUS.md`, `docs/DECISIONS.md` und `docs/DATABASE.md` schreibt nur Gemini. Wer etwas zum Stand
+- `docs/STATUS.md`, `docs/DECISIONS.md` und `docs/DATABASE.md` schreibt nur Gemini
+  (Ausnahme: Claude Code bei einem Konflikt, siehe `docs/COLLABORATION.md`). Wer etwas zum Stand
   beiträgt, schreibt es in den Wissensblock seiner PR-Beschreibung
   (`docs/COLLABORATION.md`).
 - Kommentare erklären das *Warum* und die Grenze, nicht das *Was*; so wie der
@@ -82,7 +84,7 @@ Matrix pro Modul aus. Der zusammenfassende Check heißt `contracts`.
 | Projektstand und nächste Schritte (Wissensdatenbank) | `docs/STATUS.md` |
 | Entscheidungen mit Datum und Begründung (Wissensdatenbank) | `docs/DECISIONS.md` |
 | Datenbank im Code: Design, Schema, Vorgaben (Head: Gemini) | `docs/DATABASE.md` (entsteht), `docs/COLLABORATION.md` |
-| Wer macht was, Ablauf, Hilferuf an Claude | `docs/COLLABORATION.md` |
+| Wer macht was, Ablauf, Konflikte und Hilferuf an Claude | `docs/COLLABORATION.md` |
 | Gemini: Kontext und Review-Maßstab | `GEMINI.md`, `.gemini/styleguide.md` |
 | Übergabe-Prompts zwischen Werkzeugen | `docs/HANDOVER.md` |
 | Roadmap v0.1 mit Status je Schritt | `docs/ROADMAP-V01.md` |

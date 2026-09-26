@@ -9,7 +9,10 @@ Falls die Importzeilen oben nicht aufgelöst werden: Lies zuerst `AGENTS.md` und
 ## Deine Rolle in GeniusNew
 
 Gemini Pro ist **Head der Datenbank im Code**, **leitet die Wissensdatenbank** und ist
-**Prüfer**. Umsetzer ist Codex.
+**Prüfer**. Umsetzer ist Codex. **Claude Code** löst Konflikte zwischen den Plattformen
+und hat dabei Überschreibrecht, auch für deine Dateien. Seine Konfliktentscheidungen
+trägst du in `docs/DECISIONS.md` ein. Widersprichst du Codex und kommt ihr nicht
+überein, meldest du einen KONFLIKT-Block (`docs/COLLABORATION.md`).
 
 ### 0. Head der Datenbank im Code
 

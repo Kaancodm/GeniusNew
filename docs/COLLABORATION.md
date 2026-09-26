@@ -7,7 +7,9 @@ Ziel: So wenig Abstimmung wie möglich. Jede Sache hat **genau einen Verantwortl
   geführt von **Gemini Pro und NotebookLM**.
 - **Datenbank im Code:** **Gemini Pro ist Head der Datenbank** (Design, Schema,
   Migrationen, Pflicht-Review); Codex schreibt den Code.
-- **Entscheidungen:** Kaan.
+- **Ordnung, Struktur und Konflikte zwischen den Plattformen:** **Claude Code**, mit
+  Überschreibrecht gegenüber allen Werkzeugen.
+- **Entscheidungen:** Kaan. Kaan steht über allen, auch über Claude Code.
 
 ## Rollen
 
@@ -20,7 +22,7 @@ Ziel: So wenig Abstimmung wie möglich. Jede Sache hat **genau einen Verantwortl
 | **ChatGPT** (Chat) | plant, formuliert Prompts, erklärt | ins Repo schreiben |
 | **GitHub Copilot Pro** | Vervollständigung im Editor; Review jedes PRs nach der Checkliste in `.github/copilot-instructions.md` | eigene PRs ohne Auftrag |
 | **Microsoft 365 Copilot** | Berichte, E-Mails, Folien aus dem OneDrive-Ordner `GeniusNew` | Inhalte erfinden, die dort nicht stehen |
-| **Claude Code** | nur Ordnung der Regeln: hält `AGENTS.md`, `GEMINI.md`, `docs/HANDOVER.md` und dieses Dokument stimmig, wenn Kaan darum bittet; **Hilfe, wenn Codex feststeckt** | Funktionen umsetzen, eigene Code-PRs, Wissensinhalte pflegen |
+| **Claude Code** | **Ordnung, Struktur und Konfliktlöser zwischen den Plattformen, mit Überschreibrecht:** besitzt die Regeln (`AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.gemini/*`, `docs/HANDOVER.md`, dieses Dokument); entscheidet Konflikte zwischen Werkzeugen verbindlich; darf jede Datei korrigieren, auch die von Gemini, wenn sie den Regeln oder dem Code widerspricht; **hilft, wenn Codex feststeckt** | Kaans Entscheidungen oder die Ausnahmen überstimmen; Funktionen umsetzen, außer um einen Konflikt aufzulösen |
 
 ## Die Wissensdatenbank
 
@@ -136,6 +138,35 @@ Werkzeug und Kaan sehen so denselben Stand.
 - Messwerte: <Anzahl Tests, Ergebnis der Demo>
 - Nächster Schritt: <Vorschlag>
 ```
+
+## Konflikte zwischen den Plattformen (Claude Code entscheidet)
+
+Ein Konflikt liegt vor, wenn zwei Werkzeuge sich widersprechen, zum Beispiel:
+
+- Gemini lehnt einen PR ab, Codex hält den Befund für falsch;
+- ein Dokument widerspricht dem Code oder einem anderen Dokument (etwa `STATUS.md`,
+  `DATABASE.md` und `SECURITY.md` untereinander);
+- unklar ist, wem eine Datei oder eine Aufgabe gehört.
+
+Jedes Werkzeug meldet ihn mit einem **KONFLIKT**-Block im PR oder als Issue. Kaan gibt
+ihn an Claude Code weiter:
+
+```text
+KONFLIKT GeniusNew
+Wer gegen wen: <z. B. Codex gegen Gemini>
+Wo: <PR/Issue/Datei:Zeile>
+Position A: <1–3 Sätze mit Beleg>
+Position B: <1–3 Sätze mit Beleg>
+Was blockiert ist: <PR, Merge, Aufgabe>
+```
+
+Claude Code entscheidet anhand von Code, Tests, `AGENTS.md` und `docs/DECISIONS.md` und
+begründet die Entscheidung im PR oder Issue. Die Entscheidung ist für alle Werkzeuge
+verbindlich; Gemini trägt sie in `docs/DECISIONS.md` ein. Wo eine Datei korrigiert werden
+muss, darf Claude Code sie selbst ändern, auch die von Gemini (Überschreibrecht). Nicht
+überschreiben darf Claude Code Kaans Entscheidungen und die Ausnahmen (neue
+Abhängigkeit, Grenze aus `SECURITY.md`, Tags). Das bleibt Kaans Sache. Claudes eigene
+PRs mergt Kaan.
 
 ## Wann Codex Claude um Hilfe bittet
 
