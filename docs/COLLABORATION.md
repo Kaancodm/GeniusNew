@@ -1,9 +1,33 @@
-# Mitarbeit mit iPad, Microsoft 365 und KI-Werkzeugen
+# Mitarbeit mit iPad Pro, Laptop und KI-Werkzeugen
 
-GitHub ist die verbindliche Quelle für Code, Aufgaben, PRs und CI. Das iPad dient
-zum Beauftragen und Prüfen. Die Ausführung übernimmt Linux/WSL oder eine dafür
-eingerichtete Cloud-Umgebung. Dieses Dokument richtet keine Konten ein und ersetzt
-keine Prüfung des jeweiligen Zugangs.
+GitHub ist die verbindliche Quelle für Code, Aufgaben, PRs und CI. Das iPad Pro
+übernimmt KI-Gespräche, Recherche, Projektunterlagen und Reviews. Codex, Codebearbeitung
+und lokale Tests laufen auf dem Laptop unter Linux/WSL. Dieses Dokument richtet
+keine Konten ein und ersetzt keine Prüfung des jeweiligen Zugangs.
+
+## Geräte und Entlastung
+
+| Gerät | Arbeit | Voraussetzung |
+| --- | --- | --- |
+| iPad Pro | ChatGPT, Gemini, NotebookLM, GitHub und OneDrive | Bestehende Projekte mit denselben Konten öffnen |
+| Laptop | Codex, Git-Checkout, WSL und lokale Prüfungen | Ein aktiver Implementierer je Branch; Tests nacheinander |
+
+Die Entlastung entsteht durch das Auslagern der Apps und Browserarbeit auf das iPad.
+Eine SSH-Verbindung führt Befehle weiterhin auf dem Laptop aus. Auf dem iPad die
+vorhandenen Projektlinks als Safari-Lesezeichen speichern; OneDrive enthält das
+private Startblatt und die Verbindungsanleitung.
+
+Vor dem Schließen von Laptop-Anwendungen die Browser-Sitzungen sichern und laufende
+Agenten berücksichtigen. Erst wenn die entsprechenden Zugänge auf dem iPad geprüft
+sind, ungenutzte KI-Apps und Browser-Tabs schließen. Codex, WSL und ein Browser für
+die gerade benötigte Entwicklungsarbeit bleiben verfügbar. Keine automatische
+Beendigung fremder Sitzungen oder pauschale Änderung von WSL-Speicherlimits.
+
+Vorher und nachher dieselbe typische Arbeit jeweils fünf Minuten messen:
+verfügbaren RAM und CPU-Auslastung festhalten. Angestrebt sind mindestens 500 MB
+mehr verfügbarer RAM ohne dauerhaft höhere CPU-Last; ohne Vergleichsmessung ist die
+Entlastung unbestätigt. Einrichtungsstand und Messwerte gehören in die private
+Arbeitsablage, nicht in das öffentliche Repository.
 
 ## Rollen
 
@@ -47,6 +71,12 @@ CI-Link und zugehöriger SHA:
 Review-Befunde und verbleibende Grenzen:
 Nächste konkrete Entscheidung:
 ```
+
+Vor einer Umsetzung Remote, Branch, Arbeitsbaum und aktuellen GitHub-Stand prüfen.
+Bei einem reinen Quellenexport ohne Repository-Zugriff nur analysieren und einen
+Auftrag vorbereiten; Umsetzung, CI und Freigaben als `UNKNOWN` behandeln. Ein datierter
+Statusbericht allein belegt keinen aktuellen Branch. Der gleiche Auftrag wird nicht
+gleichzeitig von mehreren Werkzeugen im selben Checkout bearbeitet.
 
 ## Microsoft 365 Personal/Family
 
@@ -97,7 +127,7 @@ Für eine Zweitprüfung Gemini den exakten PR-Diff, die Baseline, `SECURITY.md` 
 Testbefunde geben. NotebookLM mit ausgewählten Architektur- und Vertragsdokumenten
 nutzen. Eine Zusammenfassung allein ist kein vollständiger Code-Review.
 
-## iPad-Zugang
+## iPad-Pro-Zugang
 
 Safari-Lesezeichen für Repository, PRs, Actions, ChatGPT, Gemini, NotebookLM und
 OneDrive anlegen. In OneNote das Startblatt verlinken. Auf dem iPad eine SSH-App

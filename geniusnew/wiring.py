@@ -185,15 +185,19 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
           gateway_id: str = "gateway-1", verifier_id: str = "verifier-1",
           job_ids: Callable[[], str] | None = None,
           runner_factory: Callable[..., WorkerRunner] | None = None,
-          anchor: AuditAnchor | None = None) -> Service:
+          anchor: AuditAnchor | None = None,
+          anchor_state: str | None = None) -> Service:
     """Assemble one service. The only function that knows all the parts.
 
-    The default anchor is an `AnchorProcess`. Passing an in-process
-    `AuditAnchor` is a test seam, the same way `runner_factory` is: it puts the
-    anchor back inside the writer's memory.
+    The default anchor is an `AnchorProcess`, persisted to `anchor_state` when
+    one is given so that a restarted service resumes from what it committed.
+    Passing an in-process `AuditAnchor` is a test seam, the same way
+    `runner_factory` is: it puts the anchor back inside the writer's memory.
     """
     if anchor is not None and not isinstance(anchor, AuditAnchor):
         _fail("anchor must be an AuditAnchor")
+    if anchor is not None and anchor_state is not None:
+        _fail("anchor_state configures the default anchor; pass one or the other")
     if not isinstance(policy, Policy):
         _fail("policy is invalid")
     keys = derive_keys(root_secret)
@@ -255,7 +259,7 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
     )
     # Started last, so a refusal above cannot leave a process behind.
     if anchor is None:
-        anchor = AnchorProcess(verifier=audit.verifier())
+        anchor = AnchorProcess(verifier=audit.verifier(), state_path=anchor_state)
     return Service(
         entry=entry, orchestrator=orchestrator, gateway=gateway,
         verifier=verifier, audit=audit, chain=chain, anchor=anchor,
