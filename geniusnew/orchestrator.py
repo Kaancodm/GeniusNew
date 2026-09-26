@@ -68,7 +68,7 @@ import re
 from dataclasses import dataclass
 from threading import Lock
 from types import MappingProxyType
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from .contracts import ContractError, HandoffSigner, Policy, issue
 from .gateway import DispatchPermit, Gateway
@@ -255,7 +255,8 @@ class Orchestrator:
     """Admission, routing and dispatch for one policy-named orchestrator."""
 
     def __init__(self, *, orchestrator_id: str, signer: HandoffSigner,
-                 gateway: Gateway, workers: Iterable[WorkerEndpoint]) -> None:
+                 gateway: Gateway, workers: Iterable[WorkerEndpoint],
+                 on_admitted: Callable[[DispatchPermit], None] | None = None) -> None:
         self._orchestrator_id = _instance_id(orchestrator_id, "orchestrator_id")
         # The only component that holds the handoff signing key. The gateway
         # holds the public half, so it can check what this issues but not issue.
@@ -265,6 +266,13 @@ class Orchestrator:
             _fail("gateway must be a Gateway")
         self._signer = signer
         self._gateway = gateway
+        # Handed the permit the moment it exists, before anything can run or be
+        # refused on this side. Admission is the gateway's decision, so this
+        # component does not record it; it only passes on the evidence the
+        # gateway minted, and whoever receives it reads every field from there.
+        if on_admitted is not None and not callable(on_admitted):
+            _fail("on_admitted must be callable")
+        self._on_admitted = on_admitted
 
         # Checked on the type, not by catching TypeError from `tuple()`: a
         # storage object whose iterator raises TypeError would otherwise be
@@ -354,6 +362,12 @@ class Orchestrator:
         # submitted, while the wire reported below still described the one it did.
         if not hmac.compare_digest(permit.handoff.to_bytes(), wire):
             _fail("gateway admitted a different handoff than the one submitted")
+        # Before the reservation and before the runner. The permit exists and a
+        # one-time approval may be spent, so the in-memory admission precedes
+        # a lost race for the job id or an execution failure. If it cannot be
+        # recorded, nothing runs. Durable evidence needs persistent chain storage.
+        if self._on_admitted is not None:
+            self._on_admitted(permit)
 
         # Burned here: a permit exists and the work is about to run. Earlier, and
         # a job the gateway refused would lose its id for good; later, and two
