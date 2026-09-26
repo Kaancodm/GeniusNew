@@ -30,6 +30,13 @@ GeniusNew ist ein Zero-Trust-Agentensystem in Python. Regeln: `AGENTS.md`, Rolle
    „## Für die Wissensdatenbank“? Fehlt er: *High*. Ändert ein Codex-PR
    `docs/STATUS.md` oder `docs/DECISIONS.md`? Diese Dateien gehören Gemini: *Medium*.
 
+9. **DB-PRs** (Speicher-Code, Schema, Migrationen, `docs/DATABASE.md`): Liegt der
+   Anker in derselben Datenbank oder unter denselben Zugangsdaten wie die Audit-Kette?
+   *Critical*. Startet der Dienst bei beschädigtem oder fehlendem Speicher still bei
+   null? *Critical*. Stehen Zugangsdaten oder DB-Dateien im Repository? *Critical*.
+   Weicht das Schema von `docs/DATABASE.md` ab? *High*. Am Ende jedes DB-Reviews steht
+   „Gemini-Freigabe DB: ja“ oder „Gemini-Freigabe DB: nein“ mit Grund.
+
 ## Nicht bemängeln
 
 - Deutsche Doku neben englischem Code: Das ist so gewollt.

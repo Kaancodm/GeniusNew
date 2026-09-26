@@ -5,6 +5,8 @@ Ziel: So wenig Abstimmung wie möglich. Jede Sache hat **genau einen Verantwortl
 - **Code und Regeln:** der `main`-Zweig dieses Repositories. Codex setzt um und mergt.
 - **Wissen** (Stand, Entscheidungen, offene Fragen): die **Wissensdatenbank**. Sie wird
   geführt von **Gemini Pro und NotebookLM**.
+- **Datenbank im Code:** **Gemini Pro ist Head der Datenbank** (Design, Schema,
+  Migrationen, Pflicht-Review); Codex schreibt den Code.
 - **Entscheidungen:** Kaan.
 
 ## Rollen
@@ -12,9 +14,9 @@ Ziel: So wenig Abstimmung wie möglich. Jede Sache hat **genau einen Verantwortl
 | Wer | Macht | Macht nicht |
 | --- | --- | --- |
 | **Kaan** | entscheidet, gibt die Ausnahmen frei (siehe unten), legt Tags an | — |
-| **Gemini Pro** | **Leitung der Wissensdatenbank:** pflegt `docs/STATUS.md` und `docs/DECISIONS.md`, hält die NotebookLM-Quellen aktuell, meldet Widersprüche zwischen Dokumenten. Dazu **reviewt es jeden PR automatisch** (Gemini Code Assist, Maßstab `.gemini/styleguide.md`), ist **Pflicht-Zweitmeinung** bei den Ausnahmen und prüft Designs vorab bei Prozessgrenzen und Kryptografie. Kontext: `GEMINI.md` | Code ändern, Regeln in `AGENTS.md` ändern |
-| **NotebookLM** | **Wissensdatenbank und Auskunft für alle:** beantwortet Fragen zu Stand, Entscheidungen und Grenzen aus seinen Quellen, jede Antwort mit Quellenangabe | Entscheidungen treffen, Inhalte ohne Quelle |
-| **Codex** (ChatGPT Pro) | setzt um und **mergt selbst**: ein Thema pro PR, Branch `codex/<thema>`, mit einem **Wissensblock** in der PR-Beschreibung (siehe unten) | `docs/STATUS.md` und `docs/DECISIONS.md` ändern, Ausnahmen ohne Kaans OK mergen, Tags anlegen |
+| **Gemini Pro** | **Head der Datenbank im Code:** besitzt `docs/DATABASE.md` (Design, Schema, Migrationen), gibt jeden DB-PR frei (Pflicht). **Leitung der Wissensdatenbank:** pflegt `docs/STATUS.md` und `docs/DECISIONS.md`, hält die NotebookLM-Quellen aktuell, meldet Widersprüche zwischen Dokumenten. Dazu **reviewt es jeden PR automatisch** (Gemini Code Assist, Maßstab `.gemini/styleguide.md`), ist **Pflicht-Zweitmeinung** bei den Ausnahmen und prüft Designs vorab bei Prozessgrenzen und Kryptografie. Kontext: `GEMINI.md` | Code ändern (auch DB-Code), Regeln in `AGENTS.md` ändern, die DB-Technik ohne Kaans Entscheidung festlegen |
+| **NotebookLM** | **Wissensdatenbank und Auskunft für alle:** beantwortet Fragen zu Stand, Entscheidungen, Grenzen und **Datenbank-Schema** (aus `docs/DATABASE.md`) aus seinen Quellen, jede Antwort mit Quellenangabe | Entscheidungen treffen, Inhalte ohne Quelle |
+| **Codex** (ChatGPT Pro) | setzt um und **mergt selbst**: ein Thema pro PR, Branch `codex/<thema>`, mit einem **Wissensblock** in der PR-Beschreibung (siehe unten) | `docs/STATUS.md`, `docs/DECISIONS.md` und `docs/DATABASE.md` ändern, einen DB-PR ohne Gemini-Freigabe mergen, Ausnahmen ohne Kaans OK mergen, Tags anlegen |
 | **ChatGPT** (Chat) | plant, formuliert Prompts, erklärt | ins Repo schreiben |
 | **GitHub Copilot Pro** | Vervollständigung im Editor; Review jedes PRs nach der Checkliste in `.github/copilot-instructions.md` | eigene PRs ohne Auftrag |
 | **Microsoft 365 Copilot** | Berichte, E-Mails, Folien aus dem OneDrive-Ordner `GeniusNew` | Inhalte erfinden, die dort nicht stehen |
@@ -27,8 +29,8 @@ Ziel: So wenig Abstimmung wie möglich. Jede Sache hat **genau einen Verantwortl
 Gedächtnis des Projekts. Nur Gemini schreibt sie.
 
 **Quellen in NotebookLM** (Notebook „GeniusNew“): `docs/STATUS.md`,
-`docs/DECISIONS.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`,
-`AGENTS.md`. Das Repository ist öffentlich, deshalb können die Quellen als Links auf
+`docs/DECISIONS.md`, `docs/DATABASE.md` (sobald sie existiert), `SECURITY.md`,
+`docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`, `AGENTS.md`. Das Repository ist öffentlich, deshalb können die Quellen als Links auf
 die Rohdateien in `main` eingebunden werden, zum Beispiel
 `https://raw.githubusercontent.com/Kaancodm/GeniusNew/main/docs/STATUS.md`.
 
@@ -46,6 +48,43 @@ Kaan, und Gemini trägt die Antwort in `docs/DECISIONS.md` ein.
 4. Die Quellen in NotebookLM aktualisieren und Widersprüche zwischen den Dokumenten als
    Issue melden.
 
+## Die Datenbank im Code (Head: Gemini Pro)
+
+**Was hineinkommt:** Job- und Annahme-Ledger, wartende Approval-Jobs, die Audit-Kette
+und der Anker-Zustand. Damit übersteht der Dienst einen Neustart, ohne etwas doppelt
+anzunehmen oder zu vergessen.
+
+**Reihenfolge:**
+1. **Design (Gemini):** Gemini schreibt `docs/DATABASE.md` auf einem Branch
+   `gemini/db-design`. Inhalt: ein Vergleich der Techniken (mindestens SQLite aus der
+   Standardbibliothek und ein gehostetes PostgreSQL) mit Empfehlung, das Schema je
+   Tabelle, die Migrationen, das Verhalten bei beschädigtem Speicher und der Umgang mit
+   Zugangsdaten.
+2. **Entscheidung (Kaan):** Kaan wählt die Technik im PR. Gemini trägt sie in
+   `docs/DECISIONS.md` ein und mergt den Design-PR. Braucht die Technik eine neue
+   Abhängigkeit, ist das eine Ausnahme mit Kaans OK.
+3. **Umsetzung (Codex), je ein PR:** (a) Ledger mit Ablauf, (b) wartende Jobs,
+   (c) Audit-Kette, (d) Anker-Zustand. Jeder DB-PR braucht eine **ausdrückliche
+   Gemini-Freigabe im PR** zusätzlich zur grünen CI. Ohne Freigabe mergt Codex nicht.
+4. **Doku (NotebookLM):** `docs/DATABASE.md` wird Quelle im Notebook; Fragen zum Schema
+   gehen an NotebookLM.
+
+**Harte Vorgaben für das Design:**
+- **Der Anker liegt nicht in derselben Datenbank wie die Audit-Kette** und nicht unter
+  denselben Zugangsdaten. Sonst kann der Schreiber beide gemeinsam zurücksetzen, und der
+  Anker ist wertlos. Der Anker-Prozess hat seinen eigenen Speicher.
+- Fail closed: Ein beschädigter, fehlender oder nicht lesbarer Speicher verhindert den
+  Start. Es gibt keinen stillen Neustart bei null.
+- Keine Zugangsdaten und keine Datenbankdateien im Repository. Die Verbindung kommt aus
+  der serverseitigen Laufzeitkonfiguration.
+- Jede neue Ablehnung im DB-Code braucht einen Test; das Modul kommt in `GUARDED`.
+- Grenzen aus `SECURITY.md`, die sich dadurch ändern (prozesslokale Ledger,
+  Anker-Rückschnitt), werden je PR mit umgekehrtem Test und angepasster Tabelle
+  geschlossen.
+
+**Ein DB-PR** ist jeder PR, der Speicher-Code, Schema, Migrationen oder
+`docs/DATABASE.md` ändert.
+
 ## Der Ablauf eines Themas
 
 1. Kaan wählt den nächsten Schritt; die Auskunft dazu gibt NotebookLM. Kaan gibt ihn
@@ -62,7 +101,8 @@ Kaan, und Gemini trägt die Antwort in `docs/DECISIONS.md` ein.
    zutreffen. Kaans ausdrückliches OK braucht es nur für die Ausnahmen: eine neue
    Abhängigkeit, eine geänderte Grenze aus `SECURITY.md` (offen gehaltener Test
    umgekehrt) und Tags. Bei diesen Ausnahmen muss vorher ein
-   Gemini-Sicherheits-Review im PR stehen.
+   Gemini-Sicherheits-Review im PR stehen. **DB-PRs** brauchen zusätzlich eine
+   ausdrückliche Gemini-Freigabe.
 5. Gemini überträgt den Wissensblock in die Wissensdatenbank (siehe oben).
 
 **Kommunikation läuft über den PR**, nicht über Kopieren zwischen Chats. Plan,

@@ -83,18 +83,20 @@ Vollständig in `SECURITY.md`. Die wichtigsten:
 1. Tag `v0.1` auf `3a0e1bc` anlegen (Projektverantwortlicher).
 2. `docs/STATUS.md` in NotebookLM als Quelle hochladen und in OneDrive/SharePoint für
    Microsoft 365 Copilot ablegen.
-3. Einträge in Job- und Annahme-Ledger ablaufen lassen, statt bei 100 000 alles
-   abzulehnen.
-4. Beide Ledger persistent machen: Ein Neustart nimmt nichts doppelt an.
+3. **Datenbank-Design (Gemini Pro, Head der Datenbank):** `docs/DATABASE.md` mit
+   Technikvergleich und Empfehlung, Schema und Migrationen. Danach entscheidet Kaan die
+   Technik.
+4. **Datenbank umsetzen (Codex, je ein PR mit Gemini-Freigabe):** Job- und
+   Annahme-Ledger mit Ablauf, wartende Jobs, Audit-Kette, Anker-Zustand in einem
+   eigenen Speicher, getrennt von der Kette.
 5. Den Anker als eigenständigen Dienst unter eigenem Nutzer betreiben.
 6. Das Gateway in einen eigenen Prozess legen.
 7. Eine Rolle für Freigebende mit eigener HTTP-Route einführen.
-8. Wartende Jobs sollen einen Neustart überstehen.
-9. Einen Schlüssel pro Worker einführen.
-10. Doku zu TLS und Rate-Limiting mit Reverse-Proxy-Beispiel.
-11. Die Tests zusätzlich unter macOS in der CI.
-12. Design-Notiz: Worker mit Netzwerk-Allowlist.
-13. `docs/ROADMAP-V02.md` anlegen, danach den Tag `v0.2`.
+8. Einen Schlüssel pro Worker einführen.
+9. Doku zu TLS und Rate-Limiting mit Reverse-Proxy-Beispiel.
+10. Die Tests zusätzlich unter macOS in der CI.
+11. Design-Notiz: Worker mit Netzwerk-Allowlist.
+12. `docs/ROADMAP-V02.md` anlegen, danach den Tag `v0.2`.
 
 ## Zusammenarbeit der Werkzeuge
 
@@ -106,7 +108,7 @@ sich nur um die Ordnung der Regeln und hilft, wenn Codex feststeckt.
 
 | Werkzeug | Rolle | Liest |
 | --- | --- | --- |
-| Gemini Pro | **Leitung der Wissensdatenbank**, automatisches Review jedes PRs, Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung | `GEMINI.md`, `.gemini/styleguide.md` |
+| Gemini Pro | **Head der Datenbank im Code**, **Leitung der Wissensdatenbank**, automatisches Review jedes PRs, Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung | `GEMINI.md`, `.gemini/styleguide.md` |
 | NotebookLM | **Wissensdatenbank**: Auskunft für alle, mit Quelle | dieses Dokument, `docs/DECISIONS.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`, `AGENTS.md` |
 | ChatGPT Pro / Codex | **Umsetzung**, ein Thema pro PR (`codex/<thema>`), mit Wissensblock | `AGENTS.md`, `docs/COLLABORATION.md` |
 | GitHub Copilot Pro | Editor und Review jedes PRs | `.github/copilot-instructions.md` |

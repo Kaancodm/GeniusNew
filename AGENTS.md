@@ -65,8 +65,11 @@ Matrix pro Modul aus. Der zusammenfassende Check heißt `contracts`.
   blockierender Review-Befund offen ist. Ausnahmen mit Kaans ausdrücklichem OK: neue
   Abhängigkeit, eine Grenze aus `SECURITY.md` wird geändert, Tags. Gemini mergt seine
   Wissens-PRs (`gemini/wissen-*`, nur `docs/STATUS.md` und `docs/DECISIONS.md`) selbst
-  bei grüner CI. Alle anderen Assistenten mergen nur mit Kaans ausdrücklichem OK.
-- `docs/STATUS.md` und `docs/DECISIONS.md` schreibt nur Gemini. Wer etwas zum Stand
+  bei grüner CI, den DB-Design-PR (`gemini/db-design`, `docs/DATABASE.md`) erst nach
+  Kaans Technikentscheidung. **DB-PRs** brauchen zusätzlich die ausdrückliche Gemini-Freigabe
+  (Gemini ist Head der Datenbank). Alle anderen Assistenten mergen nur mit Kaans
+  ausdrücklichem OK.
+- `docs/STATUS.md`, `docs/DECISIONS.md` und `docs/DATABASE.md` schreibt nur Gemini. Wer etwas zum Stand
   beiträgt, schreibt es in den Wissensblock seiner PR-Beschreibung
   (`docs/COLLABORATION.md`).
 - Kommentare erklären das *Warum* und die Grenze, nicht das *Was*; so wie der
@@ -78,6 +81,7 @@ Matrix pro Modul aus. Der zusammenfassende Check heißt `contracts`.
 | --- | --- |
 | Projektstand und nächste Schritte (Wissensdatenbank) | `docs/STATUS.md` |
 | Entscheidungen mit Datum und Begründung (Wissensdatenbank) | `docs/DECISIONS.md` |
+| Datenbank im Code: Design, Schema, Vorgaben (Head: Gemini) | `docs/DATABASE.md` (entsteht), `docs/COLLABORATION.md` |
 | Wer macht was, Ablauf, Hilferuf an Claude | `docs/COLLABORATION.md` |
 | Gemini: Kontext und Review-Maßstab | `GEMINI.md`, `.gemini/styleguide.md` |
 | Übergabe-Prompts zwischen Werkzeugen | `docs/HANDOVER.md` |
