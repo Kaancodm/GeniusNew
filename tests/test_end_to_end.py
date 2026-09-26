@@ -173,6 +173,11 @@ class EndToEndTest(Fixture, unittest.TestCase):
                    anchor=self.service.anchor),
             len(records))
 
+    def test_a_job_without_approval_names_no_approval_record(self):
+        self.post()
+        self.assertEqual([record.event.approval_record_hash
+                          for record in self.service.chain.records], [None] * 4)
+
     def test_default_composition_uses_process_isolation(self):
         runners = [endpoint.runner
                    for endpoint in self.service.orchestrator._workers.values()]
@@ -582,6 +587,30 @@ class ApprovalOverHttpTest(Fixture, unittest.TestCase):
             ('orchestrator', 'HANDOFF_ISSUED'), ('gateway', 'APPROVAL_GRANTED'),
             ('gateway', 'HANDOFF_ADMITTED'), ('orchestrator', 'EXECUTION_DISPATCHED'),
             ('monitor', 'RESULT_ACCEPTED')])
+        self.assertEqual(verify(self.service.chain.records, self.service.head(),
+                                authority=self.service.audit,
+                                anchor=self.service.anchor), 5)
+
+    def test_the_chain_names_the_approval_each_decision_rests_on(self):
+        """Grant, admission and acceptance point at the approval store's records.
+
+        The grant names the record it created; admission and acceptance name
+        the record that consumed it, whose predecessor is that grant. So the
+        chain says not only that the job was approved, but by which approval.
+        """
+        import hashlib
+        job_id = self.waiting_job()
+        token = self.service.approve(job_id)
+        self.assertEqual(self.approve(job_id, token)[0], 202)
+        recorded = {record.event.action: record.event.approval_record_hash
+                    for record in self.service.chain.records}
+        consumed = self.service.approvals._records[hashlib.sha256(token).digest()]
+        self.assertEqual(consumed.state, 'CONSUMED')
+        self.assertIsNone(recorded['HANDOFF_ISSUED'])
+        self.assertEqual(recorded['APPROVAL_GRANTED'], consumed.previous_hash)
+        self.assertEqual(recorded['HANDOFF_ADMITTED'], consumed.record_hash)
+        self.assertEqual(recorded['RESULT_ACCEPTED'], consumed.record_hash)
+        self.assertIsNone(recorded['EXECUTION_DISPATCHED'])
         self.assertEqual(verify(self.service.chain.records, self.service.head(),
                                 authority=self.service.audit,
                                 anchor=self.service.anchor), 5)
