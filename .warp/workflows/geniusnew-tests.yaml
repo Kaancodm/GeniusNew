@@ -1,0 +1,5 @@
+name: GeniusNew - Tests
+command: python3 -W error::ResourceWarning -m unittest discover -s tests -v
+tags: ["geniusnew", "tests", "verify"]
+description: "Führt die vollständige unittest-Suite aus. Keine Tests werden übersprungen oder abgeschwächt."
+shells: ["bash"]
