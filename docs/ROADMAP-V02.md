@@ -60,7 +60,7 @@ anpassen.
 
 | # | Gate | Nachweis | Stand |
 | --- | --- | --- | --- |
-| B0 | `docs/DATABASE.md` gemergt, inklusive der Befunde H1/H2/M1 aus dem Review in #56 | Doku | #56 (Codex) |
+| B0 | `docs/DATABASE.md` gemergt, inklusive der Review-Befunde aus #56 (Vereinigungsmenge dort) | Doku; Claude-Security-Review, Freigabe durch Kaan | Entwurf #56; nach #66 erstellt ChatGPT die Datei im Auftrag Kaans |
 | B1 | `0001_core_foundation`: PostgreSQL-Dienst in der CI, `psycopg` hash-gepinnt, Migrationen mit Checksum, Start verweigert bei fehlender DB oder falscher Migration | Start-Refusal-Tests gegen echtes PostgreSQL | offen |
 | B2 | Job-Ledger persistent: Tests A–C aus Konflikt 4, Runtime ohne DELETE, nur Vorwärtsübergänge | Ledger-Grenztest in `test_orchestrator.py` umgekehrt | offen |
 | B3 | Annahme-Ledger persistent, Annahme nur aus `EXECUTION_COMMITTED` | Ledger-Grenztest in `test_verifier.py` umgekehrt | offen |
@@ -100,7 +100,7 @@ anpassen.
 A1 → B0 → B1 → B2 → B3 → B4 → B5 → B6 → B7 → C1 → C2 → C3 → C4 → A2 → D1 → D2 → D3 →
 C5 → E1 → E2 → E3.
 
-Zuständigkeit (Vorschlag, je Branch ein Implementierer): Codex B1–B4, C3, C4; Claude C1
+Zuständigkeit (Vorschlag, je Branch ein Implementierer; Rollen nach #66): Codex B1–B4, C3, C4, jeder DB-PR mit „Claude DB Review: APPROVED“ am exakten Head; Claude C1
 (#61), C2 (Neuaufbau aus #32) und das Design von A2; B5 und B6 Claude (Security) mit
 Codex; E2 prüft Claude, E3 und jeder Deploy bleiben bei Kaan.
 
