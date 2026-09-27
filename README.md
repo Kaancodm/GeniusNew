@@ -43,7 +43,7 @@ ein Befehl, der einen Job über
 HTTP durch alle Schichten schickt, die Audit-Kette gegen den verankerten Kopf prüft und
 den Job danach fünfzehnmal angreift.
 
-**Voraussetzungen:** Linux (oder WSL), Python 3.11 oder neuer, `git`. Die direkte
+**Voraussetzungen:** Linux auf x86_64 oder aarch64 (auch WSL 2), Python 3.11 oder neuer, `git`. Die direkte
 Abhängigkeit `cryptography` liefert die Ed25519-Signaturen von Handoff, Ergebnis und
 Audit-Kopf. Sie und ihre Abhängigkeiten sind mit Versionen und Hashes in
 `requirements.txt` gepinnt. Nach der Installation kein Internetzugriff — der HTTP-Eingang lauscht
@@ -93,10 +93,10 @@ ohne Permit, gekürzte oder zurückgesetzte Kette) wird abgelehnt.
 
 **Was `PASS` nicht bedeutet:** keine Produktionsfreigabe und kein Sicherheitsnachweis
 für einen echten Betrieb. Außer Worker und Audit-Anker sind die Instanzen getrennte
-Objekte in einem Prozess; die Worker-Isolation ist eine Prozessgrenze, keine microVM, und
-beruht auf einem Python-Audit-Hook, den Worker-Code umgehen kann — ein Worker kann so
-Prozesse starten und außerhalb seines Verzeichnisses schreiben, und er darf Dateien des
-Hosts lesen; der Anker wird vom Dienst unter demselben Nutzer gestartet (seine
+Objekte in einem Prozess; die Worker-Isolation ist eine Prozessgrenze, keine microVM:
+Prozessstart sperrt der Kernel über Seccomp, Netz- und Dateizugriffe überwacht weiterhin
+ein Python-Audit-Hook, und ein Worker darf Dateien des Hosts lesen; der Anker wird vom
+Dienst unter demselben Nutzer gestartet (seine
 Zustandsdatei übersteht einen Neustart, schützt aber nicht vor Rückschnitt durch diesen
 Nutzer); alle Signaturen (Handoff, Ergebnis, Audit-Kopf) sind Ed25519, aber alle
 Schlüssel hängen an einem Root-Secret. Die bekannten Grenzen stehen einzeln in
@@ -110,10 +110,10 @@ keine externe Python-Abhängigkeit, HMAC- statt Ed25519-Signaturen, und die Demo
 mit `13/13 attacks refused`. Der Quickstart oben gilt für den neueren Stand dieses
 Branches; eine Aussage über den Tag ersetzt keine Prüfung des aktuellen Commits.
 
-**Andere Betriebssysteme:** Die Worker-Isolation braucht POSIX-Ressourcenlimits. Unter
-Windows verweigert sie die Ausführung (fail closed), die Demo erreicht dort kein `PASS`.
-WSL ist Linux; die Testsuite läuft dort (belegt in #28). macOS ist nicht getestet. Die
-CI läuft auf `ubuntu-latest`.
+**Andere Betriebssysteme:** Die Worker-Isolation braucht POSIX-Ressourcenlimits und einen
+Seccomp-Filter, also Linux auf x86_64 oder aarch64 mit 64-Bit-Python. Unter Windows,
+macOS und nicht unterstützten Linux-Architekturen verweigert sie die Ausführung
+(fail closed). WSL 2 ist Linux. Die CI läuft auf `ubuntu-latest`.
 
 ## Aktueller Stand
 
