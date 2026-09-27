@@ -1,0 +1,15 @@
+name: GeniusNew - Docker Status
+command: |
+  if ! command -v docker >/dev/null 2>&1; then
+    printf '🔴 Docker fehlt\n'
+    exit 1
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    printf '🔴 Docker ist nicht erreichbar\n'
+    exit 1
+  fi
+  printf '🟢 Docker läuft\n'
+  docker ps
+tags: ["geniusnew", "docker", "status"]
+description: "Prüft Docker read-only und zeigt laufende Container. Startet oder stoppt nichts."
+shells: ["bash"]
