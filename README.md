@@ -43,7 +43,7 @@ ein Befehl, der einen Job über
 HTTP durch alle Schichten schickt, die Audit-Kette gegen den verankerten Kopf prüft und
 den Job danach fünfzehnmal angreift.
 
-**Voraussetzungen:** Linux auf x86_64 oder aarch64 (auch WSL 2), Python 3.11 oder neuer, `git`. Die direkte
+**Voraussetzungen:** Linux auf x86_64 (auch WSL 2), Python 3.11 oder neuer, `git`. Die direkte
 Abhängigkeit `cryptography` liefert die Ed25519-Signaturen von Handoff, Ergebnis und
 Audit-Kopf. Sie und ihre Abhängigkeiten sind mit Versionen und Hashes in
 `requirements.txt` gepinnt. Für den Quickstart ist nach der Installation kein externer Internetzugriff erforderlich — der HTTP-Eingang lauscht
@@ -111,8 +111,8 @@ mit `13/13 attacks refused`. Der Quickstart oben gilt für den neueren Stand die
 Branches; eine Aussage über den Tag ersetzt keine Prüfung des aktuellen Commits.
 
 **Andere Betriebssysteme:** Die Worker-Isolation braucht POSIX-Ressourcenlimits und einen
-Seccomp-Filter, also Linux auf x86_64 oder aarch64 mit 64-Bit-Python. Unter Windows,
-macOS und nicht unterstützten Linux-Architekturen verweigert sie die Ausführung
+Seccomp-Filter, also Linux auf x86_64 mit 64-Bit-Python. Unter Windows,
+macOS und anderen Linux-Architekturen verweigert sie die Ausführung
 (fail closed). WSL 2 ist Linux. Die CI läuft auf `ubuntu-latest`.
 
 ## Aktueller Stand
