@@ -176,8 +176,14 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
         to an earlier one resumes from there.
 
         `SECURITY.md` lists it: whoever can write the file as the anchor's user
-        can do this. Closing it needs the anchor under another operating-system
-        user or off this host.
+        can do this. `anchor_process serve` narrows *who* that is — run under its
+        own operating-system user (`docs/ANCHOR-SERVICE.md`), the service's user
+        can no longer write the file — but not *what* is possible: the anchor's
+        user, root and a restored backup still can, and the served anchor
+        resumes through the same `_load`. Which users can write the file is a
+        property of the installation that this suite, running as one user,
+        cannot prove, so the boundary stays held open rather than being
+        declared closed by a test that could only pretend to separate users.
         """
         path = self.state_path()
         first = AnchorProcess(verifier=self.authority.verifier(), state_path=path)
