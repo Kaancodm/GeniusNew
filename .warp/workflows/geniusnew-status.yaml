@@ -1,0 +1,51 @@
+name: GeniusNew - Status Ampel
+command: |
+  printf '=== GeniusNew Status ===\n'
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    printf '🟢 Git repo\n'
+  else
+    printf '🔴 Git repo fehlt — Repository in Warp öffnen\n'
+    exit 1
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    printf '🟢 Python  '
+    python3 --version
+  else
+    printf '🔴 Python fehlt — python3 installieren\n'
+  fi
+  if command -v docker >/dev/null 2>&1; then
+    if docker info >/dev/null 2>&1; then
+      printf '🟢 Docker läuft\n'
+    else
+      printf '🔴 Docker nicht erreichbar — Docker Desktop starten\n'
+    fi
+  else
+    printf '🔴 Docker fehlt\n'
+  fi
+  if command -v tmux >/dev/null 2>&1; then
+    if tmux has-session -t geniusnew 2>/dev/null; then
+      printf '🟢 tmux geniusnew läuft\n'
+    else
+      printf '🟡 tmux geniusnew nicht aktiv — Workflow "GeniusNew - tmux öffnen" starten\n'
+    fi
+  else
+    printf '🔴 tmux fehlt — sudo apt-get install tmux\n'
+  fi
+  if test -x .venv/bin/python; then
+    printf '🟢 .venv vorhanden\n'
+  else
+    printf '🟡 .venv fehlt — Workflow "GeniusNew - Python Setup" starten\n'
+  fi
+  if test -z "$(git status --porcelain)"; then
+    printf '🟢 Working tree sauber\n'
+  else
+    printf '🟡 Working tree geändert — git status prüfen\n'
+  fi
+  printf 'Branch: '
+  git branch --show-current
+  printf 'HEAD:   '
+  git rev-parse HEAD
+  git status --short
+tags: ["geniusnew", "status", "health"]
+description: "Zeigt Git, Python, Docker, tmux, venv und Working-Tree-Zustand als Ampel. Nur lesend."
+shells: ["bash"]
