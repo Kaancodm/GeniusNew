@@ -98,8 +98,11 @@ class NativeSpawnWorker(Worker):
         from multiprocessing.util import spawnv_passfds
 
         # The path travels as $0, never through the shell's parser.
-        spawnv_passfds(b"/bin/sh", [b"/bin/sh", b"-c", b'echo escaped > "$0"',
-                                    os.fsencode(self.path)], ())
+        pid = spawnv_passfds(b"/bin/sh", [b"/bin/sh", b"-c", b'echo escaped > "$0"',
+                                          os.fsencode(self.path)], ())
+        # If process creation ever gets past the filter, wait for the child so
+        # the escape side effect cannot race the assertions in the parent test.
+        os.waitpid(pid, 0)
         return {"text": "spawned"}
 
 
