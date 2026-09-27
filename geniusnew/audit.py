@@ -67,10 +67,13 @@ _REASON_CODE = re.compile(r"\A[A-Z][A-Z0-9_]{0,63}\Z")
 _DIGEST = re.compile(r"\A[0-9a-f]{64}\Z")
 _SIGNING_LABEL = b"geniusnew/audit-head-signing/ed25519/v1"
 _EVENT_KEYS = frozenset({
-    "action", "actor", "constitution_version", "decision", "handoff_sha256",
-    "job_id", "occurred_at", "payload_sha256", "policy_version", "reason_code",
-    "subject", "trace_id",
+    "action", "actor", "approval_record_hash", "constitution_version", "decision",
+    "handoff_sha256", "job_id", "occurred_at", "payload_sha256", "policy_version",
+    "reason_code", "subject", "trace_id",
 })
+# The handoff state that marks an approval-bound job. Only such a handoff can
+# have an approval record behind a decision about it.
+_PENDING_APPROVAL = "PENDING_APPROVAL"
 
 
 def _fail(message: str) -> None:
@@ -218,7 +221,15 @@ class AuditAuthority:
 
 @dataclass(frozen=True)
 class AuditEvent:
-    """One security-relevant decision, recorded without its payload."""
+    """One security-relevant decision, recorded without its payload.
+
+    `approval_record_hash` names the approval-store record a decision rests on:
+    the grant for `APPROVAL_GRANTED`, the consumed receipt for the admission and
+    the acceptance it bought. Without it the chain could say a job was approved
+    but not by which approval, and a spent approval could not be matched to the
+    decisions it paid for. It is always serialized, `null` when there is none,
+    so an event has exactly one shape.
+    """
 
     trace_id: str
     job_id: str
@@ -232,6 +243,7 @@ class AuditEvent:
     handoff_sha256: str
     payload_sha256: str
     occurred_at: int
+    approval_record_hash: str | None = None
 
     def __post_init__(self) -> None:
         for field in ("trace_id", "job_id", "subject", "policy_version", "constitution_version"):
@@ -240,6 +252,8 @@ class AuditEvent:
             _fail("actor must be a ComponentActor minted by an AuditAuthority")
         for field in ("handoff_sha256", "payload_sha256"):
             _digest(getattr(self, field), field)
+        if self.approval_record_hash is not None:
+            _digest(self.approval_record_hash, "approval_record_hash")
         if type(self.action) is not str or self.action not in _ACTIONS:
             _fail("action is not an allowed audit action")
         if type(self.decision) is not str or self.decision not in _DECISIONS:
@@ -253,6 +267,7 @@ class AuditEvent:
         return {
             "action": self.action,
             "actor": self.actor.identifier(),
+            "approval_record_hash": self.approval_record_hash,
             "constitution_version": self.constitution_version,
             "decision": self.decision,
             "handoff_sha256": self.handoff_sha256,
@@ -273,7 +288,8 @@ class AuditEvent:
 
 
 def event_from_handoff(handoff: Handoff, *, trace_id: str, actor: ComponentActor, action: str,
-                       decision: str, reason_code: str, occurred_at: int) -> AuditEvent:
+                       decision: str, reason_code: str, occurred_at: int,
+                       approval_record_hash: str | None = None) -> AuditEvent:
     """Derive an event from a handoff without copying its payload.
 
     The job, subject and policy version come from the handoff itself, and the
@@ -286,6 +302,11 @@ def event_from_handoff(handoff: Handoff, *, trace_id: str, actor: ComponentActor
     if not hmac.compare_digest(hashlib.sha256(canonical(handoff.payload)).hexdigest(),
                                handoff.payload_sha256):
         _fail("handoff payload no longer matches its digest")
+    # A handoff issued without an approval requirement has no approval record
+    # behind it; recording one would attach an approval to a job that never
+    # needed one. The result verifier refuses the same mismatch.
+    if approval_record_hash is not None and handoff.approval_state != _PENDING_APPROVAL:
+        _fail("approval_record_hash is not allowed for a handoff that needs no approval")
     return AuditEvent(
         trace_id=_identifier(trace_id, "trace_id"),
         job_id=_audit_safe(handoff.job_id, "job_id"),
@@ -299,6 +320,7 @@ def event_from_handoff(handoff: Handoff, *, trace_id: str, actor: ComponentActor
         handoff_sha256=hashlib.sha256(handoff.to_bytes()).hexdigest(),
         payload_sha256=handoff.payload_sha256,
         occurred_at=_integer(occurred_at, "occurred_at"),
+        approval_record_hash=approval_record_hash,
     )
 
 

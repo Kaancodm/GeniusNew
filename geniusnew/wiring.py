@@ -193,7 +193,8 @@ class Service:
             recorder=self._recorder, handoff=waiting.handoff,
             trace_id=waiting.trace_id, component="gateway",
             instance_id=self.gateway.gateway_id, action="APPROVAL_GRANTED",
-            decision="ALLOWED", reason_code="OPERATOR_APPROVED", occurred_at=now)
+            decision="ALLOWED", reason_code="OPERATOR_APPROVED", occurred_at=now,
+            approval_record_hash=grant.record_hash)
         return grant.token
 
     def head(self):
@@ -304,7 +305,8 @@ def _admission_recorder(*, gateway: Gateway,
 
     The orchestrator calls this, so it must not be able to say anything the
     gateway did not: it hands over a permit and nothing else. Action, decision
-    and reason are fixed; instance, time and handoff are read from the permit,
+    and reason are fixed; instance, time, handoff and approval receipt are read
+    from the permit,
     which only a `Gateway` can mint. It used to be appended after the worker
     returned, so a lost race for the job id left a minted permit — and possibly
     a spent approval — with no admission on the in-memory chain. This ordering
@@ -322,7 +324,8 @@ def _admission_recorder(*, gateway: Gateway,
             trace_id=_trace_id(handoff), component="gateway",
             instance_id=permit.gateway_id, action="HANDOFF_ADMITTED",
             decision="ALLOWED", reason_code=ADMISSION_REASON_CODE,
-            occurred_at=permit.admitted_at)
+            occurred_at=permit.admitted_at,
+            approval_record_hash=permit.approval_record_hash)
 
     return record
 
@@ -460,7 +463,8 @@ def _submitter(*, orchestrator: Orchestrator,
             component="monitor", instance_id=verifier.verifier_id,
             action=acceptance.action, decision=acceptance.decision,
             reason_code=acceptance.reason_code,
-            occurred_at=acceptance.occurred_at)
+            occurred_at=acceptance.occurred_at,
+            approval_record_hash=acceptance.approval_record_hash)
         return {
             "status": acceptance.status,
             "reason_code": acceptance.result.reason_code,
@@ -479,12 +483,12 @@ def _trace_id(handoff) -> str:
 def _append_event(*, recorder: _AnchoredAudit, handoff,
                   trace_id: str, component: str, instance_id: str,
                   action: str, decision: str, reason_code: str,
-                  occurred_at: int) -> None:
+                  occurred_at: int, approval_record_hash: str | None = None) -> None:
     recorder.append(event_from_handoff(
         handoff, trace_id=trace_id,
         actor=recorder.audit.actor(component, instance_id), action=action,
         decision=decision, reason_code=reason_code,
-        occurred_at=occurred_at))
+        occurred_at=occurred_at, approval_record_hash=approval_record_hash))
 
 
 def _revalidate(*, policy: Policy, handoff_verifier: HandoffVerifier, wire: bytes, subject: str,
