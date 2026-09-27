@@ -111,9 +111,15 @@ create table job_ledger (
     state text not null check (
         state in ('PENDING_APPROVAL', 'RESERVED', 'EXECUTION_COMMITTED', 'COMPLETED', 'REFUSED')
     ),
-    reserved_at bigint not null,
+    created_at bigint not null,
+    reserved_at bigint,
     updated_at bigint not null,
-    expires_at bigint not null
+    expires_at bigint not null,
+    unique (job_id, handoff_sha256),
+    check (
+        (state = 'PENDING_APPROVAL' and reserved_at is null)
+        or (state <> 'PENDING_APPROVAL' and reserved_at is not null)
+    )
 );
 ```
 
@@ -142,18 +148,22 @@ Abnahmetests aus Konflikt 4 / Issue #44:
 ```sql
 create table acceptance_ledger (
     handoff_sha256 char(64) primary key,
-    job_id text not null references job_ledger(job_id),
+    job_id text not null,
     handoff_wire bytea not null,
     result_sha256 char(64) not null unique,
     result_wire bytea not null,
-    accepted_at bigint not null
+    accepted_at bigint not null,
+    foreign key (job_id, handoff_sha256)
+        references job_ledger(job_id, handoff_sha256)
 );
 ```
 
 Eine vorhandene `handoff_sha256` bedeutet `RESULT_ALREADY_ACCEPTED`. Beim Laden
 werden `handoff_wire` und `result_wire` gemeinsam neu validiert: Handoff-Signatur,
 Job-/Worker-Bindung, Handoff-Digest, Ergebnis-Signatur und `result_sha256` müssen zu
-den gespeicherten Bytes passen.
+den gespeicherten Bytes passen. Zusätzlich erzwingt der zusammengesetzte Foreign Key,
+dass die angenommene `handoff_sha256` exakt diejenige des reservierten `job_ledger`-
+Eintrags derselben `job_id` ist.
 
 ### 4.4 `pending_jobs`
 
@@ -177,7 +187,9 @@ Beim Start ist eine Pending-Zeile ohne passende Ledger-Zeile oder eine
 `PENDING_APPROVAL`-Ledger-Zeile ohne Pending-Zeile ein Integritätsfehler; der Dienst
 startet nicht. Ein falscher oder fremder Approval-Token darf die Zeile nicht löschen.
 Bei korrektem Approval wird die Ledger-Zeile atomar aus `PENDING_APPROVAL` in
-`RESERVED` überführt; erst danach kann die Ausführungsgrenze erreicht werden.
+`RESERVED` überführt und `reserved_at` erstmals gesetzt; erst danach kann die
+Ausführungsgrenze erreicht werden. `created_at` existiert in jedem Zustand und darf
+nicht als Ersatz für den tatsächlichen Reservationszeitpunkt verwendet werden.
 
 ### 4.5 Approval-Speicher
 
@@ -200,6 +212,13 @@ create table approval_records (
         references approval_records(token_digest, record_hash)
 );
 
+create unique index approval_one_root_per_token
+    on approval_records(token_digest) where previous_hash is null;
+
+create unique index approval_one_successor_per_record
+    on approval_records(token_digest, previous_hash)
+    where previous_hash is not null;
+
 create table approval_tokens (
     token_digest char(64) primary key,
     current_record_hash char(64) not null,
@@ -212,8 +231,22 @@ create table approval_tokens (
 Laden neu berechnet. Die zusammengesetzten Foreign Keys erzwingen, dass
 `previous_hash` und `current_record_hash` zum **gleichen `token_digest`** gehören.
 Für den ersten `GRANTED`-Record ist `previous_hash = NULL`; spätere Records müssen
-einen Vorgänger desselben Tokens nennen. Consume/Revoke sperren die Token-Zeile mit
-`SELECT ... FOR UPDATE` und sind nur aus `GRANTED` zulässig.
+einen Vorgänger desselben Tokens nennen. Die beiden Unique-Indizes erlauben genau einen
+Root und höchstens einen Nachfolger je Record: die Historie kann nicht verzweigen.
+
+Die Runtime-Rolle erhält auf `approval_records` **INSERT und SELECT, aber kein UPDATE
+und kein DELETE**. Ein DB-Trigger auf `approval_tokens` erzwingt bei jedem UPDATE,
+dass der neue `current_record_hash` auf einen Record zeigt, dessen `previous_hash`
+exakt dem alten `current_record_hash` entspricht. Der Pointer kann dadurch nur einen
+Schritt vorwärts, nie zurück auf einen alten `GRANTED`-Record. Der erste INSERT in
+`approval_tokens` muss auf den einzigen `GRANTED`-Root mit `previous_hash IS NULL`
+zeigen. Consume/Revoke sperren die Token-Zeile mit `SELECT ... FOR UPDATE` und sind nur
+aus `GRANTED` zulässig.
+
+Beim Start wird für jeden Token die vollständige unverzweigte Record-Kette vom Root bis
+zum Pointer geprüft, jeder `record_hash` neu berechnet und verlangt, dass der Pointer
+auf dem einzigen Tip liegt. Ein verwaister Record, ein zweiter Root/Nachfolger, ein
+Rücksprung oder eine ungültige Zustandsfolge ist ein Startfehler.
 
 ### 4.6 `audit_chain`
 
@@ -229,8 +262,14 @@ create table audit_chain (
 Index beginnt bei 0 und ist lückenlos. Beim ersten Record ist `previous_hash` der
 All-zero-Digest aus 64 `0`-Zeichen — niemals `NULL`. `event` sind die exakten
 kanonischen Event-Bytes.
-Beim Start wird die **gesamte Kette** geladen, rehydriert, neu gehasht, auf
-`previous_hash` geprüft und anschließend gegen den externen Anker verifiziert.
+
+Beim Start wird die **gesamte Kette** geladen. Für jeden Record wird das Event
+rehydriert und anschließend verlangt, dass die gespeicherten `event`-Bytes **bytegleich**
+mit `rehydrated_event.to_bytes()` sind. Damit werden auch Änderungen nur an
+Whitespace, Schlüsselreihenfolge oder anderer nicht-kanonischer JSON-Darstellung
+abgelehnt. Erst danach werden Event-Hash, `previous_hash`, `record_hash`, lückenlose
+Indizes und der signierte Kopf geprüft und die vollständige Kette gegen den externen
+Anker verifiziert.
 
 ### 4.7 Principal-Registry
 
@@ -341,11 +380,15 @@ sicherheitsrelevante Ablauf nicht als erfolgreich fortgesetzt werden.**
 Crash zwischen DB-Commit und Anchor-Bestätigung:
 
 - DB-Kette kann dem Anker voraus sein;
-- beim Neustart wird die Core-Kette vollständig verifiziert;
-- erweitert sie den verankerten Kopf konsistent, darf derselbe Kopf erneut an den Anker
-  übermittelt werden;
-- ist der Anker der DB voraus oder teilen beide keine gemeinsame Geschichte, startet der
-  Dienst nicht.
+- beim Neustart wird die **vollständige** Core-Kette ab Index 0 verifiziert;
+- der bereits verankerte `count/head_hash` muss an exakt seiner Position in dieser
+  vollständigen Geschichte wiedergefunden werden;
+- erweitert die DB-Kette diesen verankerten Präfix konsistent, wird **kein isoliertes
+  Suffix** an den Anker geschickt. Stattdessen wird aus der vollständigen DB-Kette der
+  neue signierte Kopf erzeugt und `AnchorAudit.commit()`/der aktuelle Anchor-Commit-Pfad
+  erhält erneut den vollständigen Record-Snapshot von Index 0 bis zum neuen Tip;
+- ist der Anker der DB voraus, fehlt der verankerte Präfix oder teilt die DB nicht
+  dieselbe Geschichte, startet der Dienst nicht.
 
 ## 7. Transaktionen und Parallelität
 
@@ -368,8 +411,8 @@ Vor Öffnen des HTTP-Listeners:
    `job_ledger(PENDING_APPROVAL)` abgleichen;
 6. Approval-Hashes und Vorgängerketten prüfen;
 7. vollständige Audit-Kette verifizieren;
-8. Audit-Kopf gegen Anchor-Store verifizieren oder ein konsistentes DB-Suffix erneut
-   verankern;
+8. Audit-Kopf gegen Anchor-Store verifizieren; liegt die DB konsistent vor dem Anker,
+   den neuen Kopf nur zusammen mit dem **vollständigen** Record-Snapshot erneut committen;
 9. erst danach Requests annehmen.
 
 Fehlt eine Tabelle, Migration, Signatur, Hash-Verknüpfung oder der Anchor-Store:
@@ -410,6 +453,10 @@ Jeder DB-PR muss:
 - Tests, Demo und Refusal-Guard nacheinander grün haben;
 - Byte-Manipulation testen: ändert sich ein gespeichertes Byte in Wire/Event/Result,
   muss Laden oder Start fehlschlagen;
+- Acceptance gegen einen anderen als den im Job-Ledger gebundenen Handoff muss durch
+  DB-Constraint und Startprüfung scheitern;
+- Approval-Records sind für die Runtime append-only; ein Pointer-Rücksprung oder Fork
+  der Record-Kette muss in der DB bzw. spätestens beim Start fail closed scheitern;
 - bei geschlossener `SECURITY.md`-Grenze den offen gehaltenen Test umkehren.
 
 Implementierungsreihenfolge:
