@@ -90,12 +90,14 @@ CI läuft auf `ubuntu-latest`.
 
 ## Aktueller Stand
 
-Roadmap zu v0.1 (`docs/ROADMAP-V01.md`): Schritte 1–19 umgesetzt; der Audit-Anker
-aus Schritt 8 läuft in eigenem Prozess, sein Lebenszyklus liegt noch beim Dienst.
-Schritt 20 (technischer Quickstart-Review) ist nach den vom Projektverantwortlichen
-angepassten Abnahmekriterien abgeschlossen; der geprüfte Commit, die Umgebung und das
-Ergebnis stehen in [docs/QUICKSTART-REVIEW.md](docs/QUICKSTART-REVIEW.md).
-Schritt 21 (Tag `v0.1`) steht aus.
+**v0.1 ist erreicht** (Tag `v0.1`, Commit `3a0e1bc`). Alle 20 Schritte der Roadmap zu
+v0.1 (`docs/ROADMAP-V01.md`) sind umgesetzt, auch der technische Quickstart-Review
+(Schritt 20); der geprüfte Commit, die Umgebung und das Ergebnis stehen in
+[docs/QUICKSTART-REVIEW.md](docs/QUICKSTART-REVIEW.md). Der Audit-Anker aus Schritt 8
+läuft in eigenem Prozess, sein Lebenszyklus liegt noch beim Dienst — das ist einer der
+nächsten Schritte für v0.2. Alle Signaturen (Handoff, Ergebnis, Audit-Kopf) sind seither
+Ed25519; es gibt keine HMAC-Signatur mehr. Der aktuelle Stand und die nächsten Schritte
+stehen in [docs/STATUS.md](docs/STATUS.md).
 
 Die Phasennummern in `docs/MIGRATION-MATRIX.md` zählen die Migration aus dem
 Altprojekt und sind nicht dieselben wie die Bauphasen hier.
