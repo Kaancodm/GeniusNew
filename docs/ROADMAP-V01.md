@@ -72,6 +72,12 @@ Abhängigkeit: erst die Verträge, dann die Instanzen, die sie durchsetzen.
    Hash oder Referenz. Ein Test muss belegen, dass Payload-Inhalt keinen Eintrag erreichen
    kann.
 
+   Nach v0.1 ergänzt: Beruht eine Entscheidung auf einem Approval, nennt der Eintrag den
+   Datensatz im Approval-Speicher (`approval_record_hash`). Bei `APPROVAL_GRANTED` ist das
+   die Freigabe, bei `HANDOFF_ADMITTED` und `RESULT_ACCEPTED` der Verbrauch, dessen
+   Vorgänger diese Freigabe ist. Ohne Approval steht dort `null`. An einen Handoff ohne
+   Approval-Pflicht lässt sich kein Approval-Datensatz hängen.
+
 8. **Audit-Chain** — append-only, hash-verkettet, mit `verify()`. Eine für sich stehende
    Kette erkennt Änderung und Einfügung, **nicht** aber das Abschneiden des Endes: eine um
    die letzten Einträge gekürzte Kette bleibt in sich gültig. Deshalb gehört ein extern
