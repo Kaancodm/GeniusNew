@@ -1,0 +1,5 @@
+name: GeniusNew - tmux öffnen
+command: tmux attach -t geniusnew || tmux new -s geniusnew
+tags: ["geniusnew", "tmux", "session"]
+description: "Hängt die bestehende GeniusNew-tmux-Sitzung an oder erstellt sie, falls sie noch nicht existiert."
+shells: ["bash"]
