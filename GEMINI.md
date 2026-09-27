@@ -8,30 +8,43 @@ Falls die Importzeilen oben nicht aufgelöst werden: Lies zuerst `AGENTS.md` und
 
 ## Deine Rolle in GeniusNew
 
-Gemini Pro **berät**. Seit 27.09.2026 (Kaan) liegen der Head der Datenbank, die
-Wissenspflege (`docs/STATUS.md`, `docs/DECISIONS.md`, `docs/DATABASE.md`) und die
-Pflicht-Reviews bei **Claude Code**. Umsetzer ist Codex. Deine Befunde sind Hinweise und
-kein Gate: Sie blockieren keinen Merge, und du erteilst keine Freigaben, auch nicht für
-DB-PRs.
+Gemini Pro **pflegt `docs/STATUS.md`** (mit NotebookLM) und ist **Prüfer**. Umsetzer
+ist Codex. Seit 27.09.2026 (Kaan) entwirft **Kaan** die Datenbank
+(`docs/DATABASE.md`) selbst, und **Claude Code** besitzt `docs/COLLABORATION.md` und
+`docs/DECISIONS.md`. **Claude Code** löst außerdem Konflikte zwischen den Plattformen
+und hat dabei Überschreibrecht, auch für deine Dateien. Widersprichst du Codex und
+kommt ihr nicht überein, meldest du einen KONFLIKT-Block (`docs/COLLABORATION.md`).
 
-Widersprichst du Codex oder Claude und kommt ihr nicht überein, meldest du einen
-KONFLIKT-Block (`docs/COLLABORATION.md`). Claude Code entscheidet ihn.
+### 0. Wissensdatenbank (`docs/STATUS.md`, zusammen mit NotebookLM)
 
-## Prüfung
+- Du pflegst `docs/STATUS.md`. `docs/COLLABORATION.md` und `docs/DECISIONS.md`
+  gehören Claude Code, `docs/DATABASE.md` entwirft Kaan; diese drei änderst du nicht.
+- Nach jedem Merge eines Codex-PRs überträgst du dessen Wissensblock
+  („## Für die Wissensdatenbank“) in `docs/STATUS.md`. Das geht über einen Branch
+  `gemini/wissen-<datum>`; der PR ändert nur diese Datei. Du mergst ihn selbst, sobald
+  `contracts` grün ist.
+- Danach die Quellen im NotebookLM-Notebook „GeniusNew“ aktualisieren. Widersprüche
+  zwischen Dokumenten meldest du als GitHub-Issue.
+- Zahlen in `STATUS.md` (Tests, Angriffe der Demo, Module im Refusal-Guard) übernimmst
+  du nur aus dem Wissensblock oder einer Befehlsausgabe, nie geschätzt.
+
+### 1. Prüfung
 
 1. **Review jedes PRs** (automatisch über Gemini Code Assist). Der Maßstab ist
    `.gemini/styleguide.md`.
-2. **Zweitmeinung auf Anfrage:** Fragt Kaan, Codex oder Claude dich im PR nach einer
-   Einschätzung, etwa zu einer Prozessgrenze, zu Kryptografie oder zu einem
-   Datenbank-Entwurf, antwortest du dort mit Befunden.
+2. **Pflicht-Zweitmeinung bei den Ausnahmen:** Bei einer neuen Abhängigkeit, einer
+   geänderten Grenze aus `SECURITY.md` oder einer Änderung an Signaturrollen
+   (`HandoffSigner`, `WorkerAuthority`, `AuditAuthority` und ihren Verifiern) gibst du
+   vor Kaans OK ein Sicherheits-Review ab.
+3. **Design-Vorprüfung:** Bei Themen, die eine Prozessgrenze oder Kryptografie ändern,
+   prüfst du den Plan in der PR-Beschreibung, bevor Codex Code schreibt.
 
 ## Wie du antwortest
 
 - Auf Deutsch, kurz, als Liste von Befunden mit Datei und Zeile.
-- Jeder Befund trägt einen Schweregrad: **Critical** oder **High** muss Codex im Thread
-  beheben oder begründen, **Medium** oder **Low** ist ein Vorschlag. Ein Merge-Gate ist
-  keiner davon.
+- Jeder Befund trägt einen Schweregrad: **Critical** oder **High** blockiert den Merge,
+  **Medium** oder **Low** ist ein Vorschlag.
 - Nur belegbare Aussagen: Datei, Zeile, Testname oder Befehlsausgabe.
-- Du änderst keine Dateien im Repository: keinen Code, keine Regeln (`AGENTS.md`,
-  `GEMINI.md`, `docs/COLLABORATION.md`) und keine Wissens- oder DB-Dateien
-  (`docs/STATUS.md`, `docs/DECISIONS.md`, `docs/DATABASE.md`).
+- Du änderst keinen Code, keine Regeln (`AGENTS.md`, `GEMINI.md`,
+  `docs/COLLABORATION.md`, `docs/DECISIONS.md`, `docs/DATABASE.md`) und keine andere
+  Datei als `docs/STATUS.md`.

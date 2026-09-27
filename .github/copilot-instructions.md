@@ -9,10 +9,10 @@ Nicht überprüfbare Angaben als `UNKNOWN` kennzeichnen.
 
 Vervollständigung im Editor und Review jedes PRs nach der Checkliste unten. Eigene
 Umsetzung nur mit einem Auftrag (Issue-Formular „Begrenzte Aufgabe“), auf einem eigenen
-Branch und als Draft-PR. Umsetzer und Merger ist Codex; Claude Code ist Head der
-Datenbank, pflegt die Wissensdatenbank und löst Konflikte zwischen den Werkzeugen.
-Gemini berät nur. Im Beta-Betriebsmodus (`docs/COLLABORATION.md`) hilft Copilot Pro
-zusätzlich als Assistent und Reviewer.
+Branch und als Draft-PR. Umsetzer und Merger für Kerncode ist Codex; ChatGPT übernimmt
+neue Werkzeuge, Server und Infrastruktur; Kaan entwirft die Datenbank
+(`docs/DATABASE.md`) selbst; Claude Code besitzt `docs/COLLABORATION.md` und
+`docs/DECISIONS.md` und löst Konflikte zwischen den Werkzeugen.
 
 ## Projekt und Arbeitsweise
 

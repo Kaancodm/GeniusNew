@@ -3,86 +3,69 @@
 Ziel: So wenig Abstimmung wie möglich. Jede Sache hat **genau einen Verantwortlichen**:
 
 - **Code und Regeln:** der `main`-Zweig dieses Repositories. Codex setzt um und mergt.
-- **Wissen** (Stand, Entscheidungen, offene Fragen): die **Wissensdatenbank**.
-  **Claude Code** pflegt die repository-seitigen Wissensquellen; **NotebookLM** dient
-  als quellengestützte Auskunft.
-- **Datenbank im Code:** **Claude Code ist Head der Datenbank** (Design, Schema,
-  Migrationen, Pflicht-Review); Codex schreibt den Code.
+- **Wissen — Projektstand:** `docs/STATUS.md`, geführt von **Gemini Pro und
+  NotebookLM**.
+- **Wissen — Regeln und Entscheidungen:** `docs/COLLABORATION.md` (dieses Dokument) und
+  `docs/DECISIONS.md` gehören **ausschließlich Claude Code**.
+- **Datenbank im Code:** **Kaan entwirft `docs/DATABASE.md` selbst** (Design, Schema,
+  Migrationen); Claude Code prüft den Entwurf sicherheitstechnisch, Codex schreibt den
+  Code.
+- **Neue Werkzeuge, Server und Infrastruktur:** **ChatGPT** (siehe eigener Abschnitt
+  unten).
 - **Ordnung, Struktur und Konflikte zwischen den Plattformen:** **Claude Code**, mit
   Überschreibrecht gegenüber allen Werkzeugen.
 - **Entscheidungen:** Kaan. Kaan steht über allen, auch über Claude Code.
 
-Seit 27.09.2026 (Kaan) liegen Datenbank, Wissenspflege und die Pflicht-Reviews, die
-vorher Gemini Pro hatte, bei Claude Code. Gemini berät nur noch und ist kein Gate.
-
-## Temporärer Beta-Betriebsmodus — Kaan, 27.09.2026
-
-Bis Kaan diese Regel widerruft, gilt für die Arbeit bis zur technischen Beta-Reife:
-
-1. **Repository vor Erinnerung:** Vor einer Aufgabe werden `main`, offene PRs und deren
-   Basen geprüft. Ein neuerer GitHub-Stand schlägt ältere Übergaben, Chats und Plantexte.
-2. **Weiterarbeiten statt Leerlauf:** Ein klarer, bereits entschiedener Folgeschritt wird
-   nach grünem Vorgänger direkt begonnen. Gestoppt wird nur bei einem echten
-   Entscheidungs-, Sicherheits- oder technischen Blocker.
-3. **Copilot Pro als Assistent:** Copilot kann zusätzliche Reviews und klar begrenzte
-   Aufgaben übernehmen; ein Branch hat weiterhin genau einen Implementierer.
-4. **Claude Code erweitert:** Claude ist nicht nur Konfliktlöser. Kaan oder
-   Codex/ChatGPT dürfen Claude für größere Phasen, tiefere Architektur-/Security-Arbeit
-   oder bei echter Unsicherheit hinzuziehen. Claude bearbeitet dann einen eigenen, klar
-   abgegrenzten `claude/<thema>`-Branch und Draft-PR, mit denselben Tests, Demo- und
-   Refusal-Gates wie Codex.
-5. **Kaan bleibt letzte Instanz.** Security-Ausnahmen, Scope-Änderungen, der
-   öffentliche Beta-/Produktiv-Deploy, Secret-Rotation und neue externe Zugriffsrechte
-   bleiben bei Kaan.
-
-Diese temporäre Regel überstimmt für ihre Laufzeit ältere Sätze weiter unten, die
-Claude ausschließlich als Konflikt- oder Hilferuf-Rolle beschreiben.
+**Seit 27.09.2026 (Kaan):** `docs/COLLABORATION.md` und `docs/DECISIONS.md` ändert nur
+noch Claude Code; kein anderes Werkzeug, auch nicht ChatGPT im Auftrag. Kaan entwirft
+die Datenbank (`docs/DATABASE.md`) künftig selbst, nicht Gemini oder Claude. Ein
+vorheriger Entwurf (PR #64), der Gemini vollständig durch Claude als Head der Datenbank
+ersetzt hätte, ist **nicht übernommen** — er diente nur als Übergabestand. Siehe
+`docs/DECISIONS.md` für die Begründung.
 
 ## Rollen
 
 | Wer | Macht | Macht nicht |
 | --- | --- | --- |
-| **Kaan** | entscheidet, gibt die Ausnahmen frei (siehe unten), legt Tags an, mergt Claudes eigene PRs | — |
-| **NotebookLM** | **Wissensdatenbank und Auskunft für alle:** beantwortet Fragen zu Stand, Entscheidungen, Grenzen und **Datenbank-Schema** (aus `docs/DATABASE.md`) aus seinen verifizierten Quellen, jede Antwort mit Quellenangabe | Entscheidungen treffen, Inhalte ohne Quelle; einen Quellenstand als aktuell behaupten, wenn er `UNKNOWN` ist |
-| **Codex** (ChatGPT Pro) | setzt um und **mergt selbst**: ein Thema pro PR, Branch `codex/<thema>`, mit einem **Wissensblock** in der PR-Beschreibung (siehe unten) | `docs/STATUS.md`, `docs/DECISIONS.md` und `docs/DATABASE.md` ändern, einen DB-PR ohne `Claude DB Review: APPROVED` am exakten Head-SHA mergen, Ausnahmen ohne Kaans OK mergen, Tags anlegen |
-| **ChatGPT** (Chat) | plant, formuliert Prompts, erklärt und darf bei ausdrücklichem Auftrag von Kaan direkt im Repository arbeiten | Änderungen ohne Kaans Auftrag; geschützte Wissens-/DB-Dateien gegen ihre Zuständigkeit ändern |
+| **Kaan** | entscheidet, entwirft `docs/DATABASE.md` selbst, gibt die Ausnahmen frei (siehe unten), legt Tags an, mergt Claudes und ChatGPTs eigene PRs | — |
+| **Gemini Pro** | pflegt mit NotebookLM `docs/STATUS.md`; **reviewt jeden PR automatisch** (Gemini Code Assist, Maßstab `.gemini/styleguide.md`); ist **Pflicht-Zweitmeinung** bei den Ausnahmen und prüft Designs vorab bei Prozessgrenzen und Kryptografie. Kontext: `GEMINI.md` | Code ändern, `docs/COLLABORATION.md` oder `docs/DECISIONS.md` ändern, die Datenbank entwerfen oder freigeben |
+| **NotebookLM** | **Auskunft für alle:** beantwortet Fragen zu Stand, Entscheidungen, Grenzen und Datenbank-Schema (aus `docs/DATABASE.md`) aus seinen Quellen, jede Antwort mit Quellenangabe | Entscheidungen treffen, Inhalte ohne Quelle |
+| **Codex** (ChatGPT Pro) | setzt **Kerncode** um und **mergt selbst**: ein Thema pro PR, Branch `codex/<thema>`, mit einem **Wissensblock** in der PR-Beschreibung (siehe unten) | `docs/STATUS.md`, `docs/COLLABORATION.md`, `docs/DECISIONS.md` und `docs/DATABASE.md` ändern, einen DB-Code-PR ohne `Claude DB Review: APPROVED` mergen, Ausnahmen ohne Kaans OK mergen, Tags anlegen |
+| **ChatGPT** (Chat) | **neue Werkzeuge, laufende Server-Pflege, Dashboards und externe Integrationen** (eigener Abschnitt unten); plant, formuliert Prompts, erklärt | Kerncode (`geniusnew/`, `tests/`, `scripts/refusals.py`, `scripts/demo.*`, `schemas/`), `SECURITY.md`, `requirements.txt`, Governance-/Wissensdateien (siehe unten) ändern; Änderungen ohne Kaans Auftrag; selbst mergen |
 | **GitHub Copilot Pro** | Vervollständigung im Editor; Review jedes PRs nach der Checkliste in `.github/copilot-instructions.md` | eigene PRs ohne Auftrag |
-| **Gemini Pro** | **berät:** automatisches Review jedes PRs über Gemini Code Assist (Maßstab `.gemini/styleguide.md`), Zweitmeinung auf Anfrage. Kontext: `GEMINI.md` | Freigaben erteilen oder Merges blockieren; Code, Regeln, `docs/STATUS.md`, `docs/DECISIONS.md` oder `docs/DATABASE.md` ändern |
 | **Microsoft 365 Copilot** | Berichte, E-Mails, Folien aus dem OneDrive-Ordner `GeniusNew` | Inhalte erfinden, die dort nicht stehen |
-| **Claude Code** | **Head der Datenbank im Code, Wissenspfleger, Ordnungs- und Konfliktinstanz:** besitzt `docs/DATABASE.md`, `docs/STATUS.md`, `docs/DECISIONS.md` sowie die Regeln (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.gemini/*`, `docs/HANDOVER.md`, dieses Dokument); führt die in diesem Dokument verlangten Claude-Reviews durch (DB-PRs, Sicherheits-Review vor den Ausnahmen, Design-Vorprüfung), entscheidet Konflikte zwischen Werkzeugen verbindlich, darf jede Datei korrigieren, wenn sie den Regeln oder dem Code widerspricht, und **hilft, wenn Codex feststeckt**. Kontext: `CLAUDE.md` | Kaans Entscheidungen oder die Ausnahmen überstimmen; die eigene Arbeit selbst freigeben; Funktionen ohne Auftrag umsetzen (Auftrag: von Kaan oder hinzugezogen nach dem Beta-Betriebsmodus) |
+| **Claude Code** | **Ordnung, Struktur und Konfliktlöser zwischen den Plattformen, mit Überschreibrecht:** besitzt `docs/COLLABORATION.md` und `docs/DECISIONS.md` sowie die übrigen Regeln (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.gemini/*`, `docs/HANDOVER.md`); entscheidet Konflikte zwischen Werkzeugen verbindlich; reviewt Codex' DB-Code-PRs sicherheitstechnisch gegen `docs/DATABASE.md`; prüft Kaans Datenbank-Entwurf sicherheitstechnisch, entwirft ihn aber nicht selbst; darf jede Datei korrigieren, auch die von Gemini, wenn sie den Regeln oder dem Code widerspricht; **hilft, wenn Codex feststeckt** | Kaans Entscheidungen oder die Ausnahmen überstimmen; die eigene Arbeit selbst freigeben; `docs/DATABASE.md` selbst entwerfen; Funktionen umsetzen, außer um einen Konflikt aufzulösen |
 
 ## Die Wissensdatenbank
 
-**Inhalt:** `docs/STATUS.md` (Stand, Grenzen, nächste Schritte) und `docs/DECISIONS.md`
-(jede Entscheidung mit Datum, Begründung und Quelle). Diese beiden Dateien sind das
-Gedächtnis des Projekts. Nur Claude Code schreibt sie.
+**`docs/STATUS.md`** (Stand, Grenzen, nächste Schritte) pflegt weiterhin **Gemini**, mit
+NotebookLM als Auskunft. **`docs/COLLABORATION.md` und `docs/DECISIONS.md`** (jede
+Entscheidung mit Datum, Begründung und Quelle) gehören **Claude Code**. Beide Dateien
+zusammen sind das Gedächtnis des Projekts; niemand sonst schreibt sie.
 
 **Quellen in NotebookLM** (Notebook „GeniusNew“): `docs/STATUS.md`,
 `docs/DECISIONS.md`, `docs/DATABASE.md` (sobald sie existiert), `SECURITY.md`,
-`docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`, `AGENTS.md`. Das Repository ist öffentlich; Ziel ist die Einbindung als **Raw-GitHub-Links** auf
-die Rohdateien in `main`, zum Beispiel
+`docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`, `AGENTS.md`. Das Repository ist öffentlich, deshalb können die Quellen als Links auf
+die Rohdateien in `main` eingebunden werden, zum Beispiel
 `https://raw.githubusercontent.com/Kaancodm/GeniusNew/main/docs/STATUS.md`.
-Die tatsächliche Umstellung in NotebookLM ist ein **offener Setup-Punkt für Kaan**.
-Der Aktualisierungsstatus wird je Quelle einzeln belegt; bis zur Verifikation gilt er
-als `UNKNOWN`. Bei Widersprüchen ist das Repository am referenzierten Commit-SHA
-maßgeblich.
 
 **Wer fragt wen:** Jedes Werkzeug und Kaan fragen bei Wissensfragen zuerst NotebookLM,
 also „Was wurde zu X entschieden?“, „Warum ist Y so?“ oder „Was ist der nächste
 Schritt?“. Steht es dort nicht, ist es noch nicht entschieden. Dann geht die Frage an
-Kaan, und Claude Code trägt die Antwort in `docs/DECISIONS.md` ein.
+Kaan; Claude Code trägt die Antwort in `docs/DECISIONS.md` ein, Gemini spiegelt sie bei
+Bedarf in `docs/STATUS.md`.
 
-**Pflege nach jedem Merge** (Claude Code im Repository):
-1. Den Wissensblock des gemergten PRs lesen.
-2. `docs/STATUS.md` und bei Bedarf `docs/DECISIONS.md` auf einem Branch
-   `claude/wissen-<datum>` aktualisieren und einen PR öffnen. Ein solcher PR ändert nur
-   diese zwei Dateien.
-3. Codex mergt ihn, sobald `contracts` grün ist und kein einschlägiges Gate offen ist.
-4. NotebookLM-Quellen erst nach nachgewiesener Raw-Link-Aktualisierung als aktuell
-   markieren. Bis dahin bleibt der Status der jeweiligen Quelle `UNKNOWN`.
-   Widersprüche zwischen Dokumenten werden als Issue gemeldet.
+**Pflege nach jedem Merge:**
+1. **Gemini** liest den Wissensblock des gemergten PRs und aktualisiert `docs/STATUS.md`
+   auf einem Branch `gemini/wissen-<datum>`; ein solcher PR ändert nur diese Datei.
+   Gemini mergt ihn selbst, sobald `contracts` grün ist.
+2. **Claude Code** trägt neue Entscheidungen und Konfliktergebnisse in
+   `docs/DECISIONS.md` ein, auf einem eigenen `claude/<thema>`-Branch; Kaan mergt (siehe
+   „Konflikte“ unten).
+3. Die Quellen in NotebookLM aktualisieren und Widersprüche zwischen den Dokumenten als
+   Issue melden.
 
-## Die Datenbank im Code (Head: Claude Code)
+## Die Datenbank im Code (Design: Kaan)
 
 **Wozu:** Die Datenbank ist die **Grundlage für das Portal**. Das Portal ist die
 Web-Oberfläche, über die Nutzer Aufträge stellen, ihren Verlauf sehen und Freigebende
@@ -96,33 +79,27 @@ Principals, API-Key-Digests, Sitzungen, der Auftragsverlauf je Nutzer, die Rolle
 Freigebenden und Quoten.
 
 **Reihenfolge:**
-1. **Design (Claude):** Claude Code schreibt `docs/DATABASE.md` auf einem Branch
-   `claude/db-design`. Inhalt:
-   - **Betriebsort von Portal und Kern** im Vergleich, zum Beispiel Vercel gegen einen
-     eigenen Server. Das entscheidet über die Technik: Serverless hat keine dauerhafte
-     lokale Datei, und Worker-Isolation und Anker-Prozess brauchen einen echten Host.
-   - Die Techniken im Vergleich (mindestens SQLite aus der Standardbibliothek und ein
-     gehostetes PostgreSQL), mit Empfehlung.
+1. **Design (Kaan):** Kaan schreibt `docs/DATABASE.md` selbst. Inhalt:
+   - **Betriebsort von Portal und Kern** im Vergleich — bereits entschieden: Portal auf
+     Vercel, Kern auf eigenem Server (`docs/DECISIONS.md`, 26.09.2026).
+   - Die Technik — bereits entschieden: PostgreSQL mit `psycopg` (`docs/DECISIONS.md`,
+     26.09.2026).
    - Das Schema je Tabelle, auch für die Portal-Tabellen.
    - Die Migrationen, das Verhalten bei beschädigtem Speicher und der Umgang mit
      Zugangsdaten.
-2. **Entscheidung (Kaan):** Kaan wählt im PR Betriebsort und Technik. Claude Code trägt
-   die Entscheidung in `docs/DECISIONS.md` ein. Den Design-PR mergt Kaan: Er ist Claudes
-   eigener PR, Claude gibt ihn nicht selbst frei. Braucht die Technik eine neue
-   Abhängigkeit, ist das eine Ausnahme mit Kaans OK.
+2. **Sicherheits-Review (Claude Code):** Claude prüft den Entwurf gegen die harten
+   Vorgaben unten (Anker-Trennung, fail closed, keine Zugangsdaten im Repo) und meldet
+   Befunde im PR oder Issue. Kaan entscheidet über den Entwurf selbst; eine
+   AI-Freigabe braucht er dafür nicht, anders als bei den Umsetzungs-PRs unten.
 3. **Umsetzung (Codex), je ein PR:** (a) Ledger mit Ablauf, (b) wartende Jobs,
    (c) Audit-Kette, (d) Anker-Zustand, danach die Portal-Tabellen und (e) das Portal
-   selbst. Jeder DB-PR braucht zusätzlich zur grünen CI einen Claude-DB-Review auf dem
-   **exakten aktuellen Head-SHA**. Der Review-Wortlaut ist genau:
-   `Claude DB Review: APPROVED` oder `Claude DB Review: CHANGES REQUESTED`.
-   **DB-Merge-Gate:** `CI PASS → Claude DB Review: APPROVED am exakten Head-SHA →
-   ggf. Kaan-Gates (neue Dependency, SECURITY.md-Grenze, Tags) → Merge durch Codex`.
-   `CHANGES REQUESTED` oder eine Freigabe für einen älteren Head-SHA blockiert den Merge.
-   Einen DB-PR, den Claude selbst umgesetzt hat, gibt Kaan frei (keine Selbstfreigabe,
-   siehe „Der Ablauf eines Themas“).
-4. **Doku (NotebookLM):** `docs/DATABASE.md` ist als Raw-GitHub-Quelle vorgesehen;
-   bis die Quelle in NotebookLM verifiziert aktualisiert wurde, ist ihr Status
-   `UNKNOWN`. Fragen zum Schema gehen an NotebookLM, das Repository bleibt maßgeblich.
+   selbst. Jeder DB-Code-PR braucht zusätzlich zur grünen CI ein **Claude-DB-Review auf
+   dem exakten aktuellen Head-SHA**: `Claude DB Review: APPROVED` oder
+   `Claude DB Review: CHANGES REQUESTED`. `CHANGES REQUESTED` oder eine Freigabe für
+   einen älteren Head-SHA blockiert den Merge. Da Claude hier Codex' Code gegen Kaans
+   Entwurf prüft, nicht die eigene Arbeit, ist das keine Selbstfreigabe.
+4. **Doku (NotebookLM):** `docs/DATABASE.md` wird Quelle im Notebook; Fragen zum Schema
+   gehen an NotebookLM.
 
 **Harte Vorgaben für das Design:**
 - **Der Anker liegt nicht in derselben Datenbank wie die Audit-Kette** und nicht unter
@@ -141,44 +118,66 @@ Freigebenden und Quoten.
   Anker-Rückschnitt), werden je PR mit umgekehrtem Test und angepasster Tabelle
   geschlossen.
 
-**Ein DB-PR** ist jeder PR, der Speicher-Code, Schema, Migrationen oder
-`docs/DATABASE.md` ändert.
+**Ein DB-Code-PR** ist jeder PR von Codex, der Speicher-Code, Schema oder Migrationen
+ändert; er braucht das Gate aus Schritt 3. `docs/DATABASE.md` selbst schreibt und
+ändert Kaan.
+
+## ChatGPT: neue Werkzeuge, Server und Infrastruktur
+
+**Wozu:** Alles rund um Betrieb, Werkzeuge und externe Integrationen, ohne die
+Kernlogik zu berühren. Solange kein Server existiert, ist das Setup-Arbeit; sobald
+einer läuft, ist es laufende Pflege.
+
+**Aufgaben:**
+- **Server-Pflege**, laufend: systemd-Units, Reverse-Proxy, TLS, Backups,
+  Restore-Abläufe, sobald ein Server existiert.
+- **Neue Werkzeuge und Dashboards** — eine offene Kategorie, zum Beispiel Warp,
+  spätere Monitoring- oder Dashboard-Tools.
+- **Externe Integrationen:** PostgreSQL-Hosting, Vercel, OneDrive-Ablage,
+  NotebookLM-Setup.
+- **NotebookLM-Lesezugriff** wie die anderen Werkzeuge, dazu ein **eigenes
+  Recherche-Notebook** nur für ChatGPT — kein Teil der projektweiten Wissensdatenbank
+  und kein Governance-Dokument.
+
+**Branch und Merge:** eigener Branch `chatgpt/<thema>`, Draft-PR, mit Wissensblock.
+ChatGPT mergt nicht selbst; Kaan mergt, nach Copilot-Review und, bei Deploy- oder
+Netz-Themen, nach Claudes Sicherheitsreview.
+
+**Darf nicht ändern:** `geniusnew/`, `tests/`, `scripts/refusals.py`,
+`scripts/demo.*`, `schemas/`, `SECURITY.md`, `requirements.txt`, `docs/DATABASE.md`,
+sowie alle Governance- und Wissensdateien (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`,
+`.gemini/*`, `.github/copilot-instructions.md`, `docs/COLLABORATION.md`,
+`docs/DECISIONS.md`, `docs/STATUS.md`, `docs/HANDOVER.md`).
 
 ## Der Ablauf eines Themas
 
-1. Kaan wählt den nächsten Schritt; die Auskunft dazu gibt NotebookLM. Kaan gibt ihn
-   Codex mit Prompt 1 aus `docs/HANDOVER.md`.
-2. Codex öffnet einen Draft-PR `codex/<thema>` und schreibt den Plan in die
-   PR-Beschreibung. Ändert das Thema eine Prozessgrenze oder Kryptografie, fordert Codex
-   vor der Implementierung eine Claude-Design-Vorprüfung im PR an.
-3. **Review:** Copilot reviewt nach seiner Checkliste. Claude Code reviewt, wenn dieses
-   Dokument es verlangt, insbesondere bei DB-PRs, Kaan-Ausnahmen, Konflikten und
-   ausdrücklich zugewiesenen Sicherheits-/Designfragen. Ein verpflichtender
-   Claude-Review nennt den **exakten Head-SHA**. Nach einer Änderung am Head ist eine
-   ältere Freigabe nicht mehr ausreichend. Gemini Code Assist kommentiert zusätzlich
-   automatisch; seine Befunde sind Hinweise, kein Gate.
-   **Keine Selbstfreigabe:** Einen Review, den dieses Dokument von Claude verlangt, gibt
-   Claude nicht für die eigene Arbeit ab. Bei Claudes eigenen PRs ersetzt Kaans
-   ausdrückliche Freigabe am exakten Head-SHA den Claude-Review.
-4. **Codex mergt selbst**, sobald die CI grün ist (`contracts`), der Wissensblock
-   ausgefüllt ist und kein blockierender Review-Befund offen ist. Ein
-   `Claude DB Review: CHANGES REQUESTED` blockiert einen DB-PR; Copilot-Befunde zu den
-   Punkten seiner Checkliste müssen behoben oder im Thread nachvollziehbar entkräftet
-   sein. Kaans ausdrückliches OK braucht es für eine neue Abhängigkeit, eine geänderte
-   Grenze aus `SECURITY.md` (offen gehaltener Test umgekehrt) und Tags. Bei diesen
-   Ausnahmen muss vorher ein Claude-Sicherheits-Review am exakten Head-SHA im PR stehen.
-   Für **DB-PRs** gilt verbindlich:
-   `CI PASS → Claude DB Review: APPROVED am exakten Head-SHA → ggf. Kaan-Gates
-   (neue Dependency, SECURITY.md-Grenze, Tags) → Merge durch Codex`.
-5. Claude Code überträgt den Wissensblock in die repository-seitige Wissensbasis
-   (siehe oben); der NotebookLM-Quellenstatus bleibt bis zur verifizierten
-   Raw-Link-Aktualisierung ggf. `UNKNOWN`.
+1. Kaan wählt den nächsten Schritt; die Auskunft dazu gibt NotebookLM. Kerncode geht an
+   Codex (Prompt 1 aus `docs/HANDOVER.md`), Tools/Server/Infrastruktur an ChatGPT,
+   Regel- oder Konfliktfragen an Claude Code.
+2. Der Umsetzer öffnet einen Draft-PR auf dem eigenen Branch-Präfix
+   (`codex/<thema>`, `chatgpt/<thema>` oder `claude/<thema>`) und schreibt den Plan in
+   die PR-Beschreibung. Ändert das Thema eine Prozessgrenze oder Kryptografie, fragt
+   Codex im PR mit `@gemini-code-assist` nach einer Design-Vorprüfung, bevor Code
+   entsteht.
+3. **Gemini reviewt automatisch**, Copilot zusätzlich. Ein neues Review nach
+   Änderungen fordert der Umsetzer mit `/gemini review` im PR an.
+4. **Codex mergt eigene PRs selbst**, sobald die CI grün ist (`contracts`), der
+   Wissensblock ausgefüllt ist und kein blockierender Review-Befund offen ist.
+   Blockierend sind Gemini-Befunde der Stufe **Critical** oder **High** und
+   Copilot-Befunde zu den Punkten der Checkliste. Kaans ausdrückliches OK braucht es
+   nur für die Ausnahmen: eine neue Abhängigkeit, eine geänderte Grenze aus
+   `SECURITY.md` (offen gehaltener Test umgekehrt) und Tags. Bei diesen Ausnahmen muss
+   vorher ein Gemini-Sicherheits-Review im PR stehen. **DB-Code-PRs** brauchen
+   zusätzlich `Claude DB Review: APPROVED` am exakten Head-SHA (siehe oben). **PRs von
+   ChatGPT und Claude mergt Kaan**, keines der beiden mergt selbst.
+5. Gemini überträgt den Wissensblock in `docs/STATUS.md`; Claude Code trägt
+   Entscheidungen und Konfliktergebnisse in `docs/DECISIONS.md` ein.
 
 **Kommunikation läuft über den PR**, nicht über Kopieren zwischen Chats. Plan,
-Rückfragen an Claude Code, Reviews, Begründungen und der Wissensblock stehen im PR. Jedes
-Werkzeug und Kaan sehen so denselben Stand.
+Rückfragen an Gemini oder Claude, Reviews, Begründungen und der Wissensblock stehen im
+PR. Jedes Werkzeug und Kaan sehen so denselben Stand.
 
-### Wissensblock (Pflicht in jeder PR-Beschreibung von Codex)
+### Wissensblock (Pflicht in jeder PR-Beschreibung von Codex, ChatGPT und Claude)
 
 ```text
 ## Für die Wissensdatenbank
@@ -193,7 +192,7 @@ Werkzeug und Kaan sehen so denselben Stand.
 
 Ein Konflikt liegt vor, wenn zwei Werkzeuge sich widersprechen, zum Beispiel:
 
-- Copilot meldet einen blockierenden Befund, Codex hält ihn für falsch;
+- Gemini lehnt einen PR ab, Codex hält den Befund für falsch;
 - ein Dokument widerspricht dem Code oder einem anderen Dokument (etwa `STATUS.md`,
   `DATABASE.md` und `SECURITY.md` untereinander);
 - unklar ist, wem eine Datei oder eine Aufgabe gehört.
@@ -203,7 +202,7 @@ ihn an Claude Code weiter:
 
 ```text
 KONFLIKT GeniusNew
-Wer gegen wen: <z. B. Codex gegen Copilot>
+Wer gegen wen: <z. B. Codex gegen Gemini>
 Wo: <PR/Issue/Datei:Zeile>
 Position A: <1–3 Sätze mit Beleg>
 Position B: <1–3 Sätze mit Beleg>
@@ -214,13 +213,11 @@ Claude Code entscheidet anhand von Code, Tests, `AGENTS.md` und `docs/DECISIONS.
 begründet die Entscheidung im PR oder Issue. **Jede Entscheidung endet mit einem fertigen
 Prompt für jedes betroffene Werkzeug**, den Kaan nur noch kopiert: was zu tun ist, in
 welcher Datei, bis wann es als erledigt gilt. Die Entscheidung ist für alle Werkzeuge
-verbindlich; Claude Code trägt sie in `docs/DECISIONS.md` ein. Wo eine Datei korrigiert
-werden muss, darf Claude Code sie selbst ändern, auch Dateien anderer Werkzeuge
-(Überschreibrecht). Nicht
-überschreiben darf Claude Code Kaans Entscheidungen und die Ausnahmen (neue
-Abhängigkeit, Grenze aus `SECURITY.md`, Tags). Das bleibt Kaans Sache. Claudes eigene
-PRs mergt Kaan. Ausnahme: Wissens-PRs `claude/wissen-*`, die nur `docs/STATUS.md` und
-`docs/DECISIONS.md` ändern, mergt Codex bei grüner CI (siehe „Die Wissensdatenbank“).
+verbindlich; Claude Code trägt sie selbst in `docs/DECISIONS.md` ein. Wo eine Datei
+korrigiert werden muss, darf Claude Code sie selbst ändern, auch die von Gemini
+(Überschreibrecht). Nicht überschreiben darf Claude Code Kaans Entscheidungen und die
+Ausnahmen (neue Abhängigkeit, Grenze aus `SECURITY.md`, Tags, Kaans eigener
+Datenbank-Entwurf). Das bleibt Kaans Sache. Claudes eigene PRs mergt Kaan.
 
 ## Wann Codex Claude um Hilfe bittet
 
@@ -252,8 +249,9 @@ um; Claude pusht nur, wenn Kaan es ausdrücklich sagt.
 
 | Gerät | Arbeit |
 | --- | --- |
-| iPad Pro | ChatGPT, Claude, NotebookLM, GitHub (auch Copilot-Aufträge über GitHub Mobile), OneDrive/OneNote, Reviews |
+| iPad Pro | ChatGPT, Gemini, NotebookLM, GitHub (auch Copilot-Aufträge über GitHub Mobile), OneDrive/OneNote, Reviews |
 | Laptop (Linux/WSL) | Codex, Git-Checkout, lokale Tests; ein Implementierer je Branch, Tests nacheinander |
+| Server (sobald vorhanden) | ChatGPT pflegt ihn laufend (systemd, Backups, Restore); Zugangsdaten nur in privater Doku |
 
 Zugriff vom iPad auf den Laptop über SSH (z. B. mit Tailscale) in eine WSL-Sitzung mit
 `tmux`. Hostnamen, Zugangsdaten und private Adressen gehören nur in die private
@@ -270,10 +268,11 @@ Schritt, weil es Workflow-Schreibrechte braucht.
 
 Ordner `GeniusNew` mit genau vier Dateien, die nach jeder Pflege der Wissensdatenbank
 ersetzt werden: `STATUS.md`, `DECISIONS.md`, `SECURITY.md`, `ROADMAP-V01.md`. Keine
-eigenen Kopien bearbeiten: Was dort falsch ist, korrigiert Claude Code in der
-Wissensdatenbank, danach werden die Dateien neu abgelegt. Die Git-Arbeitskopie liegt
-**außerhalb** des synchronisierten OneDrive-Ordners, damit sich Synchronisation und Git
-nicht in die Quere kommen. In OneNote ein Notizbuch `GeniusNew` mit den Abschnitten
-`Start`, `Entscheidungen`, `Reviews` und `Ideen`; Aufgaben und Freigaben werden aus
-GitHub verlinkt. Quellenpakete für NotebookLM oder Claude Code tragen Datum und vollen
-Commit-SHA; ein Merge aktualisiert statische Uploads nicht von selbst.
+eigenen Kopien bearbeiten: Was an `STATUS.md` falsch ist, korrigiert Gemini, was an
+`DECISIONS.md` falsch ist, korrigiert Claude Code; danach werden die Dateien neu
+abgelegt. Die Git-Arbeitskopie liegt **außerhalb** des synchronisierten
+OneDrive-Ordners, damit sich Synchronisation und Git nicht in die Quere kommen. In
+OneNote ein Notizbuch `GeniusNew` mit den Abschnitten `Start`, `Entscheidungen`,
+`Reviews` und `Ideen`; Aufgaben und Freigaben werden aus GitHub verlinkt. Quellenpakete
+für NotebookLM, Gemini oder Claude Code tragen Datum und vollen Commit-SHA; ein Merge
+aktualisiert statische Uploads nicht von selbst.

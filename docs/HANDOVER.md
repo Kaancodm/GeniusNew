@@ -1,49 +1,9 @@
 # Übergabe zwischen KI-Werkzeugen
 
-Block 0 ist der aktuelle Auftrag bis zur Beta. Dazu zwei Prompts zum Kopieren: einer
-übergibt GeniusNew an ein anderes Werkzeug (ChatGPT/Codex, GitHub Copilot, Gemini,
-Microsoft 365 Copilot), der andere verlangt von einem Werkzeug eine Übergabe, wenn es
-fertig ist. Die Zahlen und den Stand im ersten Prompt vor dem Kopieren aus
-`docs/STATUS.md` aktualisieren.
-
-## 0. Aktueller Auftrag bis Beta
-
-Dieser Block ist die erste Übergabe an Claude Code, Codex oder Copilot, solange Kaan
-nichts anderes sagt:
-
-```text
-GeniusNew läuft im temporären Beta-Betriebsmodus von Kaan (27.09.2026).
-
-Lies zuerst den aktuellen Repository-Stand, nicht alte Chat-Zusammenfassungen:
-1. git fetch
-2. main / voller SHA
-3. offene PRs und ihre Basen
-4. AGENTS.md und docs/COLLABORATION.md
-5. SECURITY.md und die für die Aufgabe relevanten Tests
-
-Vorrangige Regeln:
-- Ziel: ohne unnötige Stopps bis technisch beta-ready weiterentwickeln.
-- Neuer GitHub-Stand schlägt alte Übergaben oder alte Branches.
-- Gemini berät nur. DB-PRs brauchen `Claude DB Review: APPROVED` am exakten Head-SHA;
-  kein Werkzeug gibt die eigene Arbeit in einem Pflicht-Review frei.
-- Copilot Pro darf als Assistent/Reviewer genutzt werden.
-- Claude Code darf bei größeren Phasen, Architektur/Security und Unsicherheit aktiv
-  mitarbeiten; nicht nur auf formalen Hilferuf.
-- Ein Implementierer pro Branch. Fail closed. Keine Secrets. Keine Tests abschwächen.
-- Nur tatsächlich ausgeführte Prüfungen als bestanden melden.
-- Öffentlicher Deploy/Release erst mit Kaans ausdrücklichem OK.
-
-Wenn du Claude Code bist:
-- Prüfe zuerst, ob dein bisheriger Branch oder deine bisherigen Regeln veraltet sind.
-- Arbeite nie von einer älteren Baseline weiter, wenn main inzwischen weiter ist.
-- Bei größeren Aufgaben eigenen claude/<thema>-Branch vom aktuellen main verwenden.
-- Übergib am Ende PR, Head-SHA, tatsächlich gelaufene Tests/Demo/Refusal-Checks und
-  verbleibende Blocker.
-
-Wenn du Codex/ChatGPT bist:
-- Kleine klare Schritte direkt erledigen.
-- Claude bei größeren zusammenhängenden Phasen oder echter Unsicherheit hinzuziehen.
-```
+Zwei Prompts zum Kopieren: einer übergibt GeniusNew an ein anderes Werkzeug
+(ChatGPT/Codex, GitHub Copilot, Gemini, Microsoft 365 Copilot), der andere verlangt von
+einem Werkzeug eine Übergabe, wenn es fertig ist. Die Zahlen und den Stand im ersten
+Prompt vor dem Kopieren aus `docs/STATUS.md` aktualisieren.
 
 ## 1. Übergabe geben
 
@@ -85,6 +45,6 @@ Keine Secrets, keine Tokens. Nur Aussagen, die du belegen kannst (SHA, PR-Link,
 Befehlsausgabe).
 ```
 
-Die Antwort auf Prompt 2 geht an Claude Code. Claude überträgt sie in die
-Wissensdatenbank (`docs/STATUS.md`, `docs/DECISIONS.md`; NotebookLM liest daraus), bevor
-das nächste Werkzeug Prompt 1 bekommt.
+Die Antwort auf Prompt 2 geht an Gemini Pro und Claude Code. Gemini überträgt sie nach
+`docs/STATUS.md` und NotebookLM, Claude Code nach `docs/DECISIONS.md`, bevor das
+nächste Werkzeug Prompt 1 bekommt.

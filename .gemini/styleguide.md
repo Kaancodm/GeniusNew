@@ -1,13 +1,12 @@
 # Review-Leitfaden für Gemini Code Assist
 
 GeniusNew ist ein Zero-Trust-Agentensystem in Python. Regeln: `AGENTS.md`, Rollen:
-`docs/COLLABORATION.md`. Reviews bitte **auf Deutsch**. Gemini berät: Die Befunde sind
-Hinweise, kein Merge-Gate, und Gemini erteilt keine Freigaben (`GEMINI.md`).
+`docs/COLLABORATION.md`. Reviews bitte **auf Deutsch**.
 
 ## Schweregrad
 
-- **Critical / High: muss beantwortet werden.** Codex behebt den Befund oder begründet
-  im Thread, warum er nicht zutrifft.
+- **Critical / High: blockiert den Merge.** Codex behebt den Befund oder begründet im
+  Thread, warum er nicht zutrifft.
 - **Medium / Low: Vorschlag.** Er darf offen bleiben.
 
 ## Immer prüfen
@@ -29,14 +28,16 @@ Hinweise, kein Merge-Gate, und Gemini erteilt keine Freigaben (`GEMINI.md`).
    `requirements.txt` hash-gepinnt? Ohne Kaans OK gilt das als *High*.
 8. **Wissensblock:** Enthält die Beschreibung eines Codex-PRs den ausgefüllten Block
    „## Für die Wissensdatenbank“? Fehlt er: *High*. Ändert ein Codex-PR
-   `docs/STATUS.md` oder `docs/DECISIONS.md`? Diese Dateien gehören Claude Code: *Medium*.
+   `docs/STATUS.md`? Diese Datei gehört Gemini: *Medium*. Ändert er
+   `docs/COLLABORATION.md`, `docs/DECISIONS.md` oder `docs/DATABASE.md`? Diese Dateien
+   gehören Claude Code beziehungsweise Kaan, nicht Codex: *High*.
 
-9. **DB-PRs** (Speicher-Code, Schema, Migrationen, `docs/DATABASE.md`): Liegt der
-   Anker in derselben Datenbank oder unter denselben Zugangsdaten wie die Audit-Kette?
-   *Critical*. Startet der Dienst bei beschädigtem oder fehlendem Speicher still bei
-   null? *Critical*. Stehen Zugangsdaten oder DB-Dateien im Repository? *Critical*.
-   Weicht das Schema von `docs/DATABASE.md` ab? *High*. Die Freigabe eines DB-PRs gibt
-   nicht Gemini, sondern Claude Code (`Claude DB Review: APPROVED` am exakten Head-SHA).
+9. **DB-Code-PRs** (Speicher-Code, Schema, Migrationen): Liegt der Anker in derselben
+   Datenbank oder unter denselben Zugangsdaten wie die Audit-Kette? *Critical*. Startet
+   der Dienst bei beschädigtem oder fehlendem Speicher still bei null? *Critical*.
+   Stehen Zugangsdaten oder DB-Dateien im Repository? *Critical*. Weicht das Schema von
+   `docs/DATABASE.md` ab? *High*. Die Freigabe für diese PRs gibt Claude Code
+   (`Claude DB Review: APPROVED`/`CHANGES REQUESTED`), nicht Gemini.
 
 ## Nicht bemängeln
 
