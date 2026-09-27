@@ -1,0 +1,5 @@
+name: GeniusNew - Python Setup
+command: python3 -m venv .venv && . .venv/bin/activate && python3 -m pip install --require-hashes -r requirements.txt
+tags: ["geniusnew", "setup", "python"]
+description: "Erstellt die lokale virtuelle Umgebung und installiert ausschließlich die hash-gepinnten Repository-Abhängigkeiten."
+shells: ["bash"]
