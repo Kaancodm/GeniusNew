@@ -8,7 +8,10 @@ widersprechen, hat das Repository recht. Maßgeblich bleiben `SECURITY.md`,
 
 Angelegt auf `main` `81785c7cd2ee090aab353eea39545f22efacb1ad` im temporären
 Beta-Betriebsmodus (`AGENTS.md`, Kaan, 27.09.2026). Offene PRs zu diesem Zeitpunkt:
-#56 (DB-Design), #57 (Seccomp), #58 (Beta-Regeln), dazu die Altlasten #32 und #43.
+#56 (DB-Design), #57 (Seccomp), #58 (Beta-Regeln), dazu die Altlasten #32 und #43. Die
+parallel entstandene Fassung #60 (`docs/BETA-READINESS.md`) ist hier zusammengeführt:
+Abgleich der Ledger gegen die Kette (B6), Mindestziel für A2, Restore-Weg (C5) und die
+Frage, ob das Portal zur Beta gehört.
 
 ## Ziel von v0.2
 
@@ -51,7 +54,7 @@ anpassen.
 | # | Gate | Nachweis | Stand |
 | --- | --- | --- | --- |
 | A1 | Prozessstart im Worker kernel-seitig gesperrt (Seccomp), andere Plattformen fail closed | `test_a_spawn_below_the_audit_hook_…` umgekehrt | #57 (Codex) |
-| A2 | Worker liest keine Host-Dateien: eigener unprivilegierter OS-Nutzer und Landlock-Allowlist (nur Job-Verzeichnis, Python-Laufzeit lesend); ohne Landlock-Unterstützung fail closed | `test_a_read_outside_the_temporary_directory_…` umgekehrt | offen |
+| A2 | Worker liest keine Host-Dateien: eigener unprivilegierter OS-Nutzer und Landlock-Allowlist (nur Job-Verzeichnis, Python-Laufzeit lesend); ohne Landlock-Unterstützung fail closed. **Mindestziel**, falls Kaan die volle Lösung verschiebt: Root-Secret, DB-Zugangsdaten und Ankerzustand sind für den Worker nicht lesbar | `test_a_read_outside_the_temporary_directory_…` umgekehrt; Mindestziel: Test „Worker liest die Secret-Datei“ wird abgelehnt | offen |
 
 ### B — Persistenz (nach `docs/DATABASE.md`)
 
@@ -63,17 +66,18 @@ anpassen.
 | B3 | Annahme-Ledger persistent, Annahme nur aus `EXECUTION_COMMITTED` | Ledger-Grenztest in `test_verifier.py` umgekehrt | offen |
 | B4 | Wartende Jobs und Approval-Speicher persistent, append-only, verzweigungsfrei | Neustart verliert keinen wartenden Job; verbrauchter Token bleibt verbraucht | offen |
 | B5 | Audit-Kette persistent; signierter Kopf in derselben Transaktion; Neustart verankert nur bereits signierte Köpfe nach | Per SQL angehängtes Event → Start verweigert | offen |
-| B6 | Absturztest: Dienst wird an jeder Zustandsgrenze hart beendet (`SIGKILL`) und neu gestartet | kein Doppellauf, keine Doppelannahme, Kette verifiziert | offen |
+| B6 | Ledger und Approval-Speicher **manipulationssichtbar**: jede sicherheitsrelevante Zeile und ihr Audit-Event in derselben Transaktion; die Startprüfung gleicht beide Richtungen gegen die verankerte Kette ab (`acceptance_ledger` ↔ `RESULT_ACCEPTED`, `job_ledger` ↔ `HANDOFF_ADMITTED`, Approval-Records ↔ `approval_record_hash`) | Per SQL gelöschte Ledger-Zeile oder eingefügter `GRANTED`-Record → Start verweigert | offen |
+| B7 | Absturztest: Dienst wird an jeder Zustandsgrenze hart beendet (`SIGKILL`) und neu gestartet | kein Doppellauf, keine Doppelannahme, Kette verifiziert | offen |
 
 ### C — Betrieb des Kerns
 
 | # | Gate | Nachweis | Stand |
 | --- | --- | --- | --- |
-| C1 | **Server-Einstieg** statt nur Demo: `python -m geniusnew serve` liest Root-Secret, Policy, DB- und Anker-Verbindung ausschließlich aus serverseitiger Konfiguration; das Demo-Secret wird außerhalb der Demo abgelehnt | Refusal-Tests für jede fehlende/ungültige Einstellung | offen |
+| C1 | **Server-Einstieg** statt nur Demo: `python -m geniusnew serve` liest Root-Secret, Policy, DB- und Anker-Verbindung ausschließlich aus serverseitiger Konfiguration; das Demo-Secret wird außerhalb der Demo abgelehnt | Refusal-Tests für jede fehlende/ungültige Einstellung | #61 (Claude); DB-Verbindung folgt mit B1 |
 | C2 | Anker als eigener Dienst unter eigenem OS-Nutzer, Lebenszyklus außerhalb des Kerns, signierte Anker-Antworten mit Nonce (Teile aus #32, neu auf `main` gebaut) | Anker-Rückschnitt-Grenztest umgekehrt oder neu begründet | offen |
 | C3 | Rolle „Freigebende“ mit eigener HTTP-Route; keine Selbstfreigabe | Refusal-Tests für fremde Rolle, eigene Aufträge, Doppelentscheidung | offen |
 | C4 | HTTP-Härtung: Body-Limit, Timeouts, Rate-Limit pro API-Key; TLS über Reverse-Proxy mit Beispielkonfiguration in `docs/` | Tests für Limits; Doku | offen |
-| C5 | Betriebsanleitung: systemd-Units (Kern, Anker, Nutzer getrennt), Backup und Restore von DB und Anker-Zustand, Ablauf der Schlüsselrotation | Doku + einmal durchgespielter Restore gegen die CI-Datenbank | offen |
+| C5 | Betriebsanleitung: systemd-Units (Kern, Anker, Nutzer getrennt), Backup und Restore von DB und Anker-Zustand, Ablauf der Schlüsselrotation. Ein Backup, das hinter dem Anker liegt, startet nicht (richtig so); der auditierte Weg zurück in den Betrieb ohne stilles Zurücksetzen des Ankers braucht Kaans Entscheidung | Doku + einmal durchgespielter Restore gegen die CI-Datenbank | offen |
 
 ### D — Portal (Vercel, nach `docs/MIGRATION-MATRIX.md` neu gebaut)
 
@@ -93,8 +97,12 @@ anpassen.
 
 ## Reihenfolge
 
-A1 → B0 → B1 → B2 → B3 → B4 → B5 → B6 → C1 → C2 → C3 → C4 → A2 → D1 → D2 → D3 → C5 →
-E1 → E2 → E3.
+A1 → B0 → B1 → B2 → B3 → B4 → B5 → B6 → B7 → C1 → C2 → C3 → C4 → A2 → D1 → D2 → D3 →
+C5 → E1 → E2 → E3.
+
+Zuständigkeit (Vorschlag, je Branch ein Implementierer): Codex B1–B4, C3, C4; Claude C1
+(#61), C2 (Neuaufbau aus #32) und das Design von A2; B5 und B6 Claude (Security) mit
+Codex; E2 prüft Claude, E3 und jeder Deploy bleiben bei Kaan.
 
 A2 und C2 hängen am selben Betriebsmodell (eigene OS-Nutzer) und können parallel zu B
 laufen, wenn ein zweiter Implementierer frei ist. Ein Branch hat immer genau einen
@@ -106,3 +114,5 @@ Implementierer.
 2. Portal→Kern-Authentisierung: signierte Requests (Vorschlag, ohne neue Abhängigkeit
    über Ed25519) oder mTLS.
 3. Zielplattform des Servers (Distribution, Kernel ≥ 5.13 für Landlock).
+4. Gehört das Portal (D1–D3) zur Beta, oder ist die Beta zunächst die Kern-API und das
+   Portal ein eigener Meilenstein danach (Vorschlag aus #60)?
