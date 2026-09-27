@@ -34,7 +34,7 @@ check_cmd() {
   shift
   if command -v "$name" >/dev/null 2>&1; then
     local version
-    version="$("$@" 2>/dev/null | head -n 1 || true)"
+    version="$($@ 2>/dev/null | head -n 1 || true)"
     printf 'CHECK %s PRESENT %s\n' "$name" "${version:-version-unknown}"
   else
     printf 'CHECK %s MISSING\n' "$name"
