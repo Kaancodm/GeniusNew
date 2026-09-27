@@ -32,7 +32,7 @@ Der Python-Worker:
   und keine fremden Prozesse signalisieren;
 - erhält **vor dem Python-Audit-Hook einen Seccomp-Filter**. Der Kernel beendet das Kind
   bei `fork`, `vfork`, `execve`, `execveat`, `clone` ohne `CLONE_THREAD` sowie
-  bei einer fremden Syscall-ABI. Auf x86_64 werden zusätzlich x32-Syscalls abgelehnt.
+  bei einer fremden Syscall-ABI. x32-Syscalls werden ebenfalls abgelehnt.
   `clone3` bekommt `ENOSYS`, weil dessen Flags in einem Speicherbereich liegen, den
   classic BPF nicht lesen kann; libc kann dadurch auf `clone` zurückfallen. Threads
   bleiben erlaubt;
@@ -48,7 +48,7 @@ Eine erkannte verbotene Operation ergibt ein signiertes Ergebnis
 `FAILED / RESOURCE_EXHAUSTED`. Worker-Ausnahmen ergeben `FAILED / WORKER_FAILED`;
 der Ausnahmetext überschreitet die Prozessgrenze nicht.
 
-Der Filter wird nur unter Linux auf x86_64 oder aarch64 mit 64-Bit-Interpreter
+Der Filter wird derzeit nur unter Linux auf x86_64 mit 64-Bit-Interpreter
 unterstützt. Überall sonst verweigert `IsolatedWorkerRunner` die Ausführung fail closed,
 genau wie bei fehlenden POSIX-Ressourcenlimits.
 
@@ -65,8 +65,7 @@ genau wie bei fehlenden POSIX-Ressourcenlimits.
   gestartetes Programm außerhalb des Job-Verzeichnisses schreiben kann.
 - Ein Worker darf weiterhin einen Thread starten.
 - Die Filterregeln werden zusätzlich mit rohen Syscalls in Wegwerfprozessen geprüft:
-  `fork`, `vfork`, `execve`, `execveat`, `clone`, `clone3`, fremde ABI und
-  auf x86_64 x32. Ein gewöhnlicher `getpid`-Syscall dient als Kontrolle.
+  `fork`, `vfork`, `execve`, `execveat`, `clone`, `clone3`, fremde ABI und x32. Ein gewöhnlicher `getpid`-Syscall dient als Kontrolle.
 - Das Kind darf weder die Elternumgebung durch `/proc` lesen noch seine Ressourcenlimits
   ersetzen.
 - Zeitlimit, Ressourcenlimits, Fehlertext-Redaktion und der Elternprozess-Ergebnisvertrag
