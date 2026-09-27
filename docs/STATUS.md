@@ -1,6 +1,6 @@
 # GeniusNew — Projektstand
 
-**Stand: 26.09.2026.** Teil der Wissensdatenbank, geführt von Gemini Pro und NotebookLM
+**Stand: 26.09.2026.** Teil der Wissensdatenbank, geführt von Claude Code, mit NotebookLM als Auskunft
 (`docs/COLLABORATION.md`); Entscheidungen stehen in `docs/DECISIONS.md`. Dieses Dokument ist in sich geschlossen gedacht: als Quelle für
 NotebookLM, Microsoft 365 Copilot oder jeden anderen Assistenten, der das Repository
 nicht selbst lesen kann. Verbindlich bleiben der Code, `SECURITY.md` und
@@ -83,11 +83,11 @@ Vollständig in `SECURITY.md`. Die wichtigsten:
 1. Tag `v0.1` auf `3a0e1bc`: **erledigt** (26.09.2026).
 2. `docs/STATUS.md` in NotebookLM als Quelle hochladen und in OneDrive/SharePoint für
    Microsoft 365 Copilot ablegen.
-3. **Datenbank-Design (Gemini Pro, Head der Datenbank):** `docs/DATABASE.md` mit
+3. **Datenbank-Design (Claude Code, Head der Datenbank):** `docs/DATABASE.md` mit
    Schema (auch für das Portal) und Migrationen, nach den Korrekturen aus Issue #44.
    **Entschieden (Kaan, 26.09.2026):** Portal auf Vercel, Kern auf eigenem Server,
    PostgreSQL mit `psycopg`, Portal-Passwörter mit `argon2-cffi` (`docs/DECISIONS.md`).
-4. **Datenbank umsetzen (Codex, je ein PR mit Gemini-Freigabe):** Job- und
+4. **Datenbank umsetzen (Codex, je ein PR mit `Claude DB Review: APPROVED`):** Job- und
    Annahme-Ledger mit Ablauf, wartende Jobs, Audit-Kette, Anker-Zustand in einem
    eigenen Speicher, getrennt von der Kette.
 5. **Portal aufbauen (Codex, auf der Datenbank):** Nutzer, Sitzungen,
@@ -105,24 +105,25 @@ Vollständig in `SECURITY.md`. Die wichtigsten:
 
 ## Zusammenarbeit der Werkzeuge
 
-Ab 26.09.2026 gilt `docs/COLLABORATION.md`. **Codex setzt um und mergt.** **Gemini Pro
-und NotebookLM führen die Wissensdatenbank** (dieses Dokument und
-`docs/DECISIONS.md`); Gemini reviewt außerdem jeden PR automatisch. Kaan entscheidet.
-Copilot prüft zusätzlich. Microsoft 365 Copilot liest aus OneDrive. Claude Code sorgt für
-Ordnung und Struktur, löst Konflikte zwischen den Plattformen mit Überschreibrecht und
-hilft, wenn Codex feststeckt.
+Ab 27.09.2026 gilt `docs/COLLABORATION.md` in der Fassung aus PR #66, bis zur
+technischen Beta-Reife im temporären Beta-Betriebsmodus. **Codex setzt um und mergt.**
+**Claude Code** ist Head der Datenbank, pflegt die Wissensdatenbank (dieses Dokument,
+`docs/DECISIONS.md`, `docs/DATABASE.md`), gibt DB-PRs frei, sorgt für Ordnung und
+Struktur und löst Konflikte zwischen den Plattformen mit Überschreibrecht. Kaan
+entscheidet. Copilot prüft zusätzlich und hilft als Assistent. Gemini berät nur.
+Microsoft 365 Copilot liest aus OneDrive.
 
 | Werkzeug | Rolle | Liest |
 | --- | --- | --- |
-| Gemini Pro | **Head der Datenbank im Code**, **Leitung der Wissensdatenbank**, automatisches Review jedes PRs, Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung | `GEMINI.md`, `.gemini/styleguide.md` |
+| Claude Code | **Head der Datenbank**, **Wissenspflege**, **Ordnung, Struktur, Konfliktlöser mit Überschreibrecht**, Pflicht-Reviews (DB, Ausnahmen, Design-Vorprüfung), im Beta-Modus hinzuziehbar für größere Phasen | `CLAUDE.md`, `AGENTS.md`, `docs/COLLABORATION.md` |
 | NotebookLM | **Wissensdatenbank**: Auskunft für alle, mit Quelle | dieses Dokument, `docs/DECISIONS.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`, `AGENTS.md` |
 | ChatGPT Pro / Codex | **Umsetzung**, ein Thema pro PR (`codex/<thema>`), mit Wissensblock | `AGENTS.md`, `docs/COLLABORATION.md` |
-| GitHub Copilot Pro | Editor und Review jedes PRs | `.github/copilot-instructions.md` |
+| GitHub Copilot Pro | Editor, Review jedes PRs, Assistent | `.github/copilot-instructions.md` |
+| Gemini Pro | **berät**: automatisches Review jedes PRs, kein Gate | `GEMINI.md`, `.gemini/styleguide.md` |
 | Microsoft 365 Copilot | Berichte, E-Mails, Folien | OneDrive-Ordner `GeniusNew` |
-| Claude Code | **Ordnung, Struktur, Konfliktlöser mit Überschreibrecht**, Hilfe bei Hilferuf von Codex | `AGENTS.md`, `docs/COLLABORATION.md` |
 
-Übergaben zwischen den Werkzeugen laufen über die zwei Prompts in `docs/HANDOVER.md`.
+Übergaben zwischen den Werkzeugen laufen über die Prompts in `docs/HANDOVER.md`.
 
 Regel für alle: Jede Änderung läuft über einen PR mit grüner CI. Codex mergt eigene PRs
-selbst, Gemini seine Wissens-PRs; neue Abhängigkeiten, geänderte `SECURITY.md`-Grenzen
-und Tags brauchen Kaans OK.
+selbst und Claudes Wissens-PRs; Claudes übrige PRs mergt Kaan. Neue Abhängigkeiten,
+geänderte `SECURITY.md`-Grenzen und Tags brauchen Kaans OK.

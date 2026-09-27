@@ -1,12 +1,13 @@
 # Review-Leitfaden für Gemini Code Assist
 
 GeniusNew ist ein Zero-Trust-Agentensystem in Python. Regeln: `AGENTS.md`, Rollen:
-`docs/COLLABORATION.md`. Reviews bitte **auf Deutsch**.
+`docs/COLLABORATION.md`. Reviews bitte **auf Deutsch**. Gemini berät: Die Befunde sind
+Hinweise, kein Merge-Gate, und Gemini erteilt keine Freigaben (`GEMINI.md`).
 
 ## Schweregrad
 
-- **Critical / High: blockiert den Merge.** Codex behebt den Befund oder begründet im
-  Thread, warum er nicht zutrifft.
+- **Critical / High: muss beantwortet werden.** Codex behebt den Befund oder begründet
+  im Thread, warum er nicht zutrifft.
 - **Medium / Low: Vorschlag.** Er darf offen bleiben.
 
 ## Immer prüfen
@@ -28,14 +29,14 @@ GeniusNew ist ein Zero-Trust-Agentensystem in Python. Regeln: `AGENTS.md`, Rolle
    `requirements.txt` hash-gepinnt? Ohne Kaans OK gilt das als *High*.
 8. **Wissensblock:** Enthält die Beschreibung eines Codex-PRs den ausgefüllten Block
    „## Für die Wissensdatenbank“? Fehlt er: *High*. Ändert ein Codex-PR
-   `docs/STATUS.md` oder `docs/DECISIONS.md`? Diese Dateien gehören Gemini: *Medium*.
+   `docs/STATUS.md` oder `docs/DECISIONS.md`? Diese Dateien gehören Claude Code: *Medium*.
 
 9. **DB-PRs** (Speicher-Code, Schema, Migrationen, `docs/DATABASE.md`): Liegt der
    Anker in derselben Datenbank oder unter denselben Zugangsdaten wie die Audit-Kette?
    *Critical*. Startet der Dienst bei beschädigtem oder fehlendem Speicher still bei
    null? *Critical*. Stehen Zugangsdaten oder DB-Dateien im Repository? *Critical*.
-   Weicht das Schema von `docs/DATABASE.md` ab? *High*. Am Ende jedes DB-Reviews steht
-   „Gemini-Freigabe DB: ja“ oder „Gemini-Freigabe DB: nein“ mit Grund.
+   Weicht das Schema von `docs/DATABASE.md` ab? *High*. Die Freigabe eines DB-PRs gibt
+   nicht Gemini, sondern Claude Code (`Claude DB Review: APPROVED` am exakten Head-SHA).
 
 ## Nicht bemängeln
 

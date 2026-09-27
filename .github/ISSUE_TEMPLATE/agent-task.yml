@@ -1,5 +1,5 @@
 name: Begrenzte Aufgabe
-description: Eine prüfbare Aufgabe für eine Person oder einen Assistenten (Codex, Gemini, Copilot).
+description: Eine prüfbare Aufgabe für eine Person oder einen Assistenten (Codex, Claude Code, Copilot).
 title: "task: "
 body:
   - type: markdown
@@ -14,9 +14,8 @@ body:
       label: Zuständig
       options:
         - Codex (Umsetzung)
-        - Gemini Pro (Datenbank / Wissensdatenbank)
+        - Claude Code (Datenbank / Wissensdatenbank / Ordnung / Konflikt)
         - Copilot (begrenzte Umsetzung auf eigenem Branch)
-        - Claude Code (Ordnung / Konflikt)
     validations:
       required: true
   - type: textarea

@@ -2,35 +2,26 @@
 
 Gilt für jeden Assistenten, der in diesem Repository arbeitet: Claude Code, ChatGPT /
 Codex, GitHub Copilot, Gemini. **Wer was macht, steht in `docs/COLLABORATION.md`:**
-Codex setzt um und mergt, Gemini Pro und NotebookLM führen die Wissensdatenbank,
-Kaan entscheidet, Claude Code sorgt für Ordnung und Struktur, löst Konflikte zwischen
-den Plattformen (mit Überschreibrecht) und hilft bei einem Hilferuf. Kurzfassung für Copilot:
-`.github/copilot-instructions.md`. Aktueller Projektstand: `docs/STATUS.md`.
+Codex setzt um und mergt, Kaan entscheidet, Claude Code ist Head der Datenbank, pflegt
+die Wissensdatenbank (mit NotebookLM als Auskunft), sorgt für Ordnung und Struktur, löst
+Konflikte zwischen den Plattformen (mit Überschreibrecht) und hilft bei einem Hilferuf.
+Gemini berät nur. Kurzfassung für Copilot: `.github/copilot-instructions.md`, für
+Claude Code: `CLAUDE.md`. Aktueller Projektstand: `docs/STATUS.md`.
 
 ## Temporärer Beta-Betriebsmodus — Kaan, 27.09.2026
 
-Diese Regel gilt **bis Kaan sie ausdrücklich ändert** und hat bei Widerspruch Vorrang vor
-älteren Rollen- oder Freigaberegeln in diesem Repository:
+Bis Kaan ihn widerruft, gilt der Beta-Betriebsmodus aus `docs/COLLABORATION.md`. Er hat
+bei Widerspruch Vorrang vor älteren Rollen- oder Freigaberegeln. Kurz:
 
-- Ziel ist ein **durchgehender Entwicklungs-Push bis technisch beta-ready**. Nach einem
-  kleinen erfolgreichen PR wird nicht auf eine neue Grundsatzfreigabe gewartet, solange
-  der nächste Schritt bereits entschieden und innerhalb des freigegebenen Scopes liegt.
-- Vor jeder neuen Phase zuerst den **aktuellen `main`-SHA, offene PRs und deren Basen**
-  prüfen. Alte Chats, ältere Branches, Roadmap-Texte oder PR-Beschreibungen dürfen einen
-  neueren Repository-Stand nicht zurücksetzen.
-- **Gemini-Freigaben sind in dieser Phase nicht blockierend.** Gemini darf weiterhin
-  beraten und Wissen pflegen; fehlende Gemini-Reviews halten Code- oder DB-Arbeit derzeit
-  nicht auf. Kaans Entscheidungen bleiben verbindlich.
-- **GitHub Copilot Pro** wird als zusätzlicher Assistent und Reviewer eingesetzt.
-- **Claude Code darf aktiv für größere zusammenhängende Phasen, Architektur-/Security-
-  Prüfungen und schwierige Konflikte eingesetzt werden**, nicht nur nach einem formalen
-  Hilferuf. Für kleine, eindeutige und durch Tests/CI belegte Änderungen arbeitet
-  Codex/ChatGPT direkt weiter.
-- Bei echter Unsicherheit zu Architektur, Security-Grenzen oder widersprüchlichen
-  Befunden wird Claude als Zweitmeinung hinzugezogen. Die Umsetzung bleibt pro Branch
-  bei genau einem Implementierer.
-- Alle bisherigen Sicherheitsregeln bleiben: fail closed, keine Secrets, keine
-  Testabschwächung, Evidenz am exakten Head-SHA.
+- Durchgehend bis technisch beta-ready weiterarbeiten: Ein bereits entschiedener
+  Folgeschritt beginnt nach grünem Vorgänger ohne neue Grundsatzfreigabe.
+- Vor jeder Phase **`main`-SHA, offene PRs und deren Basen** prüfen. Ein neuerer
+  Repository-Stand schlägt alte Chats, Branches, Roadmap-Texte und PR-Beschreibungen.
+- **Copilot Pro** hilft als Assistent und Reviewer. **Claude Code** kann für größere
+  Phasen, Architektur-/Security-Arbeit und bei echter Unsicherheit hinzugezogen werden.
+  Pro Branch bleibt genau ein Implementierer.
+- Alle Sicherheitsregeln bleiben: fail closed, keine Secrets, keine Testabschwächung,
+  Evidenz am exakten Head-SHA.
 - **Öffentlicher Deploy, produktiver Release, Secret-Rotation und neue externe
   Zugriffsrechte** brauchen weiterhin Kaans ausdrückliches OK.
 
@@ -108,15 +99,14 @@ bestanden melden.
 - Vor dem Push: Tests, Demo und Refusal-Guard für die geänderten Module lokal grün.
 - Mergen: Codex mergt eigene PRs selbst, sobald `contracts` grün ist und kein
   blockierender Review-Befund offen ist. Ausnahmen mit Kaans ausdrücklichem OK: neue
-  Abhängigkeit, eine Grenze aus `SECURITY.md` wird geändert, Tags. Gemini mergt seine
-  Wissens-PRs (`gemini/wissen-*`, nur `docs/STATUS.md` und `docs/DECISIONS.md`) selbst
-  bei grüner CI, den DB-Design-PR (`gemini/db-design`, `docs/DATABASE.md`) erst nach
-  Kaans Technikentscheidung. **DB-PRs** brauchen zusätzlich die ausdrückliche Gemini-Freigabe
-  (Gemini ist Head der Datenbank). Alle anderen Assistenten mergen nur mit Kaans
-  ausdrücklichem OK.
-- `docs/STATUS.md`, `docs/DECISIONS.md` und `docs/DATABASE.md` schreibt nur Gemini
-  (Ausnahme: Claude Code bei einem Konflikt, siehe `docs/COLLABORATION.md`). Wer etwas zum Stand
-  beiträgt, schreibt es in den Wissensblock seiner PR-Beschreibung
+  Abhängigkeit, eine Grenze aus `SECURITY.md` wird geändert, Tags. **DB-PRs** brauchen
+  zusätzlich `Claude DB Review: APPROVED` am exakten Head-SHA (Claude Code ist Head der
+  Datenbank). Claudes Wissens-PRs (`claude/wissen-*`, nur `docs/STATUS.md` und
+  `docs/DECISIONS.md`) mergt Codex bei grüner CI; alle anderen PRs von Claude mergt
+  Kaan. Kein Werkzeug gibt die eigene Arbeit in einem Pflicht-Review frei. Alle anderen
+  Assistenten mergen nur mit Kaans ausdrücklichem OK.
+- `docs/STATUS.md`, `docs/DECISIONS.md` und `docs/DATABASE.md` schreibt nur Claude Code.
+  Wer etwas zum Stand beiträgt, schreibt es in den Wissensblock seiner PR-Beschreibung
   (`docs/COLLABORATION.md`).
 - Kommentare erklären das *Warum* und die Grenze, nicht das *Was*; so wie der
   umgebende Code.
@@ -127,9 +117,10 @@ bestanden melden.
 | --- | --- |
 | Projektstand und nächste Schritte (Wissensdatenbank) | `docs/STATUS.md` |
 | Entscheidungen mit Datum und Begründung (Wissensdatenbank) | `docs/DECISIONS.md` |
-| Datenbank im Code: Design, Schema, Vorgaben (Head: Gemini) | `docs/DATABASE.md` (entsteht), `docs/COLLABORATION.md` |
+| Datenbank im Code: Design, Schema, Vorgaben (Head: Claude Code) | `docs/DATABASE.md` (entsteht), `docs/COLLABORATION.md` |
 | Wer macht was, Ablauf, Konflikte und Hilferuf an Claude | `docs/COLLABORATION.md` |
-| Gemini: Kontext und Review-Maßstab | `GEMINI.md`, `.gemini/styleguide.md` |
+| Claude Code: Kontext | `CLAUDE.md` |
+| Gemini (beratend): Kontext und Review-Maßstab | `GEMINI.md`, `.gemini/styleguide.md` |
 | Übergabe-Prompts zwischen Werkzeugen | `docs/HANDOVER.md` |
 | Roadmap v0.1 mit Status je Schritt | `docs/ROADMAP-V01.md` |
 | Bekannte Grenzen | `SECURITY.md` |
