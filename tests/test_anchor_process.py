@@ -3,12 +3,19 @@
 import io
 import json
 import os
+import socket
+import subprocess
+import sys
 import tempfile
+import threading
+import time
 import unittest
 import unittest.mock
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 from geniusnew import anchor_process
-from geniusnew.anchor_process import AnchorProcess
+from geniusnew.anchor_process import AnchorClient, AnchorProcess
 from geniusnew.audit import AuditAuthority, event_from_handoff
 from geniusnew.audit_chain import AuditAnchor, AuditChain, AuditHead, sign_head, verify
 from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, canonical, issue, validate
@@ -457,6 +464,317 @@ class ChildProtocolTest(ChainFixture, unittest.TestCase):
                 out = io.BytesIO()
                 self.assertEqual(anchor_process._serve(io.BytesIO(requests), out), 1)
                 self.assertEqual(out.getvalue(), b'')
+
+
+def short_directory(test):
+    """A socket path must fit in 108 bytes, so the system temp dir, not a nested one."""
+    directory = tempfile.TemporaryDirectory()
+    test.addCleanup(directory.cleanup)
+    return directory.name
+
+
+def envelope(request, nonce='ab' * 32):
+    return {'nonce': nonce, 'request': request}
+
+
+class ServedProtocolTest(ChainFixture, unittest.TestCase):
+    """The served anchor's side of one connection, without a socket or a process."""
+
+    def setUp(self):
+        super().setUp()
+        self.anchor = AuditAnchor()
+        self.key = Ed25519PrivateKey.generate()
+        self.path = self.state_path()
+
+    def serve(self, *messages, raw=b''):
+        requests = b''.join(frame(message) for message in messages) + raw
+        out = io.BytesIO()
+        code = anchor_process._serve_connection(
+            io.BytesIO(requests), out, self.anchor, self.authority.verifier(), self.key,
+            self.path)
+        return code, replies(out.getvalue())
+
+    def commit_request(self):
+        return {'head': {'count': self.head.count, 'head_hash': self.head.head_hash,
+                         'signature': self.head.signature, 'version': self.head.version},
+                'kind': 'commit', 'records': [record.to_dict() for record in self.records]}
+
+    def test_every_reply_is_signed_over_the_nonce_it_answers(self):
+        code, answers = self.serve(envelope(self.commit_request(), 'aa' * 32),
+                                   envelope({'kind': 'reset'}, 'bb' * 32))
+        self.assertEqual(code, 0)
+        self.assertEqual([answer['nonce'] for answer in answers], ['aa' * 32, 'bb' * 32])
+        self.assertEqual([answer['reply']['kind'] for answer in answers], ['ok', 'refused'])
+        public = self.key.public_key()
+        for answer in answers:
+            public.verify(bytes.fromhex(answer['signature']),
+                          anchor_process._reply_message(answer['nonce'], answer['reply']))
+        self.assertEqual(answers[0]['reply']['count'], 5)
+
+    def test_a_head_is_written_before_it_is_answered(self):
+        code, answers = self.serve(envelope(self.commit_request()))
+        self.assertEqual((code, len(answers)), (0, 1))
+        with open(self.path, 'rb') as stream:
+            self.assertEqual(stream.read(), anchor_process._head_line(self.head))
+        self.path = os.path.join(self.state_path(), 'missing-directory', 'anchor.state')
+        self.anchor = AuditAnchor()
+        self.assertEqual(self.serve(envelope(self.commit_request())), (2, []))
+
+    def test_a_request_it_cannot_bind_a_reply_to_ends_the_connection_unanswered(self):
+        committed = {'kind': 'committed'}
+        for label, message in (
+                ('extra key', {**envelope(committed), 'extra': 1}),
+                ('no nonce', {'request': committed}),
+                ('upper-case nonce', envelope(committed, 'AB' * 32)),
+                ('short nonce', envelope(committed, 'ab' * 31)),
+                ('numeric nonce', envelope(committed, 7)),
+                ('request not an object', envelope('committed')),
+                ('bare child request', committed)):
+            with self.subTest(label):
+                self.assertEqual(self.serve(message, envelope(committed)), (0, []))
+        self.assertEqual(self.serve(raw=b'\x00\x00\x00\x02{}'), (0, []))
+
+
+class ReplyKeyTest(unittest.TestCase):
+    def path(self):
+        return os.path.join(short_directory(self), 'anchor.key')
+
+    def test_the_key_is_made_once_for_its_owner_and_kept(self):
+        path = self.path()
+        first = anchor_process._reply_key(path)
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        self.assertEqual(anchor_process._public_bytes(anchor_process._reply_key(path)),
+                         anchor_process._public_bytes(first))
+
+    def test_a_key_file_others_could_read_or_of_the_wrong_size_is_refused(self):
+        path = self.path()
+        anchor_process._reply_key(path)
+        os.chmod(path, 0o640)
+        with self.assertRaisesRegex(ContractError, 'only its owner can read'):
+            anchor_process._reply_key(path)
+        for data in (b'', b'x' * 31, b'x' * 33):
+            with self.subTest(size=len(data)):
+                path = self.path()
+                with open(path, 'wb') as stream:
+                    stream.write(data)
+                os.chmod(path, 0o600)
+                with self.assertRaisesRegex(ContractError, 'exactly 32 bytes'):
+                    anchor_process._reply_key(path)
+
+    def test_a_key_path_that_is_a_link_or_unreachable_is_refused(self):
+        path = self.path()
+        target = path + '.target'
+        with open(target, 'wb') as stream:
+            stream.write(b'x' * 32)
+        os.chmod(target, 0o600)
+        os.symlink(target, path)
+        with self.assertRaisesRegex(ContractError, 'cannot be read'):
+            anchor_process._reply_key(path)
+        with self.assertRaisesRegex(ContractError, 'cannot be created'):
+            anchor_process._reply_key(os.path.join(path + '.missing', 'anchor.key'))
+
+
+class ListenTest(unittest.TestCase):
+    def test_it_binds_owner_and_group_only_and_never_takes_a_path_over(self):
+        path = os.path.join(short_directory(self), 'anchor.sock')
+        server = anchor_process._listen(path)
+        self.addCleanup(server.close)
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o660)
+        with self.assertRaisesRegex(ContractError, 'already exists'):
+            anchor_process._listen(path)
+
+    def test_a_path_it_cannot_bind_is_refused(self):
+        path = '/' + 'x' * 200 + '.sock'
+        with self.assertRaisesRegex(ContractError, 'cannot be bound'):
+            anchor_process._listen(path)
+
+    def test_paths_must_be_absolute(self):
+        for path in ('anchor.sock', '', None, 7):
+            with self.subTest(path=path):
+                with self.assertRaisesRegex(ContractError, 'must be an absolute path'):
+                    anchor_process._absolute(path, 'socket path')
+
+
+class FakeAnchor:
+    """Whatever sits at the socket path, answering as the test decides."""
+
+    def __init__(self, test, answer):
+        self.path = os.path.join(short_directory(test), 'anchor.sock')
+        self.answer = answer
+        self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.server.bind(self.path)
+        self.server.listen(1)
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+        self.thread.start()
+        test.addCleanup(self.thread.join, 5)
+        test.addCleanup(self.server.close)
+
+    def serve(self):
+        with self.server.accept()[0] as connection:
+            size = int.from_bytes(connection.recv(4, socket.MSG_WAITALL), 'big')
+            request = json.loads(connection.recv(size, socket.MSG_WAITALL))
+            connection.sendall(self.answer(request))
+
+
+class AnchorClientTest(ChainFixture, unittest.TestCase):
+    """The client refuses every answer the anchor did not sign for this request."""
+
+    def setUp(self):
+        super().setUp()
+        self.key = Ed25519PrivateKey.generate()
+
+    def client(self, path):
+        return AnchorClient(socket_path=path,
+                            reply_public_key=anchor_process._public_bytes(self.key))
+
+    def signed(self, request, *, key=None, nonce=None, reply=None):
+        nonce = request['nonce'] if nonce is None else nonce
+        reply = {'count': 0, 'head_hash': EMPTY, 'kind': 'ok'} if reply is None else reply
+        signature = (key or self.key).sign(anchor_process._reply_message(nonce, reply)).hex()
+        return frame({'nonce': nonce, 'reply': reply, 'signature': signature})
+
+    def test_a_reply_signed_for_this_request_is_believed(self):
+        fake = FakeAnchor(self, self.signed)
+        self.assertEqual(self.client(fake.path).committed, (0, EMPTY))
+
+    def test_a_stand_in_at_the_socket_path_is_refused(self):
+        other = Ed25519PrivateKey.generate()
+        cases = [
+            ('not signed by the anchor',
+             lambda request: self.signed(request, key=other)),
+            ('not signed by the anchor',
+             lambda request: frame({'nonce': request['nonce'],
+                                    'reply': {'count': 0, 'head_hash': EMPTY, 'kind': 'ok'},
+                                    'signature': '00' * 64})),
+            ('not signed by the anchor',
+             lambda request: frame({'nonce': request['nonce'], 'reply': 'ok',
+                                    'signature': 7})),
+            ('answers another request',
+             lambda request: self.signed(request, nonce='cd' * 32)),
+            ('envelope is malformed',
+             lambda request: frame({'count': 0, 'head_hash': EMPTY, 'kind': 'ok'})),
+            ('unreachable',
+             lambda request: (anchor_process._MAX_REPLY_BYTES + 1).to_bytes(4, 'big')),
+            ('unreachable', lambda request: b'\x00\x00'),
+        ]
+        for message, answer in cases:
+            with self.subTest(message=message):
+                fake = FakeAnchor(self, answer)
+                with self.assertRaisesRegex(ContractError, message):
+                    self.client(fake.path).committed
+
+    def test_an_anchor_that_is_not_there_fails_closed(self):
+        path = os.path.join(short_directory(self), 'anchor.sock')
+        with self.assertRaisesRegex(ContractError, 'anchor service is unreachable'):
+            self.client(path).committed
+
+    def test_what_is_sent_is_checked_before_it_is_sent(self):
+        client = self.client(os.path.join(short_directory(self), 'anchor.sock'))
+        with self.assertRaisesRegex(ContractError, 'head is invalid'):
+            client.commit('head', self.records, authority=self.authority)
+
+    def test_it_is_configured_with_an_absolute_path_and_a_public_key(self):
+        public = anchor_process._public_bytes(self.key)
+        with self.assertRaisesRegex(ContractError, 'absolute path'):
+            AnchorClient(socket_path='anchor.sock', reply_public_key=public)
+        for key in (public[:-1], public.hex(), None):
+            with self.subTest(key=type(key)):
+                with self.assertRaisesRegex(ContractError, '32 bytes'):
+                    AnchorClient(socket_path='/run/anchor.sock', reply_public_key=key)
+
+
+class ServedAnchorTest(ChainFixture, unittest.TestCase):
+    """The operator's anchor: its own process, started and stopped without the service."""
+
+    def setUp(self):
+        super().setUp()
+        directory = short_directory(self)
+        self.socket = os.path.join(directory, 'anchor.sock')
+        self.state = os.path.join(directory, 'anchor.state')
+        self.key = os.path.join(directory, 'anchor.key')
+        self.public = bytes.fromhex(self.command('public-key', '--key', self.key).stdout.strip())
+
+    def command(self, *arguments):
+        return subprocess.run([sys.executable, '-m', 'geniusnew.anchor_process', *arguments],
+                              capture_output=True, text=True, timeout=30)
+
+    def start(self):
+        process = subprocess.Popen(
+            [sys.executable, '-m', 'geniusnew.anchor_process', 'serve', '--socket', self.socket,
+             '--state', self.state, '--key', self.key,
+             '--audit-public-key', self.authority.verifier().public_key.hex()],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        self.addCleanup(self.stop, process)
+        deadline = time.monotonic() + 10
+        while not os.path.exists(self.socket):
+            if process.poll() is not None or time.monotonic() > deadline:
+                self.fail('the anchor did not start: ' + process.stderr.read().decode())
+            time.sleep(0.02)
+        return process
+
+    def stop(self, process):
+        if process.poll() is None:
+            process.terminate()
+            process.wait(10)
+        process.stderr.close()
+
+    def client(self):
+        return AnchorClient(socket_path=self.socket, reply_public_key=self.public)
+
+    def test_a_restarted_service_finds_the_anchor_where_it_left_it(self):
+        self.start()
+        self.assertEqual(self.client().commit(self.head, self.records, authority=self.authority),
+                         (5, self.head.head_hash))
+        shorter, shorter_head = self.truncated()
+        with self.assertRaisesRegex(ContractError, 'anchor already committed'):
+            self.client().commit(shorter_head, shorter, authority=self.authority)
+        # A new client is all a restarted service has; the anchor is untouched.
+        self.assertEqual(self.client().committed, (5, self.head.head_hash))
+        self.assertEqual(verify(self.records, self.head, authority=self.authority,
+                                anchor=self.client()), 5)
+
+    def test_a_restarted_anchor_keeps_its_state_and_its_key(self):
+        process = self.start()
+        self.client().commit(self.head, self.records, authority=self.authority)
+        self.stop(process)
+        self.assertFalse(os.path.exists(self.socket))
+        with self.assertRaisesRegex(ContractError, 'unreachable'):
+            self.client().committed
+        self.start()
+        self.assertEqual(self.client().committed, (5, self.head.head_hash))
+
+    def test_a_stop_waits_for_the_connection_in_hand(self):
+        """A stop inside a connection could tear the head being appended."""
+        import signal
+        process = self.start()
+        held = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(held.close)
+        held.connect(self.socket)
+        held.sendall(frame(envelope({'kind': 'committed'})))
+        size = int.from_bytes(held.recv(4, socket.MSG_WAITALL), 'big')
+        self.assertEqual(json.loads(held.recv(size, socket.MSG_WAITALL))['reply']['count'], 0)
+        process.send_signal(signal.SIGTERM)
+        time.sleep(0.3)
+        self.assertIsNone(process.poll())
+        held.close()
+        self.assertEqual(process.wait(10), 0)
+        self.assertFalse(os.path.exists(self.socket))
+
+    def test_it_will_not_start_over_an_existing_path_or_without_its_inputs(self):
+        with open(self.socket, 'w'):
+            pass
+        refused = self.command('serve', '--socket', self.socket, '--state', self.state,
+                               '--key', self.key,
+                               '--audit-public-key', self.authority.verifier().public_key.hex())
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn('anchor socket path already exists', refused.stderr)
+        os.unlink(self.socket)
+        refused = self.command('serve', '--socket', self.socket, '--state', 'anchor.state',
+                               '--key', self.key,
+                               '--audit-public-key', self.authority.verifier().public_key.hex())
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn('state path must be an absolute path', refused.stderr)
+        self.assertFalse(os.path.exists(self.socket))
 
 
 if __name__ == '__main__':
