@@ -44,6 +44,37 @@ class AuditChainTest(ChainFixture, unittest.TestCase):
         self.assertEqual(head.count, 5)
         self.assertEqual(head.head_hash, self.chain.records[-1].record_hash)
 
+    def test_snapshot_signs_the_copied_records_during_an_external_append(self):
+        from threading import Event, Thread
+        from unittest.mock import patch
+        from geniusnew import audit_chain
+
+        signing = Event()
+        resume = Event()
+        result = []
+        original = audit_chain.sign_head
+
+        def delayed_sign(**arguments):
+            signing.set()
+            if not resume.wait(3):
+                raise AssertionError('snapshot signing timed out')
+            return original(**arguments)
+
+        with patch.object(audit_chain, 'sign_head', side_effect=delayed_sign):
+            thread = Thread(target=lambda: result.append(self.chain.snapshot(self.authority)))
+            thread.start()
+            try:
+                self.assertTrue(signing.wait(3))
+                self.chain.append(self.event(6))
+            finally:
+                resume.set()
+                thread.join(5)
+        self.assertFalse(thread.is_alive())
+        head, records = result[0]
+        self.assertEqual(head.count, 5)
+        self.assertEqual(len(self.chain.records), 6)
+        self.assertEqual(verify(records, head, authority=self.authority), 5)
+
     def test_an_empty_chain_verifies(self):
         empty = AuditChain()
         self.assertEqual(verify(empty.records, empty.head(self.authority), authority=self.authority), 0)

@@ -315,6 +315,14 @@ class AuditChain:
             head_hash = self._records[-1].record_hash if self._records else _EMPTY_HASH
         return sign_head(count=count, head_hash=head_hash, authority=authority)
 
+    def snapshot(self, authority: AuditAuthority) -> tuple[AuditHead, tuple[AuditRecord, ...]]:
+        """Sign the exact immutable chain copied under the append lock."""
+        with self._lock:
+            records = tuple(self._records)
+        head_hash = records[-1].record_hash if records else _EMPTY_HASH
+        return sign_head(count=len(records), head_hash=head_hash,
+                         authority=authority), records
+
 
 def _verify_head(head: Any, *, authority: AuditAuthority | AuditVerifier) -> AuditHead:
     verifier = _verifier(authority)
