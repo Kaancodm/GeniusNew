@@ -1,0 +1,8 @@
+name: GeniusNew - Server Status (SSH)
+command: ssh {{host}} 'printf "=== GeniusNew Server ===\n"; hostname; uptime; printf "\nMemory:\n"; free -h; printf "\nDisk:\n"; df -h /; printf "\nDocker:\n"; if command -v docker >/dev/null 2>&1; then docker ps; else echo "Docker not installed"; fi'
+tags: ["geniusnew", "server", "ssh", "status"]
+description: "Read-only Serverstatus über einen SSH-Alias aus ~/.ssh/config. Keine Hostnamen oder Secrets im Repo speichern."
+shells: ["bash"]
+arguments:
+  - name: host
+    description: "SSH-Alias aus deiner lokalen ~/.ssh/config"
