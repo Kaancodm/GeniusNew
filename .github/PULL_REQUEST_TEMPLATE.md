@@ -18,7 +18,7 @@ Nur tatsächlich ausgeführte Prüfungen eintragen; nicht Geprüftes als `UNKNOW
 | Demo (`./scripts/demo.sh`) | |
 | Refusal-Guard der geänderten Module | |
 | CI auf dem aktuellen Head | |
-| Gemini-Review (bei DB-PRs: „Gemini-Freigabe DB: ja“) | |
+| Claude DB Review (nur DB-PRs: `Claude DB Review: APPROVED` / `Claude DB Review: CHANGES REQUESTED`; exakter geprüfter Head-SHA Pflicht) | |
 
 ## Für die Wissensdatenbank
 - Was ist jetzt anders: <1–3 Sätze>
