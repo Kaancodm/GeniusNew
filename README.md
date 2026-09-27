@@ -46,8 +46,9 @@ den Job danach fünfzehnmal angreift.
 **Voraussetzungen:** Linux (oder WSL), Python 3.11 oder neuer, `git`. Die direkte
 Abhängigkeit `cryptography` liefert die Ed25519-Signaturen von Handoff, Ergebnis und
 Audit-Kopf. Sie und ihre Abhängigkeiten sind mit Versionen und Hashes in
-`requirements.txt` gepinnt. Nach der Installation kein Internetzugriff — der HTTP-Eingang lauscht
-nur auf `127.0.0.1` —, und nichts bleibt auf der Platte zurück außer temporären
+`requirements.txt` gepinnt. Für den Quickstart ist nach der Installation kein externer
+Internetzugriff erforderlich; der HTTP-Eingang lauscht nur auf `127.0.0.1`, und nichts
+bleibt auf der Platte zurück außer temporären
 Verzeichnissen, die wieder verschwinden.
 
 ```sh
