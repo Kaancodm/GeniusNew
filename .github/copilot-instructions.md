@@ -10,9 +10,11 @@ Nicht überprüfbare Angaben als `UNKNOWN` kennzeichnen.
 Vervollständigung im Editor und Review jedes PRs nach der Checkliste unten. Eigene
 Umsetzung nur mit einem Auftrag (Issue-Formular „Begrenzte Aufgabe“), auf einem eigenen
 Branch und als Draft-PR. Umsetzer und Merger für Kerncode ist Codex; ChatGPT übernimmt
-neue Werkzeuge, Server und Infrastruktur; Kaan entwirft die Datenbank
-(`docs/DATABASE.md`) selbst; Claude Code besitzt `docs/COLLABORATION.md` und
-`docs/DECISIONS.md` und löst Konflikte zwischen den Werkzeugen.
+neue Werkzeuge, Server, Infrastruktur und erstellt die Datenbank-Dokumentation
+(`docs/DATABASE.md`) im Auftrag von Kaan; Kaan entscheidet Ziele, Architektur und die
+Freigabe; Claude Code besitzt `docs/COLLABORATION.md` und `docs/DECISIONS.md`,
+reviewt DB-Entwurf und DB-Code sicherheitstechnisch und löst Konflikte zwischen den
+Werkzeugen.
 
 ## Projekt und Arbeitsweise
 

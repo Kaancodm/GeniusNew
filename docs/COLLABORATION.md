@@ -7,9 +7,11 @@ Ziel: So wenig Abstimmung wie möglich. Jede Sache hat **genau einen Verantwortl
   NotebookLM**.
 - **Wissen — Regeln und Entscheidungen:** `docs/COLLABORATION.md` (dieses Dokument) und
   `docs/DECISIONS.md` gehören **ausschließlich Claude Code**.
-- **Datenbank im Code:** **Kaan entwirft `docs/DATABASE.md` selbst** (Design, Schema,
-  Migrationen); Claude Code prüft den Entwurf sicherheitstechnisch, Codex schreibt den
-  Code.
+- **Datenbank im Code:** **Kaan entscheidet** Ziele, Architektur und offene Fragen;
+  **ChatGPT erstellt und pflegt `docs/DATABASE.md`** in seinem Auftrag (Schema,
+  Migrationen, Persistenzmodell); **Claude Code** reviewt Entwurf und Code
+  sicherheitstechnisch, ohne selbst zu entwerfen; **Codex** implementiert den
+  freigegebenen Code.
 - **Neue Werkzeuge, Server und Infrastruktur:** **ChatGPT** (siehe eigener Abschnitt
   unten).
 - **Ordnung, Struktur und Konflikte zwischen den Plattformen:** **Claude Code**, mit
@@ -17,24 +19,26 @@ Ziel: So wenig Abstimmung wie möglich. Jede Sache hat **genau einen Verantwortl
 - **Entscheidungen:** Kaan. Kaan steht über allen, auch über Claude Code.
 
 **Seit 27.09.2026 (Kaan):** `docs/COLLABORATION.md` und `docs/DECISIONS.md` ändert nur
-noch Claude Code; kein anderes Werkzeug, auch nicht ChatGPT im Auftrag. Kaan entwirft
-die Datenbank (`docs/DATABASE.md`) künftig selbst, nicht Gemini oder Claude. Ein
-vorheriger Entwurf (PR #64), der Gemini vollständig durch Claude als Head der Datenbank
-ersetzt hätte, ist **nicht übernommen** — er diente nur als Übergabestand. Siehe
-`docs/DECISIONS.md` für die Begründung.
+noch Claude Code; kein anderes Werkzeug, auch nicht ChatGPT im Auftrag. Für die
+Datenbank gilt die überarbeitete Fassung von Kaans Entscheidung vom selben Tag: Kaan
+entscheidet Ziele und offene Architekturfragen, schreibt `docs/DATABASE.md` aber nicht
+mehr selbst — das übernimmt **ChatGPT** in seinem Auftrag (siehe „Die Datenbank im
+Code“ unten). Ein vorheriger Entwurf (PR #64), der Gemini vollständig durch Claude als
+Head der Datenbank ersetzt hätte, ist weiterhin **nicht übernommen** — er diente nur
+als Übergabestand. Siehe `docs/DECISIONS.md` für beide Begründungen.
 
 ## Rollen
 
 | Wer | Macht | Macht nicht |
 | --- | --- | --- |
-| **Kaan** | entscheidet, entwirft `docs/DATABASE.md` selbst, gibt die Ausnahmen frei (siehe unten), legt Tags an, mergt Claudes und ChatGPTs eigene PRs | — |
+| **Kaan** | entscheidet Produktziele, Architektur und Ausnahmen (Portal/Kern-Betriebsort, DB-Technologie, neue Dependencies, `SECURITY.md`-Grenzen, Tags, Deployment-/Produktionsfreigaben); gibt ChatGPT den Auftrag für DB-/Infra-Entwürfe; entscheidet offene Architekturfragen und gibt den DB-Entwurf frei; mergt Claudes und ChatGPTs eigene PRs | `docs/DATABASE.md` selbst schreiben zu müssen — das übernimmt ChatGPT in seinem Auftrag |
 | **Gemini Pro** | pflegt mit NotebookLM `docs/STATUS.md`; **reviewt jeden PR automatisch** (Gemini Code Assist, Maßstab `.gemini/styleguide.md`); ist **Pflicht-Zweitmeinung** bei den Ausnahmen und prüft Designs vorab bei Prozessgrenzen und Kryptografie. Kontext: `GEMINI.md` | Code ändern, `docs/COLLABORATION.md` oder `docs/DECISIONS.md` ändern, die Datenbank entwerfen oder freigeben |
-| **NotebookLM** | **Auskunft für alle:** beantwortet Fragen zu Stand, Entscheidungen, Grenzen und Datenbank-Schema (aus `docs/DATABASE.md`) aus seinen Quellen, jede Antwort mit Quellenangabe | Entscheidungen treffen, Inhalte ohne Quelle |
-| **Codex** (ChatGPT Pro) | setzt **Kerncode** um und **mergt selbst**: ein Thema pro PR, Branch `codex/<thema>`, mit einem **Wissensblock** in der PR-Beschreibung (siehe unten) | `docs/STATUS.md`, `docs/COLLABORATION.md`, `docs/DECISIONS.md` und `docs/DATABASE.md` ändern, einen DB-Code-PR ohne `Claude DB Review: APPROVED` mergen, Ausnahmen ohne Kaans OK mergen, Tags anlegen |
-| **ChatGPT** (Chat) | **neue Werkzeuge, laufende Server-Pflege, Dashboards und externe Integrationen** (eigener Abschnitt unten); plant, formuliert Prompts, erklärt | Kerncode (`geniusnew/`, `tests/`, `scripts/refusals.py`, `scripts/demo.*`, `schemas/`), `SECURITY.md`, `requirements.txt`, Governance-/Wissensdateien (siehe unten) ändern; Änderungen ohne Kaans Auftrag; selbst mergen |
+| **NotebookLM** | **Auskunft für alle:** beantwortet Fragen zu Stand, Entscheidungen, Grenzen und Datenbank-Schema (aus `docs/DATABASE.md`) aus seinen Quellen, jede Antwort mit Quellenangabe; Quellen strikt getrennt von ChatGPTs eigenem Recherche-Notebook | Entscheidungen treffen, Inhalte ohne Quelle |
+| **Codex** (ChatGPT Pro) | setzt **Kerncode** um, implementiert den von Kaan freigegebenen DB-Code, und **mergt selbst**: ein Thema pro PR, Branch `codex/<thema>`, mit einem **Wissensblock** in der PR-Beschreibung (siehe unten) | `docs/STATUS.md`, `docs/COLLABORATION.md`, `docs/DECISIONS.md` und `docs/DATABASE.md` ändern, einen DB-Code-PR ohne `Claude DB Review: APPROVED` mergen, Ausnahmen ohne Kaans OK mergen, Tags anlegen |
+| **ChatGPT** (Chat) | **neue Werkzeuge, laufende Server-Pflege, Dashboards, Monitoring, externe Integrationen** (eigener Abschnitt unten), **inklusive technischer Architekturentwürfe im Infra-/DB-Bereich und der Erstellung/Pflege von `docs/DATABASE.md` im Auftrag von Kaan**; plant, formuliert Prompts, erklärt | Kerncode (`geniusnew/`, `tests/`, `scripts/refusals.py`, `scripts/demo.*`, `schemas/`), Core-Tests, `SECURITY.md` eigenständig ändern, `requirements.txt`, Governance-/Wissensdateien (siehe unten) ändern; Änderungen ohne Kaans Auftrag; den eigenen DB-Entwurf sicherheitstechnisch freigeben; selbst mergen |
 | **GitHub Copilot Pro** | Vervollständigung im Editor; Review jedes PRs nach der Checkliste in `.github/copilot-instructions.md` | eigene PRs ohne Auftrag |
 | **Microsoft 365 Copilot** | Berichte, E-Mails, Folien aus dem OneDrive-Ordner `GeniusNew` | Inhalte erfinden, die dort nicht stehen |
-| **Claude Code** | **Ordnung, Struktur und Konfliktlöser zwischen den Plattformen, mit Überschreibrecht:** besitzt `docs/COLLABORATION.md` und `docs/DECISIONS.md` sowie die übrigen Regeln (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.gemini/*`, `docs/HANDOVER.md`); entscheidet Konflikte zwischen Werkzeugen verbindlich; reviewt Codex' DB-Code-PRs sicherheitstechnisch gegen `docs/DATABASE.md`; prüft Kaans Datenbank-Entwurf sicherheitstechnisch, entwirft ihn aber nicht selbst; darf jede Datei korrigieren, auch die von Gemini, wenn sie den Regeln oder dem Code widerspricht; **hilft, wenn Codex feststeckt** | Kaans Entscheidungen oder die Ausnahmen überstimmen; die eigene Arbeit selbst freigeben; `docs/DATABASE.md` selbst entwerfen; Funktionen umsetzen, außer um einen Konflikt aufzulösen |
+| **Claude Code** | **Ordnung, Struktur und Konfliktlöser zwischen den Plattformen, mit Überschreibrecht:** besitzt `docs/COLLABORATION.md` und `docs/DECISIONS.md` sowie die übrigen Regeln (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.gemini/*`, `docs/HANDOVER.md`); entscheidet Konflikte zwischen Werkzeugen verbindlich; **unabhängiger Security-Reviewer**: reviewt ChatGPTs `docs/DATABASE.md`-Entwurf und Codex' DB-Code-PRs sicherheitstechnisch, ebenso Server-/Deployment-/Netzwerk-Sicherheitsfragen; darf jede Datei korrigieren, auch die von Gemini, wenn sie den Regeln oder dem Code widerspricht; **hilft, wenn Codex feststeckt** | Kaans Entscheidungen oder die Ausnahmen überstimmen; die eigene Arbeit selbst freigeben; `docs/DATABASE.md` selbst entwerfen oder Head der Datenbank sein; regulärer Kerncode-Implementierer sein; eigene PRs selbst mergen |
 
 ## Die Wissensdatenbank
 
@@ -65,7 +69,7 @@ Bedarf in `docs/STATUS.md`.
 3. Die Quellen in NotebookLM aktualisieren und Widersprüche zwischen den Dokumenten als
    Issue melden.
 
-## Die Datenbank im Code (Design: Kaan)
+## Die Datenbank im Code (Entwurf: ChatGPT im Auftrag von Kaan)
 
 **Wozu:** Die Datenbank ist die **Grundlage für das Portal**. Das Portal ist die
 Web-Oberfläche, über die Nutzer Aufträge stellen, ihren Verlauf sehen und Freigebende
@@ -78,28 +82,48 @@ anzunehmen oder zu vergessen. Für das Portal kommen hinzu: Nutzer und ihre Zuor
 Principals, API-Key-Digests, Sitzungen, der Auftragsverlauf je Nutzer, die Rolle der
 Freigebenden und Quoten.
 
+**Grundsatz:** Wer entwirft, gibt nicht selbst frei. Wer implementiert, entscheidet
+nicht selbst über die Architektur. Kaan bleibt die Entscheidungsinstanz.
+
+**Workflow:**
+
+```text
+Kaan entscheidet Ziel → ChatGPT entwirft → Claude Security Review →
+Kaan entscheidet offene Punkte → Codex implementiert →
+Claude DB Review am exakten Head → CI → ggf. Kaan-Gates → Merge
+```
+
 **Reihenfolge:**
-1. **Design (Kaan):** Kaan schreibt `docs/DATABASE.md` selbst. Inhalt:
-   - **Betriebsort von Portal und Kern** im Vergleich — bereits entschieden: Portal auf
-     Vercel, Kern auf eigenem Server (`docs/DECISIONS.md`, 26.09.2026).
-   - Die Technik — bereits entschieden: PostgreSQL mit `psycopg` (`docs/DECISIONS.md`,
-     26.09.2026).
-   - Das Schema je Tabelle, auch für die Portal-Tabellen.
-   - Die Migrationen, das Verhalten bei beschädigtem Speicher und der Umgang mit
-     Zugangsdaten.
-2. **Sicherheits-Review (Claude Code):** Claude prüft den Entwurf gegen die harten
-   Vorgaben unten (Anker-Trennung, fail closed, keine Zugangsdaten im Repo) und meldet
-   Befunde im PR oder Issue. Kaan entscheidet über den Entwurf selbst; eine
-   AI-Freigabe braucht er dafür nicht, anders als bei den Umsetzungs-PRs unten.
-3. **Umsetzung (Codex), je ein PR:** (a) Ledger mit Ablauf, (b) wartende Jobs,
+1. **Ziele (Kaan):** Kaan gibt Ziele und verbindliche Entscheidungen vor — Betriebsort
+   von Portal und Kern (bereits entschieden: Portal auf Vercel, Kern auf eigenem
+   Server, `docs/DECISIONS.md` 26.09.2026), Datenbank-Technologie (bereits entschieden:
+   PostgreSQL mit `psycopg`, `docs/DECISIONS.md` 26.09.2026) und beauftragt ChatGPT mit
+   dem Entwurf.
+2. **Entwurf (ChatGPT):** ChatGPT schreibt `docs/DATABASE.md` auf einem Branch
+   `chatgpt/db-design`, als Draft-PR. Inhalt: Schema und Tabellen (auch für das
+   Portal), Migrationen, Persistenzmodell, Fehler-/Recovery-Verhalten bei
+   beschädigtem Speicher, Verbindungskonzept, die Trennung von Audit-Kette und
+   Anker-Speicher, Portal- versus Core-Datenhaltung, Backup-/Restore-Design und
+   Betriebsanforderungen.
+3. **Sicherheits-Review (Claude Code):** Claude führt einen unabhängigen
+   Sicherheitsreview des Entwurfs durch, gegen die harten Vorgaben unten
+   (Anker-Trennung, fail closed, keine Zugangsdaten im Repo), und meldet Befunde im
+   PR. Claude entwirft dabei nichts selbst und gibt auch nichts frei — das bleibt
+   Kaans Schritt.
+4. **Freigabe (Kaan):** Kaan entscheidet offene Architekturfragen und gibt den Entwurf
+   frei; er mergt diesen ChatGPT-PR selbst (ChatGPT mergt nicht selbst, siehe unten).
+   Eine AI-Freigabe braucht der Entwurf-PR dafür nicht, anders als die
+   Umsetzungs-PRs unten.
+5. **Umsetzung (Codex), je ein PR:** (a) Ledger mit Ablauf, (b) wartende Jobs,
    (c) Audit-Kette, (d) Anker-Zustand, danach die Portal-Tabellen und (e) das Portal
-   selbst. Jeder DB-Code-PR braucht zusätzlich zur grünen CI ein **Claude-DB-Review auf
-   dem exakten aktuellen Head-SHA**: `Claude DB Review: APPROVED` oder
-   `Claude DB Review: CHANGES REQUESTED`. `CHANGES REQUESTED` oder eine Freigabe für
-   einen älteren Head-SHA blockiert den Merge. Da Claude hier Codex' Code gegen Kaans
-   Entwurf prüft, nicht die eigene Arbeit, ist das keine Selbstfreigabe.
-4. **Doku (NotebookLM):** `docs/DATABASE.md` wird Quelle im Notebook; Fragen zum Schema
-   gehen an NotebookLM.
+   selbst — jeweils nach dem freigegebenen Entwurf. Jeder DB-Code-PR braucht
+   zusätzlich zur grünen CI ein **Claude-DB-Review auf dem exakten aktuellen
+   Head-SHA**: `Claude DB Review: APPROVED` oder `Claude DB Review: CHANGES
+   REQUESTED`. `CHANGES REQUESTED` oder eine Freigabe für einen älteren Head-SHA
+   blockiert den Merge. Da Claude hier Codex' Code gegen Kaans freigegebenen Entwurf
+   prüft, nicht die eigene Arbeit, ist das keine Selbstfreigabe.
+6. **Doku (NotebookLM):** `docs/DATABASE.md` wird Quelle im Notebook, getrennt von
+   ChatGPTs eigenem Recherche-Notebook; Fragen zum Schema gehen an NotebookLM.
 
 **Harte Vorgaben für das Design:**
 - **Der Anker liegt nicht in derselben Datenbank wie die Audit-Kette** und nicht unter
@@ -119,8 +143,10 @@ Freigebenden und Quoten.
   geschlossen.
 
 **Ein DB-Code-PR** ist jeder PR von Codex, der Speicher-Code, Schema oder Migrationen
-ändert; er braucht das Gate aus Schritt 3. `docs/DATABASE.md` selbst schreibt und
-ändert Kaan.
+ändert; er braucht das Gate aus Schritt 5. `docs/DATABASE.md` selbst erstellt und
+pflegt ChatGPT im Auftrag von Kaan (Schritt 2); das ist kein DB-Code-PR und braucht
+kein `Claude DB Review: APPROVED`, sondern Claudes Sicherheitsreview und Kaans
+Freigabe (Schritte 3–4).
 
 ## ChatGPT: neue Werkzeuge, Server und Infrastruktur
 
@@ -131,29 +157,36 @@ einer läuft, ist es laufende Pflege.
 **Aufgaben:**
 - **Server-Pflege**, laufend: systemd-Units, Reverse-Proxy, TLS, Backups,
   Restore-Abläufe, sobald ein Server existiert.
-- **Neue Werkzeuge und Dashboards** — eine offene Kategorie, zum Beispiel Warp,
-  spätere Monitoring- oder Dashboard-Tools.
-- **Externe Integrationen:** PostgreSQL-Hosting, Vercel, OneDrive-Ablage,
-  NotebookLM-Setup.
+- **Neue Werkzeuge, Dashboards und Monitoring** — eine offene Kategorie, zum Beispiel
+  Warp, spätere Monitoring- oder Dashboard-Tools.
+- **Externe Integrationen:** PostgreSQL-/DB-Infrastruktur, Vercel-/Hosting-Integration,
+  OneDrive-Ablage, NotebookLM-Setup.
+- **Technische Architekturentwürfe im Infra-/DB-Bereich, inklusive `docs/DATABASE.md`**
+  im Auftrag von Kaan (siehe „Die Datenbank im Code“ oben): Schema, Migrationen,
+  Persistenzmodell, Fehler-/Recovery-Verhalten, Verbindungskonzept, Backup-/
+  Restore-Design, Betriebsanforderungen. ChatGPT entwirft; freigeben tut Kaan, nach
+  Claudes Sicherheitsreview — ChatGPT gibt den eigenen Entwurf nicht selbst frei.
 - **NotebookLM-Lesezugriff** wie die anderen Werkzeuge, dazu ein **eigenes
-  Recherche-Notebook** nur für ChatGPT — kein Teil der projektweiten Wissensdatenbank
-  und kein Governance-Dokument.
+  Recherche-Notebook** nur für ChatGPT — strikt getrennt von den projektweiten
+  NotebookLM-Quellen und kein Governance-Dokument.
 
-**Branch und Merge:** eigener Branch `chatgpt/<thema>`, Draft-PR, mit Wissensblock.
-ChatGPT mergt nicht selbst; Kaan mergt, nach Copilot-Review und, bei Deploy- oder
-Netz-Themen, nach Claudes Sicherheitsreview.
+**Branch und Merge:** eigener Branch `chatgpt/<thema>` (für die Datenbank:
+`chatgpt/db-design`), Draft-PR, mit Wissensblock. ChatGPT mergt nicht selbst; Kaan
+mergt, nach Copilot-Review und, bei Deploy-, Netz- oder DB-Design-Themen, nach Claudes
+Sicherheitsreview.
 
-**Darf nicht ändern:** `geniusnew/`, `tests/`, `scripts/refusals.py`,
-`scripts/demo.*`, `schemas/`, `SECURITY.md`, `requirements.txt`, `docs/DATABASE.md`,
-sowie alle Governance- und Wissensdateien (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`,
-`.gemini/*`, `.github/copilot-instructions.md`, `docs/COLLABORATION.md`,
-`docs/DECISIONS.md`, `docs/STATUS.md`, `docs/HANDOVER.md`).
+**Darf nicht ändern:** `geniusnew/` (Kerncode), Core-Tests, `scripts/refusals.py`,
+`scripts/demo.*`, `SECURITY.md` eigenständig, `requirements.txt`, sowie alle
+Governance- und Wissensdateien (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.gemini/*`,
+`.github/copilot-instructions.md`, `docs/COLLABORATION.md`, `docs/DECISIONS.md`,
+`docs/STATUS.md`, `docs/HANDOVER.md`). ChatGPT gibt außerdem nie den eigenen
+DB-Entwurf sicherheitstechnisch frei und mergt nie eigene PRs.
 
 ## Der Ablauf eines Themas
 
 1. Kaan wählt den nächsten Schritt; die Auskunft dazu gibt NotebookLM. Kerncode geht an
-   Codex (Prompt 1 aus `docs/HANDOVER.md`), Tools/Server/Infrastruktur an ChatGPT,
-   Regel- oder Konfliktfragen an Claude Code.
+   Codex (Prompt 1 aus `docs/HANDOVER.md`), Tools/Server/Infrastruktur/DB-Design an
+   ChatGPT, Regel- oder Konfliktfragen an Claude Code.
 2. Der Umsetzer öffnet einen Draft-PR auf dem eigenen Branch-Präfix
    (`codex/<thema>`, `chatgpt/<thema>` oder `claude/<thema>`) und schreibt den Plan in
    die PR-Beschreibung. Ändert das Thema eine Prozessgrenze oder Kryptografie, fragt
@@ -216,8 +249,9 @@ welcher Datei, bis wann es als erledigt gilt. Die Entscheidung ist für alle Wer
 verbindlich; Claude Code trägt sie selbst in `docs/DECISIONS.md` ein. Wo eine Datei
 korrigiert werden muss, darf Claude Code sie selbst ändern, auch die von Gemini
 (Überschreibrecht). Nicht überschreiben darf Claude Code Kaans Entscheidungen und die
-Ausnahmen (neue Abhängigkeit, Grenze aus `SECURITY.md`, Tags, Kaans eigener
-Datenbank-Entwurf). Das bleibt Kaans Sache. Claudes eigene PRs mergt Kaan.
+Ausnahmen (neue Abhängigkeit, Grenze aus `SECURITY.md`, Tags, Kaans Architektur- und
+Freigabeentscheidungen zur Datenbank). Das bleibt Kaans Sache. Claudes eigene PRs mergt
+Kaan.
 
 ## Wann Codex Claude um Hilfe bittet
 

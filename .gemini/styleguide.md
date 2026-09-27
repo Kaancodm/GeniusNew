@@ -30,7 +30,8 @@ GeniusNew ist ein Zero-Trust-Agentensystem in Python. Regeln: `AGENTS.md`, Rolle
    „## Für die Wissensdatenbank“? Fehlt er: *High*. Ändert ein Codex-PR
    `docs/STATUS.md`? Diese Datei gehört Gemini: *Medium*. Ändert er
    `docs/COLLABORATION.md`, `docs/DECISIONS.md` oder `docs/DATABASE.md`? Diese Dateien
-   gehören Claude Code beziehungsweise Kaan, nicht Codex: *High*.
+   gehören Claude Code beziehungsweise ChatGPT (im Auftrag von Kaan), nicht Codex:
+   *High*.
 
 9. **DB-Code-PRs** (Speicher-Code, Schema, Migrationen): Liegt der Anker in derselben
    Datenbank oder unter denselben Zugangsdaten wie die Audit-Kette? *Critical*. Startet

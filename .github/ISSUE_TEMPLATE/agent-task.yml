@@ -14,7 +14,7 @@ body:
       label: Zuständig
       options:
         - Codex (Kerncode)
-        - ChatGPT (Tools / Server / Infrastruktur)
+        - ChatGPT (Tools / Server / Infrastruktur / DB-Design im Auftrag von Kaan)
         - Gemini Pro (Projektstand docs/STATUS.md)
         - Copilot (begrenzte Umsetzung auf eigenem Branch)
         - Claude Code (Ordnung / Konflikt / Regeln)
