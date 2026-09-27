@@ -1,0 +1,5 @@
+name: GeniusNew - Demo
+command: ./scripts/demo.sh
+tags: ["geniusnew", "demo", "verify"]
+description: "Führt den dokumentierten End-to-End-Demo-Pfad aus und gibt dessen PASS/FAIL-Ergebnis aus."
+shells: ["bash"]
