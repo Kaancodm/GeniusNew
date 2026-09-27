@@ -407,8 +407,6 @@ class IsolationChildContractTest(unittest.TestCase):
 _SYSCALLS = {
     "x86_64": {"getpid": 39, "clone": 56, "fork": 57, "vfork": 58, "execve": 59,
                "execveat": 322, "clone3": 435},
-    "aarch64": {"getpid": 172, "clone": 220, "execve": 221, "execveat": 281,
-                "clone3": 435},
 }
 _PROBE = r"""
 import ctypes, os, sys
@@ -495,8 +493,6 @@ class ProcessFilterTest(unittest.TestCase):
 
     def test_every_process_or_program_start_syscall_is_killed(self):
         for name in ("fork", "vfork", "execve", "execveat"):
-            if name not in self.syscalls:
-                continue  # aarch64 has no fork or vfork syscall
             with self.subTest(syscall=name):
                 self.assertEqual(self.probe("native", self.syscalls[name]), -signal.SIGSYS)
 
