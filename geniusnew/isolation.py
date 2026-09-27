@@ -72,14 +72,12 @@ _FORBIDDEN_PROCESS_EVENTS = frozenset({
 })
 _FORBIDDEN_READ_ROOTS = ("/proc", "/sys", "/dev")
 
-# Per architecture: the audit arch the filter must see, the syscalls that start
-# a process or a program, and the two clone variants. aarch64 has no fork or
-# vfork syscall; libc builds both from clone there.
+# The verified x86_64 audit arch, process/program syscalls, and clone variants.
+# Other architectures fail closed until the same raw-syscall suite runs on
+# native CI for them.
 _FILTER_ARCHES = {
     "x86_64": {"arch": 0xC000003E, "kill": (57, 58, 59, 322),
                "clone": 56, "clone3": 435},
-    "aarch64": {"arch": 0xC00000B7, "kill": (221, 281),
-                "clone": 220, "clone3": 435},
 }
 _X32_SYSCALL_BIT = 0x40000000
 _CLONE_THREAD = 0x00010000
