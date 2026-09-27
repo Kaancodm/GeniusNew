@@ -194,7 +194,7 @@ create table approval_records (
     expires_at bigint not null,
     state text not null check (state in ('GRANTED', 'CONSUMED', 'REVOKED')),
     changed_at bigint not null,
-    previous_hash char(64) not null,
+    previous_hash char(64),
     primary key (token_digest, record_hash),
     foreign key (token_digest, previous_hash)
         references approval_records(token_digest, record_hash)
@@ -220,7 +220,7 @@ einen Vorgänger desselben Tokens nennen. Consume/Revoke sperren die Token-Zeile
 ```sql
 create table audit_chain (
     index bigint primary key check (index >= 0),
-    previous_hash char(64),
+    previous_hash char(64) not null,
     record_hash char(64) not null unique,
     event bytea not null
 );
