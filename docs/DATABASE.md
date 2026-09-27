@@ -118,7 +118,9 @@ create table job_ledger (
     unique (job_id, handoff_sha256),
     check (
         (state = 'PENDING_APPROVAL' and reserved_at is null)
-        or (state <> 'PENDING_APPROVAL' and reserved_at is not null)
+        or (state in ('RESERVED', 'EXECUTION_COMMITTED', 'COMPLETED')
+            and reserved_at is not null)
+        or state = 'REFUSED'
     )
 );
 ```
@@ -385,8 +387,8 @@ Crash zwischen DB-Commit und Anchor-Bestätigung:
   vollständigen Geschichte wiedergefunden werden;
 - erweitert die DB-Kette diesen verankerten Präfix konsistent, wird **kein isoliertes
   Suffix** an den Anker geschickt. Stattdessen wird aus der vollständigen DB-Kette der
-  neue signierte Kopf erzeugt und `AnchorAudit.commit()`/der aktuelle Anchor-Commit-Pfad
-  erhält erneut den vollständigen Record-Snapshot von Index 0 bis zum neuen Tip;
+  neue signierte Kopf erzeugt und `anchor.commit(head, records, authority=...)` erhält erneut den **vollständigen**
+  Record-Snapshot von Index 0 bis zum neuen Tip;
 - ist der Anker der DB voraus, fehlt der verankerte Präfix oder teilt die DB nicht
   dieselbe Geschichte, startet der Dienst nicht.
 
