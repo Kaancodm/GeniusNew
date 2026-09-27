@@ -11,6 +11,32 @@ Ziel: So wenig Abstimmung wie möglich. Jede Sache hat **genau einen Verantwortl
   Überschreibrecht gegenüber allen Werkzeugen.
 - **Entscheidungen:** Kaan. Kaan steht über allen, auch über Claude Code.
 
+## Temporärer Beta-Betriebsmodus — Kaan, 27.09.2026
+
+Bis Kaan diese Regel widerruft, gilt für die Arbeit bis zur technischen Beta-Reife:
+
+1. **Repository vor Erinnerung:** Vor einer Aufgabe werden `main`, offene PRs und deren
+   Basen geprüft. Ein neuerer GitHub-Stand schlägt ältere Übergaben, Chats und Plantexte.
+2. **Weiterarbeiten statt Leerlauf:** Ein klarer, bereits entschiedener Folgeschritt wird
+   nach grünem Vorgänger direkt begonnen. Gestoppt wird nur bei einem echten
+   Entscheidungs-, Sicherheits- oder technischen Blocker.
+3. **Gemini derzeit nicht als Gate:** Gemini-Reviews und DB-Freigaben sind vorläufig
+   optional und nicht merge-blockierend. Gemini kann weiter beraten und die
+   Wissensdatenbank pflegen.
+4. **Copilot Pro als Assistent:** Copilot kann zusätzliche Reviews und klar begrenzte
+   Aufgaben übernehmen; ein Branch hat weiterhin genau einen Implementierer.
+5. **Claude Code erweitert:** Claude ist nicht nur Konfliktlöser. Codex/ChatGPT darf
+   Claude für größere Phasen, tiefere Architektur-/Security-Arbeit oder bei echter
+   Unsicherheit hinzuziehen. Claude darf dann einen eigenen klar abgegrenzten
+   `claude/<thema>`-Branch und Draft-PR bearbeiten, mit denselben Tests, Demo- und
+   Refusal-Gates wie Codex.
+6. **Kaan bleibt letzte Instanz.** Security-Ausnahmen, Scope-Änderungen und der
+   öffentliche Beta-/Produktiv-Deploy bleiben bei Kaan.
+
+Diese temporäre Regel überstimmt für ihre Laufzeit ältere Sätze weiter unten, die
+Gemini-Freigaben als zwingendes Gate oder Claude ausschließlich als Hilferuf-Rolle
+beschreiben.
+
 ## Rollen
 
 | Wer | Macht | Macht nicht |
