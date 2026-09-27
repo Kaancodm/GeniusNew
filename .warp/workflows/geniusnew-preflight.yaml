@@ -1,0 +1,9 @@
+name: GeniusNew - Preflight
+command: python3 -W error::ResourceWarning -m unittest discover -s tests -v && ./scripts/demo.sh && python3 scripts/refusals.py {{module}} && git diff --check
+tags: ["geniusnew", "preflight", "security", "verify"]
+description: "Führt Tests, Demo, Refusal-Guard und git diff --check strikt nacheinander aus."
+shells: ["bash"]
+arguments:
+  - name: module
+    description: "Geändertes Guarded-Modul; Standard ist wiring.py"
+    default_value: geniusnew/wiring.py
