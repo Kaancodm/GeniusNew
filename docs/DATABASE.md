@@ -37,8 +37,9 @@ Audit-Kette sowie API-Key-Digests und Principal-Zuordnung.
 
 ### 2.2 Portal
 
-Das Portal läuft auf Vercel und besitzt eine **separate Portal-Datenbank** bzw. ein
-separates Schema mit getrennten Zugangsdaten. Das Portal speichert Nutzer, Sessions,
+Das Portal läuft auf Vercel und besitzt eine **separate PostgreSQL-Datenbank** mit
+eigenen Zugangsdaten. Core- und Portal-Daten liegen nicht nur in getrennten Schemas,
+sondern in getrennten Datenbanken und Runtime-Rollen. Das Portal speichert Nutzer, Sessions,
 Rollen und nicht-authoritative Anzeige-/Verlaufsdaten.
 
 Der Browser greift weder auf die Core-Datenbank noch auf deren Zugangsdaten zu. Der
@@ -49,9 +50,27 @@ Server-zu-Server-Schnittstelle. Ein vom Browser geliefertes `subject`, `tier`,
 ### 2.3 Audit-Anker
 
 Der Ankerzustand liegt **nicht** in der Core-Datenbank und verwendet **nicht** deren
-Zugangsdaten. Für v0.2 bleibt er ein eigener persistenter Store des Anchor-Prozesses,
-betrieben unter einem eigenen OS-Nutzer. Die Core-Datenbank darf diesen Store nicht
-schreiben.
+Zugangsdaten. Die Core-Datenbank darf diesen Store nicht schreiben.
+
+**Aktuelle Grenze:** Der vorhandene `AnchorProcess` läuft noch unter demselben
+Betriebssystem-Nutzer wie der Dienst; `SECURITY.md` hält diese Grenze ausdrücklich
+offen. Dieses Datenbankdesign schließt sie nicht. Der Betrieb unter einem eigenen
+OS-Nutzer ist ein separates Security-/Deployment-Thema mit eigenem Test und
+`SECURITY.md`-Änderung.
+
+### 2.4 Technikvergleich
+
+| Kriterium | SQLite | PostgreSQL |
+| --- | --- | --- |
+| Betrieb | einzelne lokale Datei, sehr einfach | eigener DB-Dienst |
+| Gleichzeitige Core-Instanzen | Schreibkonkurrenz/Dateisperren werden schnell zum Engpass | Transaktionen, Row Locks und Unique Constraints für mehrere Instanzen |
+| Vercel-Portal | keine dauerhaft lokale, gemeinsam erreichbare DB | netzwerkfähig und für Vercel geeignet |
+| Exactly-once-Reservation | möglich auf einem Host, schwächer für mehrere Prozesse/Hosts | atomare Inserts und `SELECT ... FOR UPDATE` |
+| Betriebsaufwand | geringer | höher, Backups/Monitoring nötig |
+| Ergebnis | sinnvoll für lokale Einzelinstanz/Tests | **gewählt** für v0.2-Produktion |
+
+PostgreSQL ist bereits von Kaan entschieden. Der Vergleich dokumentiert die verworfene
+Alternative, ohne die Technikentscheidung neu zu öffnen.
 
 ## 3. Kanonische Speicherregeln
 
@@ -90,7 +109,7 @@ create table job_ledger (
     subject text not null,
     handoff_sha256 char(64) not null,
     state text not null check (
-        state in ('RESERVED', 'EXECUTION_COMMITTED', 'COMPLETED', 'REFUSED')
+        state in ('PENDING_APPROVAL', 'RESERVED', 'EXECUTION_COMMITTED', 'COMPLETED', 'REFUSED')
     ),
     reserved_at bigint not null,
     updated_at bigint not null,
@@ -98,11 +117,15 @@ create table job_ledger (
 );
 ```
 
-**Atomare Reservation:** Der erste Schritt ist ein `INSERT`. Der Primary Key ist die
-globale Replay-Sperre. Ein Konflikt bedeutet `JOB_ID_REUSED`.
+**Atomare Reservation:** Der Primary Key ist die globale Replay-Sperre. Ein Konflikt
+bedeutet `JOB_ID_REUSED`. Bei approval-pflichtigen Jobs werden die
+`job_ledger`-Zeile im Zustand `PENDING_APPROVAL` und die zugehörige
+`pending_jobs`-Zeile **in derselben Transaktion** angelegt. Bei Jobs ohne Approval wird
+die Reservation vor der Ausführungsgrenze angelegt.
 
 **Crash-Regel:** Jede vorhandene `job_id` bleibt verbrannt. Es gibt keinen automatischen
-Retry mit derselben ID.
+Retry mit derselben ID. Ein abgelaufener Pending-Job wird auf `REFUSED` gesetzt; seine
+ID wird nicht wieder freigegeben.
 
 Vor Übergabe an den Worker wird der Zustand auf `EXECUTION_COMMITTED` gesetzt. Ein Crash
 danach bedeutet: Wirkung möglicherweise eingetreten, Ergebnis unbekannt. Dieser Zustand
@@ -120,14 +143,17 @@ Abnahmetests aus Konflikt 4 / Issue #44:
 create table acceptance_ledger (
     handoff_sha256 char(64) primary key,
     job_id text not null references job_ledger(job_id),
+    handoff_wire bytea not null,
     result_sha256 char(64) not null unique,
     result_wire bytea not null,
     accepted_at bigint not null
 );
 ```
 
-Eine vorhandene `handoff_sha256` bedeutet `RESULT_ALREADY_ACCEPTED`. Beim Laden wird
-`result_wire` erneut kryptografisch geprüft.
+Eine vorhandene `handoff_sha256` bedeutet `RESULT_ALREADY_ACCEPTED`. Beim Laden
+werden `handoff_wire` und `result_wire` gemeinsam neu validiert: Handoff-Signatur,
+Job-/Worker-Bindung, Handoff-Digest, Ergebnis-Signatur und `result_sha256` müssen zu
+den gespeicherten Bytes passen.
 
 ### 4.4 `pending_jobs`
 
@@ -135,7 +161,7 @@ Schema aus Issue #44:
 
 ```sql
 create table pending_jobs (
-    job_id text primary key,
+    job_id text primary key references job_ledger(job_id),
     subject text not null,
     wire bytea not null,
     trace_id text not null,
@@ -144,7 +170,14 @@ create table pending_jobs (
 ```
 
 Es gibt **kein** `handoff_data`. Der Handoff wird beim Laden ausschließlich aus `wire`
-neu validiert. Ein falscher oder fremder Approval-Token darf die Zeile nicht löschen.
+neu validiert.
+
+`job_ledger(PENDING_APPROVAL)` und `pending_jobs` entstehen in **einer Transaktion**.
+Beim Start ist eine Pending-Zeile ohne passende Ledger-Zeile oder eine
+`PENDING_APPROVAL`-Ledger-Zeile ohne Pending-Zeile ein Integritätsfehler; der Dienst
+startet nicht. Ein falscher oder fremder Approval-Token darf die Zeile nicht löschen.
+Bei korrektem Approval wird die Ledger-Zeile atomar aus `PENDING_APPROVAL` in
+`RESERVED` überführt; erst danach kann die Ausführungsgrenze erreicht werden.
 
 ### 4.5 Approval-Speicher
 
@@ -154,25 +187,33 @@ können.
 
 ```sql
 create table approval_records (
-    record_hash char(64) primary key,
     token_digest char(64) not null,
+    record_hash char(64) not null unique,
     scope bytea not null,
     issued_at bigint not null,
     expires_at bigint not null,
     state text not null check (state in ('GRANTED', 'CONSUMED', 'REVOKED')),
     changed_at bigint not null,
-    previous_hash char(64) null references approval_records(record_hash)
+    previous_hash char(64) not null,
+    primary key (token_digest, record_hash),
+    foreign key (token_digest, previous_hash)
+        references approval_records(token_digest, record_hash)
 );
 
 create table approval_tokens (
     token_digest char(64) primary key,
-    current_record_hash char(64) not null references approval_records(record_hash)
+    current_record_hash char(64) not null,
+    foreign key (token_digest, current_record_hash)
+        references approval_records(token_digest, record_hash)
 );
 ```
 
 `scope` sind die kanonischen Bytes der Approval-Scope-Fakten. `record_hash` wird beim
-Laden neu berechnet. Consume/Revoke sperren die Token-Zeile mit `SELECT ... FOR UPDATE`
-und sind nur aus `GRANTED` zulässig.
+Laden neu berechnet. Die zusammengesetzten Foreign Keys erzwingen, dass
+`previous_hash` und `current_record_hash` zum **gleichen `token_digest`** gehören.
+Für den ersten `GRANTED`-Record ist `previous_hash = NULL`; spätere Records müssen
+einen Vorgänger desselben Tokens nennen. Consume/Revoke sperren die Token-Zeile mit
+`SELECT ... FOR UPDATE` und sind nur aus `GRANTED` zulässig.
 
 ### 4.6 `audit_chain`
 
@@ -185,7 +226,9 @@ create table audit_chain (
 );
 ```
 
-Index beginnt bei 0 und ist lückenlos. `event` sind die exakten kanonischen Event-Bytes.
+Index beginnt bei 0 und ist lückenlos. Beim ersten Record ist `previous_hash` der
+All-zero-Digest aus 64 `0`-Zeichen — niemals `NULL`. `event` sind die exakten
+kanonischen Event-Bytes.
 Beim Start wird die **gesamte Kette** geladen, rehydriert, neu gehasht, auf
 `previous_hash` geprüft und anschließend gegen den externen Anker verifiziert.
 
@@ -249,7 +292,32 @@ create table user_roles (
 Eine Portalrolle allein erteilt noch kein Core-Approval. Der Server prüft die Rolle und
 ruft danach die dedizierte Core-Approval-Schnittstelle auf.
 
-### 5.4 Portal-Verlauf
+### 5.4 Quoten
+
+```sql
+create table user_quotas (
+    user_id text primary key references users(user_id),
+    max_pending_jobs bigint not null check (max_pending_jobs >= 0),
+    max_jobs_per_hour bigint not null check (max_jobs_per_hour >= 0),
+    max_jobs_per_month bigint not null check (max_jobs_per_month >= 0),
+    updated_at bigint not null
+);
+
+create table quota_usage (
+    user_id text not null references users(user_id),
+    window_kind text not null check (window_kind in ('HOUR', 'MONTH')),
+    window_start bigint not null,
+    jobs_started bigint not null check (jobs_started >= 0),
+    primary key (user_id, window_kind, window_start)
+);
+```
+
+Quoten werden serverseitig geprüft. Prüfung und Inkrement des passenden
+`quota_usage`-Datensatzes erfolgen in einer Transaktion mit Row Lock/Upsert; zwei
+parallele Requests dürfen das Limit nicht gemeinsam überschreiten. Portalwerte sind
+keine Client-Autorität und dürfen nicht aus dem Browser übernommen werden.
+
+### 5.5 Portal-Verlauf
 
 ```sql
 create table portal_jobs (
@@ -295,8 +363,9 @@ Vor Öffnen des HTTP-Listeners:
 1. Datenbank erreichbar;
 2. erwartete Migrationen mit korrekten Checksums vorhanden;
 3. Digest-, Zeit- und State-Felder formal gültig;
-4. gespeicherte Result-Wires erneut prüfen;
-5. Pending-Wires aus Bytes neu parsen und Signatur prüfen;
+4. gespeicherte Handoff-/Result-Wire-Paare gemeinsam erneut prüfen;
+5. Pending-Wires aus Bytes neu parsen, Signatur prüfen und 1:1 mit
+   `job_ledger(PENDING_APPROVAL)` abgleichen;
 6. Approval-Hashes und Vorgängerketten prüfen;
 7. vollständige Audit-Kette verifizieren;
 8. Audit-Kopf gegen Anchor-Store verifizieren oder ein konsistentes DB-Suffix erneut
@@ -314,7 +383,7 @@ Reihenfolge:
 2. `0002_pending_jobs`;
 3. `0003_approval_store`;
 4. `0004_audit_chain`;
-5. `0005_portal_identity`: users, sessions, roles;
+5. `0005_portal_identity`: users, sessions, roles, quotas;
 6. `0006_portal_history`.
 
 Migrationen laufen vor Dienststart, einzeln in Transaktionen. Kein automatisches
