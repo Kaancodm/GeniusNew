@@ -1,0 +1,9 @@
+name: GeniusNew - Refusal Guard
+command: python3 scripts/refusals.py {{module}}
+tags: ["geniusnew", "security", "refusal", "verify"]
+description: "Führt den Refusal-Mutation-Guard für genau ein Modul aus."
+shells: ["bash"]
+arguments:
+  - name: module
+    description: "Zu prüfendes Modul, zum Beispiel geniusnew/wiring.py"
+    default_value: geniusnew/wiring.py
