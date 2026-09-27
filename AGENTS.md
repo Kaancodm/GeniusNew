@@ -7,6 +7,33 @@ Kaan entscheidet, Claude Code sorgt für Ordnung und Struktur, löst Konflikte z
 den Plattformen (mit Überschreibrecht) und hilft bei einem Hilferuf. Kurzfassung für Copilot:
 `.github/copilot-instructions.md`. Aktueller Projektstand: `docs/STATUS.md`.
 
+## Temporärer Beta-Betriebsmodus — Kaan, 27.09.2026
+
+Diese Regel gilt **bis Kaan sie ausdrücklich ändert** und hat bei Widerspruch Vorrang vor
+älteren Rollen- oder Freigaberegeln in diesem Repository:
+
+- Ziel ist ein **durchgehender Entwicklungs-Push bis technisch beta-ready**. Nach einem
+  kleinen erfolgreichen PR wird nicht auf eine neue Grundsatzfreigabe gewartet, solange
+  der nächste Schritt bereits entschieden und innerhalb des freigegebenen Scopes liegt.
+- Vor jeder neuen Phase zuerst den **aktuellen `main`-SHA, offene PRs und deren Basen**
+  prüfen. Alte Chats, ältere Branches, Roadmap-Texte oder PR-Beschreibungen dürfen einen
+  neueren Repository-Stand nicht zurücksetzen.
+- **Gemini-Freigaben sind in dieser Phase nicht blockierend.** Gemini darf weiterhin
+  beraten und Wissen pflegen; fehlende Gemini-Reviews halten Code- oder DB-Arbeit derzeit
+  nicht auf. Kaans Entscheidungen bleiben verbindlich.
+- **GitHub Copilot Pro** wird als zusätzlicher Assistent und Reviewer eingesetzt.
+- **Claude Code darf aktiv für größere zusammenhängende Phasen, Architektur-/Security-
+  Prüfungen und schwierige Konflikte eingesetzt werden**, nicht nur nach einem formalen
+  Hilferuf. Für kleine, eindeutige und durch Tests/CI belegte Änderungen arbeitet
+  Codex/ChatGPT direkt weiter.
+- Bei echter Unsicherheit zu Architektur, Security-Grenzen oder widersprüchlichen
+  Befunden wird Claude als Zweitmeinung hinzugezogen. Die Umsetzung bleibt pro Branch
+  bei genau einem Implementierer.
+- Alle bisherigen Sicherheitsregeln bleiben: fail closed, keine Secrets, keine
+  Testabschwächung, Evidenz am exakten Head-SHA.
+- **Öffentlicher Deploy, produktiver Release, Secret-Rotation und neue externe
+  Zugriffsrechte** brauchen weiterhin Kaans ausdrückliches OK.
+
 ## Was das ist
 
 GeniusNew ist ein Zero-Trust-Agentensystem. Ein Auftrag kommt über HTTP herein, der
