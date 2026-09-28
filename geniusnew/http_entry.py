@@ -71,8 +71,9 @@ until the socket timeout; past the cap a new connection is closed unread.
 
 There is no authentication beyond the key, no TLS termination, no session, and
 no limit on unauthenticated traffic beyond the connection cap. Those belong to a
-deployment, and pretending otherwise inside this file would be the kind of claim
-`SECURITY.md` exists to prevent.
+deployment (`docs/REVERSE-PROXY.md` shows one in front of this entrance), and
+pretending otherwise inside this file would be the kind of claim `SECURITY.md`
+exists to prevent.
 """
 
 from __future__ import annotations
