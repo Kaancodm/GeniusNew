@@ -50,12 +50,29 @@ Every refusal from behind the entrance is the same `409 REJECTED`: an unknown
 job, another subject's job, a wrong token and a used one cannot be told apart
 from outside, so the route answers nothing about which jobs exist.
 
+## How much one caller, and all callers, can make it do
+
+Each principal draws from its own token bucket, refilled at a fixed rate, so one
+key cannot spend the workers every other key needs. The bucket is keyed on the
+subject the registry resolved, never on anything the request says about itself,
+and it is checked only after authentication: an unauthenticated flood has no
+subject to charge and is the connection limit's business.
+
+Every job holds a worker process for as long as it runs, so at most
+`max_in_flight` run at once across all principals. A request beyond that is
+answered `503` at once rather than queued: a queue would move the exhaustion
+into memory and make every caller's latency the attacker's choice.
+
+`serve` caps open connections. `ThreadingHTTPServer` otherwise starts a thread
+per connection, and a client that opens many and sends nothing holds each one
+until the socket timeout; past the cap a new connection is closed unread.
+
 ## What this is not
 
-There is no rate limiting, no authentication beyond the key, no TLS termination,
-and no session. Those belong to a deployment, and pretending otherwise inside
-this file would be the kind of claim `SECURITY.md` exists to prevent. What is
-here is the mapping and the refusals around it.
+There is no authentication beyond the key, no TLS termination, no session, and
+no limit on unauthenticated traffic beyond the connection cap. Those belong to a
+deployment, and pretending otherwise inside this file would be the kind of claim
+`SECURITY.md` exists to prevent.
 """
 
 from __future__ import annotations
@@ -64,6 +81,8 @@ import hashlib
 import json
 import re
 import secrets
+import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
@@ -79,6 +98,17 @@ _APPROVAL_TOKEN = re.compile(r"\A[0-9a-f]{64}\Z")
 _METHOD = "POST"
 _AUTH_SCHEME = "Bearer "
 
+# Defaults sized for a closed beta on one host; every one is an upper bound a
+# deployment may lower, and the ceilings below keep a typo from removing it.
+_RATE_PER_MINUTE = 60
+_BURST = 20
+_MAX_IN_FLIGHT = 8
+_MAX_CONNECTIONS = 64
+_CEILING_RATE_PER_MINUTE = 6000
+_CEILING_BURST = 1000
+_CEILING_IN_FLIGHT = 256
+_CEILING_CONNECTIONS = 4096
+
 # Closed, like every other refusal vocabulary here, so that a refusal cannot
 # carry text out of the boundary it refused at. A reason a client is told is a
 # reason an attacker is told, so these say what is wrong with the *request*,
@@ -90,6 +120,8 @@ REASONS = frozenset({
     "PAYLOAD_TOO_LARGE",
     "MALFORMED_REQUEST",
     "UNAUTHENTICATED",
+    "TOO_MANY_REQUESTS",
+    "SERVICE_BUSY",
     "REJECTED",
     "ACCEPTED",
 })
@@ -197,6 +229,35 @@ def _refusal(status: int, reason: str) -> Response:
     return Response(status=status, reason=reason, body={"error": reason})
 
 
+def _bounded(value: Any, name: str, ceiling: int) -> int:
+    if type(value) is not int or not 1 <= value <= ceiling:
+        _fail(f"{name} must be an integer between 1 and {ceiling}")
+    return value
+
+
+class _Buckets:
+    """One token bucket per subject. The registry bounds how many subjects exist."""
+
+    def __init__(self, *, rate_per_minute: int, burst: int,
+                 clock: Callable[[], float]) -> None:
+        self._rate = rate_per_minute / 60.0
+        self._burst = float(burst)
+        self._clock = clock
+        self._state: dict[str, tuple[float, float]] = {}
+        self._lock = threading.Lock()
+
+    def take(self, subject: str) -> bool:
+        with self._lock:
+            now = self._clock()
+            tokens, last = self._state.get(subject, (self._burst, now))
+            # A clock that steps back mints nothing, and the last reading is
+            # kept, so the time it steps back by is not refilled twice later.
+            tokens = min(self._burst, tokens + max(0.0, now - last) * self._rate)
+            granted = tokens >= 1.0
+            self._state[subject] = (tokens - 1.0 if granted else tokens, max(last, now))
+            return granted
+
+
 class HttpEntry:
     """Maps one authenticated request onto one job, and refuses everything else.
 
@@ -209,7 +270,10 @@ class HttpEntry:
                  submit: Callable[..., Mapping[str, Any]],
                  job_ids: Callable[[], str] | None = None,
                  max_body_bytes: int = _MAX_BODY_BYTES,
-                 complete: Callable[..., Mapping[str, Any]] | None = None) -> None:
+                 complete: Callable[..., Mapping[str, Any]] | None = None,
+                 rate_per_minute: int = _RATE_PER_MINUTE, burst: int = _BURST,
+                 max_in_flight: int = _MAX_IN_FLIGHT,
+                 clock: Callable[[], float] | None = None) -> None:
         if not isinstance(registry, PrincipalRegistry):
             _fail("registry must be a PrincipalRegistry")
         if not callable(submit):
@@ -220,6 +284,15 @@ class HttpEntry:
             _fail("job_ids must be callable")
         if type(max_body_bytes) is not int or not 0 < max_body_bytes <= _MAX_BODY_BYTES:
             _fail(f"max_body_bytes must be between 1 and {_MAX_BODY_BYTES}")
+        if clock is not None and not callable(clock):
+            _fail("clock must be callable")
+        self._buckets = _Buckets(
+            rate_per_minute=_bounded(rate_per_minute, "rate_per_minute",
+                                     _CEILING_RATE_PER_MINUTE),
+            burst=_bounded(burst, "burst", _CEILING_BURST),
+            clock=clock or time.monotonic)
+        self._in_flight = threading.BoundedSemaphore(
+            _bounded(max_in_flight, "max_in_flight", _CEILING_IN_FLIGHT))
         self._registry = registry
         self._submit = submit
         self._complete = complete
@@ -259,6 +332,10 @@ class HttpEntry:
         principal = self._principal(lowered.get("authorization"))
         if principal is None:
             return _refusal(401, "UNAUTHENTICATED")
+        # Charged before the body is parsed: a malformed request still spends
+        # this caller's budget, not everyone's.
+        if not self._buckets.take(principal.subject):
+            return _refusal(429, "TOO_MANY_REQUESTS")
 
         if approving is not None:
             return self._approve(principal, approving.group(1), body,
@@ -320,6 +397,8 @@ class HttpEntry:
                           job_id=job_id, approval_token=bytes.fromhex(token))
 
     def _call(self, target: Callable[..., Any], minted: str, **arguments: Any) -> Response:
+        if not self._in_flight.acquire(blocking=False):
+            return _refusal(503, "SERVICE_BUSY")
         try:
             outcome = target(**arguments)
         except ContractError:
@@ -327,6 +406,8 @@ class HttpEntry:
             # job was refused, not which check refused it: those messages name
             # policy fields, and naming them to a stranger is a map.
             return _refusal(409, "REJECTED")
+        finally:
+            self._in_flight.release()
         if not isinstance(outcome, Mapping):
             return _refusal(500, "REJECTED")
         body = {"job_id": minted, **{key: value for key, value in outcome.items()}}
@@ -432,17 +513,47 @@ def make_handler(entry: HttpEntry):
     return Handler
 
 
-def serve(entry: HttpEntry, *, host: str = "127.0.0.1", port: int = 0):
+def _bounded_server(slots: int):
+    """A ThreadingHTTPServer that closes, unread, any connection past `slots`."""
+    from http.server import ThreadingHTTPServer
+
+    class BoundedServer(ThreadingHTTPServer):
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self._slots = threading.BoundedSemaphore(slots)
+            super().__init__(*args, **kwargs)
+
+        def process_request(self, request: Any, client_address: Any) -> None:
+            # No thread for a connection that will not be served: spending one
+            # to say "full" is the resource the limit exists to protect.
+            if not self._slots.acquire(blocking=False):
+                self.shutdown_request(request)
+                return
+            try:
+                super().process_request(request, client_address)
+            except BaseException:
+                self._slots.release()
+                raise
+
+        def process_request_thread(self, request: Any, client_address: Any) -> None:
+            try:
+                super().process_request_thread(request, client_address)
+            finally:
+                self._slots.release()
+
+    return BoundedServer
+
+
+def serve(entry: HttpEntry, *, host: str = "127.0.0.1", port: int = 0,
+          max_connections: int = _MAX_CONNECTIONS):
     """A threading server bound to `entry`, not started. The caller runs it.
 
     Binds to loopback by default: an entrance that listens on every interface
     the moment someone imports it is a decision, and it should be taken out
     loud.
     """
-    from http.server import ThreadingHTTPServer
-
     if type(host) is not str or not host:
         _fail("host must be a non-empty string")
     if type(port) is not int or not 0 <= port <= 65535:
         _fail("port must be between 0 and 65535")
-    return ThreadingHTTPServer((host, port), make_handler(entry))
+    slots = _bounded(max_connections, "max_connections", _CEILING_CONNECTIONS)
+    return _bounded_server(slots)((host, port), make_handler(entry))
