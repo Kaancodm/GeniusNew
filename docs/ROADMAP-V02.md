@@ -54,7 +54,7 @@ anpassen.
 | # | Gate | Nachweis | Stand |
 | --- | --- | --- | --- |
 | A1 | Prozessstart im Worker kernel-seitig gesperrt (Seccomp), andere Plattformen fail closed | `test_a_spawn_below_the_audit_hook_…` umgekehrt | #57 (Codex) |
-| A2 | Worker liest keine Host-Dateien: eigener unprivilegierter OS-Nutzer und Landlock-Allowlist (nur Job-Verzeichnis, Python-Laufzeit lesend); ohne Landlock-Unterstützung fail closed. **Mindestziel**, falls Kaan die volle Lösung verschiebt: Root-Secret, DB-Zugangsdaten und Ankerzustand sind für den Worker nicht lesbar | `test_a_read_outside_the_temporary_directory_…` umgekehrt; Mindestziel: Test „Worker liest die Secret-Datei“ wird abgelehnt | offen |
+| A2 | Worker liest keine Host-Dateien: eigener unprivilegierter OS-Nutzer und Landlock-Allowlist (nur Job-Verzeichnis, Python-Laufzeit lesend); ohne Landlock-Unterstützung fail closed. **Mindestziel**, falls Kaan die volle Lösung verschiebt: Root-Secret, DB-Zugangsdaten und Ankerzustand sind für den Worker nicht lesbar | `test_a_read_outside_the_temporary_directory_…` umgekehrt; Mindestziel: Test „Worker liest die Secret-Datei“ wird abgelehnt | Design #72 (Claude); Umsetzung nach #57 |
 
 ### B — Persistenz (nach `docs/DATABASE.md`)
 
@@ -101,7 +101,7 @@ A1 → B0 → B1 → B2 → B3 → B4 → B5 → B6 → B7 → C1 → C2 → C3 
 C5 → E1 → E2 → E3.
 
 Zuständigkeit (Vorschlag, je Branch ein Implementierer; Rollen nach #66): Codex B1–B4, C3, jeder DB-PR mit „Claude DB Review: APPROVED“ am exakten Head; Claude C1
-(#61), C2 (#62, Neuaufbau aus #32), C4 (#71) und das Design von A2; B5 und B6 Claude (Security) mit
+(#61), C2 (#62, Neuaufbau aus #32), C4 (#71) und das Design von A2 (#72); B5 und B6 Claude (Security) mit
 Codex; E2 prüft Claude, E3 und jeder Deploy bleiben bei Kaan.
 
 A2 und C2 hängen am selben Betriebsmodell (eigene OS-Nutzer) und können parallel zu B
