@@ -56,8 +56,18 @@ im selben Muster wie der Seccomp-Filter aus #57. Die Einschränkung gilt ab dann
 | 4 | 6.7 | TCP `bind`/`connect` im Kernel; heute sperrt Netz nur der Hook |
 | 6 | 6.12 | abstrakte Unix-Sockets und Signale an Prozesse außerhalb |
 
-Vorschlag: **ABI 4** verlangen, wenn der Server-Kernel das hergibt, sonst ABI 1 und die
-Netzsperre bleibt beim Hook. UDP deckt Landlock in keiner ABI ab.
+Der Zielhost läuft laut Server-Evidenz in #57 unter Debian 13 mit Kernel 6.12 (x86_64).
+Der Kernel kann also bis ABI 6. Ob Landlock dort auch aktiv ist, also in der LSM-Liste
+beim Booten steht, ist **UNKNOWN**. Prüfen lässt sich das auf dem Host ohne Root und ohne
+Änderung (Ausgabe: ABI-Version; eine negative Zahl heißt „nicht aktiv“):
+
+```sh
+python3 -c 'import ctypes; l=ctypes.CDLL(None, use_errno=True); l.syscall.restype=ctypes.c_long; print(l.syscall(444, None, 0, 1), ctypes.get_errno())'
+```
+
+Vorschlag: **ABI 4** verlangen. Damit sperrt der Kernel auch TCP. Kann der Kernel mehr
+(Scopes aus ABI 6), wird es zusätzlich gesetzt; zugesagt wird nur, was ABI 4 sperrt. UDP
+deckt Landlock in keiner ABI ab; diese Sperre bleibt beim Hook.
 
 ## Prototyp (nicht im Repository)
 
@@ -116,5 +126,5 @@ so gewollt. Systembibliotheksverzeichnisse kommen nicht pauschal auf die Allowli
 
 1. A2 vor der Beta schließen (Vorschlag: ja; der Prototyp zeigt, dass der Aufwand klein
    ist).
-2. Mindest-ABI 4 (Kernel ≥ 6.7) oder 1 (Kernel ≥ 5.13); hängt am Server-Kernel.
+2. Mindest-ABI 4 (Kernel ≥ 6.7; der Zielhost hat 6.12) oder 1 (Kernel ≥ 5.13).
 3. Eigener OS-Nutzer für Worker in C5 statt in A2.
