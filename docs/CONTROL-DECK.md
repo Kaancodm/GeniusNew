@@ -53,8 +53,17 @@ Löschen, Archivieren oder Markieren von E-Mails.
 - keine freie Shell, kein Merge, kein Deploy und keine Security-Freigabe aus dem Browser;
 - keine Secrets, Remote-URLs oder Environment-Werte werden angezeigt;
 - Standard-Bindung nur auf Loopback; der Serverbetrieb bindet explizit an die private
-  Tailscale-IP;
-- direkter Zugriff vom iPad erfolgt ausschließlich über das private Tailscale-Netz.
+  Tailscale-IP. `--host` lehnt jede andere Adresse ab, auch `0.0.0.0`: erlaubt sind
+  Loopback, `100.64.0.0/10` und `fd7a:115c:a1e0::/48`. Nutzt der Provider des Servers
+  selbst CGNAT, kann eine Adresse aus `100.64.0.0/10` auch am öffentlichen Interface
+  liegen; dann bitte die Adresse aus `tailscale ip -4` verwenden, nicht raten;
+- direkter Zugriff vom iPad erfolgt ausschließlich über das private Tailscale-Netz;
+- jede Anfrage muss einen `Host`-Header tragen, der zur gebundenen Adresse und zum Port
+  passt (oder zu `localhost`/`127.0.0.1`), sonst `421`. Das verhindert DNS-Rebinding:
+  Eine fremde Webseite, deren Name auf die Deck-Adresse zeigt, kann weder `/api/mail`
+  lesen noch Aktionen starten. POST mit fremdem `Origin` wird mit `403` abgelehnt;
+- Zugriff über einen Namen statt der IP (z. B. `tailscale serve` oder MagicDNS) braucht
+  den Namen ausdrücklich: `--allow-host <name>` bzw. `--allow-host <name>:<port>`.
 
 Das Dashboard ist Beobachter. Ein rotes Gate darf nicht per UI auf grün gesetzt werden.
 Der Status muss aus Repository, Diensten und tatsächlichen Nachweisen folgen.
