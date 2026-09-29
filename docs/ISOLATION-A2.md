@@ -1,7 +1,9 @@
 # Design Gate A2: Der Worker liest keine Host-Dateien
 
 Stand: 28.09.2026, Basis `main` `6d9048ab31a1b1d8dd63e81e596a74db3921449d`. Entwurf von
-Claude (Zuständigkeit laut Roadmap v0.2, #59); die Umsetzung ist ein eigener PR.
+Claude (Zuständigkeit laut Roadmap v0.2, #59). Kaan hat am 29.09.2026 entschieden: A2
+kommt vor die Beta, Claude setzt um. Umgesetzt mit Mindest-ABI 4 in
+`geniusnew/isolation.py` und `geniusnew/isolation_child.py`.
 
 ## Problem
 

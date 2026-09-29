@@ -94,9 +94,9 @@ ohne Permit, gekürzte oder zurückgesetzte Kette) wird abgelehnt.
 **Was `PASS` nicht bedeutet:** keine Produktionsfreigabe und kein Sicherheitsnachweis
 für einen echten Betrieb. Außer Worker und Audit-Anker sind die Instanzen getrennte
 Objekte in einem Prozess; die Worker-Isolation ist eine Prozessgrenze, keine microVM, und
-beruht auf einem Python-Audit-Hook, den Worker-Code umgehen kann — ein Worker kann so
-Prozesse starten und außerhalb seines Verzeichnisses schreiben, und er darf Dateien des
-Hosts lesen; der Anker wird vom Dienst unter demselben Nutzer gestartet (seine
+beruht auf einem Python-Audit-Hook plus Seccomp (kein Prozessstart) und Landlock
+(nur Job-Verzeichnis, lesend Python-Laufzeit, Paket und Worker-Modul, kein TCP); der
+Anker wird vom Dienst unter demselben Nutzer gestartet (seine
 Zustandsdatei übersteht einen Neustart, schützt aber nicht vor Rückschnitt durch diesen
 Nutzer); alle Signaturen (Handoff, Ergebnis, Audit-Kopf) sind Ed25519, aber alle
 Schlüssel hängen an einem Root-Secret. Die bekannten Grenzen stehen einzeln in

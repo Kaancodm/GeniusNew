@@ -1,10 +1,13 @@
 import errno
+import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 from unittest.mock import patch
 
@@ -23,9 +26,11 @@ from geniusnew.workers import (
     _WorkerResourceExhausted,
 )
 
-# The runner refuses to start without both; elsewhere only its refusal is tested.
+# The runner refuses to start without all three; elsewhere only its refusal is tested.
+_LANDLOCK_SUPPORTED = isolation_module._landlock_abi() >= isolation_module._LANDLOCK_MIN_ABI
 _ISOLATION_SUPPORTED = (isolation_module._resource_supported()
-                        and isolation_module._process_filter_supported())
+                        and isolation_module._process_filter_supported()
+                        and _LANDLOCK_SUPPORTED)
 
 
 class ReturningWorker(Worker):
@@ -285,6 +290,25 @@ class IsolationLimitsTest(unittest.TestCase):
             with self.assertRaisesRegex(ContractError, "seccomp process filter"):
                 IsolatedWorkerRunner(DeterministicSummarizer(), authority=authority)
 
+    def test_runner_fails_closed_below_landlock_abi_4(self):
+        authority = WorkerAuthority(result_key=b"a-separate-result-key-of-32bytes!")
+        for abi in (0, 3):
+            with self.subTest(abi=abi), \
+                    patch.object(isolation_module, "_resource_supported", return_value=True), \
+                    patch.object(isolation_module, "_process_filter_supported", return_value=True), \
+                    patch.object(isolation_module, "_landlock_abi", return_value=abi):
+                with self.assertRaisesRegex(ContractError, "Landlock ABI 4"):
+                    IsolatedWorkerRunner(DeterministicSummarizer(), authority=authority)
+
+    def test_a_worker_module_without_a_file_is_refused(self):
+        module = types.ModuleType("geniusnew_test_fileless_module")
+        exec("from geniusnew.workers import Worker\n"
+             "class FilelessWorker(Worker):\n    tool = 'summarize'\n", module.__dict__)
+        sys.modules[module.__name__] = module
+        self.addCleanup(sys.modules.pop, module.__name__)
+        with self.assertRaisesRegex(ContractError, "module must be a file"):
+            isolation_module._read_paths(module.FilelessWorker())
+
     def test_local_worker_classes_are_not_accepted_for_exec_isolation(self):
         class LocalWorker(Worker):
             tool = "summarize"
@@ -327,9 +351,21 @@ class IsolationChildContractTest(unittest.TestCase):
                 "max_file_bytes": 1024 * 1024,
                 "max_open_files": 64,
             },
+            "read_paths": ["/usr/lib/python3"],
         }
         value.update(over)
         return value
+
+    def test_a_valid_request_decodes(self):
+        value = self.request_value()
+        self.assertEqual(isolation_child_module._decode_request(canonical(value)), value)
+
+    def test_read_paths_must_be_a_list_of_absolute_strings(self):
+        for read_paths in ("/usr/lib", ["relative/dir"], [42], {"/usr": 1}):
+            with self.subTest(read_paths=read_paths):
+                with self.assertRaisesRegex(ContractError, "invalid isolation read paths"):
+                    isolation_child_module._decode_request(
+                        canonical(self.request_value(read_paths=read_paths)))
 
     def test_request_size_guard_rejects_an_otherwise_valid_oversized_request(self):
         value = self.request_value(payload={"text": "x" * 40000})
@@ -518,7 +554,169 @@ class ProcessFilterTest(unittest.TestCase):
         self.assertEqual(self.probe("native", number), -signal.SIGSYS)
 
 
-@unittest.skipUnless(_ISOLATION_SUPPORTED, "POSIX limits and a seccomp filter required")
+class ReadHookTest(unittest.TestCase):
+    """The audit hook alone, without Landlock: it must refuse the same reads."""
+
+    def test_reads_off_the_allowlist_are_refused_and_recorded(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as allowed, \
+                tempfile.TemporaryDirectory() as outside:
+            root, allowed, outside = map(os.path.realpath, (root, allowed, outside))
+            state = {"violated": False}
+            hook = isolation_module._audit_hook(root, state, (allowed,))
+            hook("open", (os.path.join(root, "inside.txt"), "r", os.O_RDONLY))
+            hook("open", (os.path.join(allowed, "module.py"), "r", os.O_RDONLY))
+            self.assertFalse(state["violated"])
+            for path in (os.path.join(outside, "secret"), "/proc/1/environ", "/dev/null"):
+                with self.subTest(path=path):
+                    with self.assertRaises(isolation_module._SandboxDenied):
+                        hook("open", (path, "r", os.O_RDONLY))
+            self.assertTrue(state["violated"])
+
+
+class FilesystemRulesContractTest(unittest.TestCase):
+    """Every refusal of the Landlock installer, driven by a fake kernel."""
+
+    def kernel(self, *, abi=4, fail=None):
+        calls = []
+        self.attrs = []
+
+        def syscall(number, *args):
+            calls.append(number)
+            if number == isolation_module._SYS_LANDLOCK_CREATE_RULESET:
+                if args[-1] == isolation_module._LANDLOCK_CREATE_RULESET_VERSION:
+                    return abi
+                self.attrs.append(args[0]._obj)
+                return -1 if fail == "create" else os.open(os.devnull, os.O_RDONLY)
+            if number == isolation_module._SYS_LANDLOCK_ADD_RULE:
+                return -1 if fail == "add" else 0
+            if number == isolation_module._SYS_LANDLOCK_RESTRICT_SELF:
+                return -1 if fail == "restrict" else 0
+            raise AssertionError(number)
+
+        def prctl(option, *args):
+            calls.append(("prctl", option))
+            return -1 if fail == "prctl" else 0
+
+        return calls, syscall, prctl
+
+    def install(self, root, read_paths=(), **kernel):
+        calls, syscall, prctl = self.kernel(**kernel)
+        isolation_module._install_filesystem_rules(root, read_paths, syscall, prctl)
+        return calls
+
+    def test_each_kernel_failure_is_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            for fail, message in (("create", "create the worker's Landlock ruleset"),
+                                  ("add", "add a Landlock rule"),
+                                  ("prctl", "no_new_privs"),
+                                  ("restrict", "restrict the worker with Landlock")):
+                with self.subTest(fail=fail):
+                    with self.assertRaisesRegex(ContractError, message):
+                        self.install(root, fail=fail)
+
+    def test_an_abi_below_4_is_refused_before_any_rule(self):
+        with tempfile.TemporaryDirectory() as root:
+            for abi in (0, 1, 3):
+                with self.subTest(abi=abi):
+                    with self.assertRaisesRegex(ContractError, "Landlock ABI 4"):
+                        self.install(root, abi=abi)
+
+    def test_everything_the_abi_knows_is_handled_and_tcp_is_denied(self):
+        with tempfile.TemporaryDirectory() as root:
+            for abi, scoped in ((4, 0), (6, isolation_module._LANDLOCK_SCOPES)):
+                with self.subTest(abi=abi):
+                    self.install(root, abi=abi)
+                    attr = self.attrs[-1]
+                    self.assertEqual(attr.handled_access_fs, isolation_module._landlock_fs_rights(abi))
+                    self.assertEqual(attr.handled_access_net, isolation_module._LANDLOCK_NET_TCP)
+                    self.assertEqual(attr.scoped, scoped)
+
+    def test_filesystem_rights_per_abi(self):
+        self.assertEqual([isolation_module._landlock_fs_rights(abi) for abi in range(1, 8)],
+                         [0x1FFF, 0x3FFF, 0x7FFF, 0x7FFF, 0xFFFF, 0xFFFF, 0xFFFF])
+
+    def test_one_rule_per_existing_path_then_restrict(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as allowed:
+            calls = self.install(root, (allowed, os.path.join(allowed, "missing")))
+        add = isolation_module._SYS_LANDLOCK_ADD_RULE
+        self.assertEqual(calls.count(add), 2)  # root and the existing read path
+        self.assertEqual(calls[-2:], [("prctl", isolation_module._PR_SET_NO_NEW_PRIVS),
+                                      isolation_module._SYS_LANDLOCK_RESTRICT_SELF])
+
+    def test_a_missing_job_directory_is_refused(self):
+        with tempfile.TemporaryDirectory() as parent:
+            with self.assertRaises(FileNotFoundError):
+                self.install(os.path.join(parent, "gone"))
+
+    def test_no_kernel_support_reads_as_abi_0(self):
+        self.assertEqual(isolation_module._landlock_abi(lambda *args: -1), 0)
+        with patch.object(isolation_module.sys, "platform", "darwin"):
+            self.assertEqual(isolation_module._landlock_abi(lambda *args: 7), 0)
+
+
+_LANDLOCK_PROBE = r"""
+import json, os, socket, sys
+import geniusnew.isolation as isolation
+
+root, allowed, outside, port = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+isolation._install_filesystem_rules(root, (allowed,))
+
+def attempt(action):
+    try:
+        action()
+        return "allowed"
+    except PermissionError:
+        return "denied"
+
+def read(path):
+    with open(path, encoding="utf-8") as handle:
+        handle.read()
+
+def write(path):
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("x")
+
+print(json.dumps({
+    "read_root": attempt(lambda: read(os.path.join(root, "inside.txt"))),
+    "write_root": attempt(lambda: write(os.path.join(root, "new.txt"))),
+    "read_allowed": attempt(lambda: read(os.path.join(allowed, "allowed.txt"))),
+    "write_allowed": attempt(lambda: write(os.path.join(allowed, "new.txt"))),
+    "read_outside": attempt(lambda: read(os.path.join(outside, "secret.txt"))),
+    "list_outside": attempt(lambda: os.listdir(outside)),
+    "write_outside": attempt(lambda: write(os.path.join(outside, "new.txt"))),
+    "tcp_connect": attempt(lambda: socket.create_connection(("127.0.0.1", port), timeout=2).close()),
+}))
+"""
+
+
+@unittest.skipUnless(_LANDLOCK_SUPPORTED, "Landlock ABI 4 required")
+class FilesystemRulesTest(unittest.TestCase):
+    """Landlock alone, without the audit hook, in a throwaway process."""
+
+    def test_the_kernel_enforces_the_allowlist(self):
+        package_root = os.path.dirname(os.path.dirname(os.path.abspath(isolation_module.__file__)))
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as allowed, \
+                tempfile.TemporaryDirectory() as outside, socket.socket() as listener:
+            for directory, name in ((root, "inside.txt"), (allowed, "allowed.txt"),
+                                    (outside, "secret.txt")):
+                with open(os.path.join(directory, name), "w", encoding="utf-8") as handle:
+                    handle.write("content")
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            completed = subprocess.run(
+                [sys.executable, "-c", _LANDLOCK_PROBE, root, allowed, outside,
+                 str(listener.getsockname()[1])],
+                cwd=package_root, capture_output=True, timeout=10, check=True,
+            )
+            self.assertFalse(os.path.exists(os.path.join(outside, "new.txt")))
+        self.assertEqual(json.loads(completed.stdout), {
+            "read_root": "allowed", "write_root": "allowed", "read_allowed": "allowed",
+            "write_allowed": "denied", "read_outside": "denied", "list_outside": "denied",
+            "write_outside": "denied", "tcp_connect": "denied",
+        })
+
+
+@unittest.skipUnless(_ISOLATION_SUPPORTED, "POSIX limits, seccomp and Landlock ABI 4 required")
 class ProcessIsolationTest(unittest.TestCase):
     def setUp(self):
         self.signer = HandoffSigner(integrity_key=b"phase-2-test-integrity-key-32bytes")
@@ -725,20 +923,33 @@ class ProcessIsolationTest(unittest.TestCase):
         self.assertTrue(taken.succeeded)
         self.assertEqual(taken.output, {"text": "the quick brown fox"})
 
-    def test_a_read_outside_the_temporary_directory_is_allowed_and_this_is_the_boundary(self):
-        """Held open (SECURITY.md): only `/proc`, `/sys` and `/dev` are refused
-        to a reading worker. Anything else the service user can read, a worker
-        can read and hand back as its output, which goes to the client.
-        """
+    def test_a_service_secret_outside_the_allowlist_cannot_be_read(self):
+        """Gate A2's minimum target: a 0600 file of the service user, the way
+        the root secret is stored, never reaches the worker's output."""
         with tempfile.TemporaryDirectory() as outside:
-            target = os.path.join(outside, "host-file.txt")
+            target = os.path.join(outside, "root-secret")
             with open(target, "w", encoding="utf-8") as handle:
                 handle.write("CANARY-OUTSIDE-THE-SANDBOX")
+            os.chmod(target, 0o600)
             taken = self.taken(
                 self.runner(OutsideReadWorker(target)).execute(self.permit_for(self.handoff), now=110)
             )
+        self.assertFalse(taken.succeeded)
+        self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
+        self.assertIsNone(taken.output)
+
+    def test_the_package_source_is_readable_and_this_is_the_boundary(self):
+        """Held open (SECURITY.md): the Python runtime, `geniusnew/` and the
+        worker module's directory stay readable, so a secret stored in one of
+        them would reach the client."""
+        target = os.path.join(os.path.dirname(isolation_module.__file__), "__init__.py")
+        with open(target, encoding="utf-8") as handle:
+            expected = handle.read()
+        taken = self.taken(
+            self.runner(OutsideReadWorker(target)).execute(self.permit_for(self.handoff), now=110)
+        )
         self.assertTrue(taken.succeeded)
-        self.assertEqual(taken.output, {"text": "CANARY-OUTSIDE-THE-SANDBOX"})
+        self.assertEqual(taken.output, {"text": expected})
 
     def test_parent_proc_environment_cannot_be_read(self):
         taken = self.taken(
