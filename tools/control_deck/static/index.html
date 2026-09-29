@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Genius Control Deck</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,system-ui,sans-serif;background:#090d13;color:#e8edf2}
+body{margin:0;padding:18px;background:linear-gradient(180deg,#0d131d,#080b10);min-height:100vh}
+header{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:18px}
+h1{font-size:1.35rem;margin:0}.muted{color:#8d99a6}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+.card{background:#111923;border:1px solid #23303e;border-radius:14px;padding:14px}
+.row{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid #1d2934}
+.row:last-child{border-bottom:0}.badge{display:inline-block;min-width:72px;margin-right:8px;padding:3px 7px;border:1px solid currentColor;border-radius:6px;font-size:.72rem;font-weight:800;text-align:center;letter-spacing:.03em}
+.green{color:#7ee2b8;background:#10251f}.yellow{color:#f4d47c;background:#292310}.red{color:#ff9a9a;background:#2b1518}
+.gates{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px}.gate{background:#0c1219;border:1px solid #1e2a36;border-radius:10px;padding:10px}
+code{font-size:.82rem;color:#cbd6df;word-break:break-all}.cmd{display:flex;gap:8px;align-items:center;margin-top:8px}
+button{background:#172230;color:#eaf0f5;border:1px solid #334253;border-radius:8px;padding:7px 10px}
+button:active{transform:translateY(1px)}.wide{grid-column:1/-1}.clickable{cursor:pointer;width:100%;text-align:left;background:transparent;border:0;padding:0;color:inherit}
+.gate.clickable{padding:10px}.panel{display:none;position:fixed;inset:0;background:#000a;z-index:20;padding:20px}.panel.open{display:flex;align-items:flex-end}
+.sheet{width:100%;max-width:720px;margin:0 auto;background:#111923;border:1px solid #334253;border-radius:18px;padding:18px;max-height:78vh;overflow:auto}
+.sheet pre{white-space:pre-wrap;word-break:break-word;background:#080c11;padding:12px;border-radius:10px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.projectfocus{font-size:1.05rem;font-weight:800;margin-bottom:6px}.projectmeta{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0 14px}.pill{border:1px solid #334253;border-radius:999px;padding:5px 9px;font-size:.78rem;color:#c7d2dd}.resume{display:grid;gap:8px}.resumeitem{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;background:#0c1219;border:1px solid #1e2a36;border-radius:10px;padding:10px}.resumeitem a{color:#dce8f5;text-decoration:none}
+</style>
+</head>
+<body>
+<header><div><h1>Genius Control Deck</h1><div class="muted">Server-first · Beta-Arbeitszentrale</div></div><div id="stamp" class="muted">lädt…</div></header>
+<section class="card wide" id="projectCard">
+ <h2>Projektstand / Weiterarbeiten</h2>
+ <div id="projectSummary"></div>
+ <div id="resume"></div>
+</section>
+<section class="card wide" id="priorityCard"><h2>Als Nächstes</h2><div id="priorities"></div><div class="actions"><button id="runAll">Alle ausführbaren Schritte ausführen</button></div>
+<h3>Research & Ideen</h3><div id="research"></div></section>
+<div class="grid">
+<section class="card"><h2>System</h2><div id="system"></div></section>
+<section class="card"><h2>Agenten</h2><div id="tools"></div></section>
+<section class="card wide"><h2>Beta Gates</h2><div id="gates" class="gates"></div></section>
+<section class="card wide"><h2>TERM Befehle</h2><div id="commands"></div></section>
+</div>
+<div id="panel" class="panel" role="dialog" aria-modal="true">
+ <div class="sheet"><h2 id="ptitle">Details</h2><div id="pbody"></div><pre id="poutput" hidden></pre>
+ <div class="actions"><button id="prun" hidden>Ausführen</button><button id="pclose">Schließen</button></div></div>
+</div>
+<script>
+const labels={green:'✓ PASS',yellow:'! ACTION',red:'× OPEN'};
+const badge=s=>'<span class="badge '+s+'" aria-label="'+(labels[s]||'UNKNOWN')+'">'+(labels[s]||'? UNKNOWN')+'</span>';
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const actionFor={Git:'git_status',Docker:'docker_status'};
+const nextFor={A1:'PR #57 prüfen/mergen',A2:'PR #72 prüfen',B0:'PR #70 freigeben',B1:'PostgreSQL-Fundament starten',C1:'PR #61 prüfen',C2:'PR #62 prüfen',C4:'PR #71 prüfen'};
+function row(name,v){return '<button class="row clickable" data-kind="item" data-name="'+esc(name)+'"><span>'+badge(v.status)+esc(name)+'</span><span class="muted">'+esc(v.detail||v.head||'')+'</span></button>'}
+function openPanel(title,body,action){ptitle.textContent=title;pbody.textContent=body;poutput.hidden=true;prun.hidden=!action;prun.dataset.action=action||'';panel.classList.add('open')}
+async function runAction(name){prun.disabled=true;poutput.hidden=false;poutput.textContent='läuft…';const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:name})});const d=await r.json();poutput.textContent=(d.ok?'✓ PASS\n':'× FAIL\n')+(d.output||'');prun.disabled=false;load()}
+async function load(){
+ const r=await fetch('/api/status',{cache:'no-store'}); const d=await r.json();
+ document.getElementById('stamp').textContent=new Date(d.generated_at*1000).toLocaleTimeString();
+ document.getElementById('projectSummary').innerHTML='<div class="projectfocus">'+esc(d.project.focus)+'</div><div class="muted">Zuletzt gestoppt: '+esc(d.project.stopped_at)+'</div><div class="projectmeta"><span class="pill">main '+esc(d.project.main_head)+'</span><span class="pill">v0.2 Gates auf main: '+esc(d.project.merged_gates)+'/'+esc(d.project.total_gates)+'</span></div>';
+ document.getElementById('resume').className='resume';
+ document.getElementById('resume').innerHTML=d.project.resume.map((s,i)=>{let ctl='';if(s.type==='command')ctl='<button data-resume-cmd="'+esc(s.value)+'">TERM kopieren</button>';else if(s.type==='url')ctl='<a href="'+esc(s.value)+'" target="_blank" rel="noopener"><button>PR öffnen</button></a>';else if(s.type==='action')ctl='<button data-resume-action="'+esc(s.value)+'">Prüfung starten</button>';return '<div class="resumeitem"><div><b>'+(i+1)+'. '+esc(s.title)+'</b><div class="muted">'+esc(s.detail)+'</div></div>'+ctl+'</div>'}).join('')||'<div class="resumeitem">✓ Kein Wiedereinstiegspunkt offen</div>';
+ document.getElementById('priorities').innerHTML=d.priorities.map((s,i)=>'<div class="row"><span><b>'+(i+1)+'.</b> '+esc(s.title)+'</span><span class="muted">'+esc(s.detail)+'</span></div>').join('')||'<div class="row">✓ Keine offenen Prioritäten</div>';
+ runAll.dataset.actions=JSON.stringify(d.priorities.map(s=>s.action).filter(Boolean));
+ const verdictSymbol={'JETZT ÜBERNEHMEN':'★','BEREITS VORHANDEN':'✓','NACH BETA':'→','PASST NICHT':'×','REVIEW NÖTIG':'?'};
+ document.getElementById('research').innerHTML=d.research.slice(0,6).map(x=>'<button class="row clickable" data-research="'+esc(x.title)+'" data-reason="'+esc(x.reason)+'"><span><b>'+(verdictSymbol[x.verdict]||'?')+' '+esc(x.verdict)+'</b> '+esc(x.title)+'</span><span class="muted">'+esc(x.source)+'</span></button>').join('')||'<div class="row">Keine Research-Funde</div>';
+ const items={Git:d.repo,Tailscale:d.services.tailscale,'Desktop Commander':d.services.desktop_commander,Docker:d.services.docker,tmux:d.tmux};
+ document.getElementById('system').innerHTML=Object.entries(items).map(([k,v])=>row(k,v)).join('');
+ document.getElementById('tools').innerHTML=Object.entries(d.tools).map(([k,v])=>row(k,v)).join('');
+ document.getElementById('gates').innerHTML=d.gates.map(g=>'<button class="gate clickable" data-kind="gate" data-id="'+esc(g.id)+'" data-name="'+esc(g.name)+'">'+badge(g.status)+'<b>'+esc(g.id)+'</b> '+esc(g.name)+'</button>').join('');
+ document.getElementById('commands').innerHTML=Object.entries(d.commands).map(([k,v])=>'<div class="cmd"><button data-cmd="'+esc(v)+'">Kopieren</button><code>'+esc(k)+': '+esc(v)+'</code></div>').join('');
+ document.querySelectorAll('[data-kind="item"]').forEach(b=>b.onclick=()=>openPanel(b.dataset.name,'Statusdetails und sichere Aktion für '+b.dataset.name,actionFor[b.dataset.name]));
+ document.querySelectorAll('[data-kind="gate"]').forEach(b=>b.onclick=()=>openPanel(b.dataset.id+' '+b.dataset.name,nextFor[b.dataset.id]||'Gate ist noch offen. Abhängigkeiten zuerst abschließen.',null));
+ document.querySelectorAll('[data-research]').forEach(b=>b.onclick=()=>openPanel(b.dataset.research,b.dataset.reason,null));
+ document.querySelectorAll('button[data-cmd]').forEach(b=>b.onclick=()=>navigator.clipboard.writeText(b.dataset.cmd));
+ document.querySelectorAll('[data-resume-cmd]').forEach(b=>b.onclick=async()=>{await navigator.clipboard.writeText(b.dataset.resumeCmd);const old=b.textContent;b.textContent='✓ Kopiert';setTimeout(()=>b.textContent=old,1200)});
+ document.querySelectorAll('[data-resume-action]').forEach(b=>b.onclick=()=>{openPanel('Wiedereinstieg','Sichere Prüfung wird gestartet.',b.dataset.resumeAction)});
+}
+pclose.onclick=()=>panel.classList.remove('open');panel.onclick=e=>{if(e.target===panel)panel.classList.remove('open')};prun.onclick=()=>runAction(prun.dataset.action);
+runAll.onclick=async()=>{const acts=JSON.parse(runAll.dataset.actions||'[]');if(!acts.length){openPanel('Nächste Schritte','Die aktuellen Top-3 benötigen eine Anmeldung oder menschliche Freigabe; nichts darf automatisch ausgeführt werden.',null);return}openPanel('Schritte ausführen','Allowlist-Aktionen werden nacheinander ausgeführt.',null);poutput.hidden=false;poutput.textContent='';runAll.disabled=true;for(const a of acts){const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a})});const d=await r.json();poutput.textContent+=a+': '+(d.ok?'✓ PASS':'× FAIL')+'\n'+(d.output||'')+'\n\n';if(!d.ok)break}runAll.disabled=false;load()};
+load(); setInterval(load,15000);
+</script>
+</body></html>
