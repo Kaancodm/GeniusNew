@@ -56,9 +56,19 @@ def _validate_text(value: object, field: str) -> str:
 def build_request(task: str) -> bytes:
     task = _validate_text(task, "task")
     payload = {
-        "question": "Which agent should handle this GeniusNew task?",
-        "context": task,
-        "options": list(_ALLOWED_AGENTS),
+        "state": task,
+        "questions": {
+            "agent": {
+                "type": "choice",
+                "instructions": "Which agent should handle this GeniusNew task?",
+                "criteria": {
+                    "claude": "security, architecture, and difficult integration review",
+                    "gemini": "knowledge synthesis, documentation, and contradiction review",
+                    "codex": "implementation, tests, and focused code changes",
+                    "zen": "general planning and coordination",
+                },
+            }
+        },
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -73,11 +83,15 @@ def parse_choice(raw: bytes) -> str:
     if not isinstance(decoded, dict):
         raise ShadowError("response must be an object")
 
-    # Accept the two common shapes without trusting any other response field.
-    candidate = decoded.get("choice")
-    if candidate is None and isinstance(decoded.get("result"), dict):
-        candidate = decoded["result"].get("choice")
-    return _validate_choice(candidate)
+    answers = decoded.get("answers")
+    if not isinstance(answers, dict):
+        raise ShadowError("response must contain answers")
+    agent = answers.get("agent")
+    if not isinstance(agent, dict):
+        raise ShadowError("response must contain agent answer")
+    if agent.get("type") != "choice":
+        raise ShadowError("agent answer must be a choice")
+    return _validate_choice(agent.get("choice"))
 
 
 def observe(
