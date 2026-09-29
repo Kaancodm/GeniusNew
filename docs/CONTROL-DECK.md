@@ -54,7 +54,7 @@ Löschen, Archivieren oder Markieren von E-Mails.
 - keine Secrets, Remote-URLs oder Environment-Werte werden angezeigt;
 - Standard-Bindung nur auf Loopback; der Serverbetrieb bindet explizit an die private
   Tailscale-IP. `--host` lehnt jede andere Adresse ab, auch `0.0.0.0`: erlaubt sind
-  Loopback, `100.64.0.0/10` und `fd7a:115c:a1e0::/48`. Nutzt der Provider des Servers
+  IPv4-Loopback und `100.64.0.0/10`; IPv6 unterstützt der Server nicht. Nutzt der Provider des Servers
   selbst CGNAT, kann eine Adresse aus `100.64.0.0/10` auch am öffentlichen Interface
   liegen; dann bitte die Adresse aus `tailscale ip -4` verwenden, nicht raten;
 - direkter Zugriff vom iPad erfolgt ausschließlich über das private Tailscale-Netz;

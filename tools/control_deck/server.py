@@ -109,17 +109,19 @@ class Server(ThreadingHTTPServer):
 
     def allowed_hosts(self) -> frozenset[str]:
         host, port = self.server_address[:2]
-        own = {f"{name}:{port}" for name in ("127.0.0.1", "localhost", host)}
+        names = {"127.0.0.1", "localhost", host}
+        own = {f"{name}:{port}" for name in names}
+        if port == 80:
+            # Clients leave the default port out of Host.
+            own |= names
         return frozenset(own | self.extra_hosts)
 
 
-# Tailscale hands out addresses from these ranges only (CGNAT space and its
-# ULA prefix). On a host whose ISP also uses CGNAT, 100.64.0.0/10 can belong
-# to the public-facing interface; docs/CONTROL-DECK.md names that limit.
-_TAILSCALE_NETWORKS = (
-    ipaddress.ip_network("100.64.0.0/10"),
-    ipaddress.ip_network("fd7a:115c:a1e0::/48"),
-)
+# Tailscale hands out IPv4 addresses from this range only. On a host whose ISP
+# also uses CGNAT it can belong to the public-facing interface;
+# docs/CONTROL-DECK.md names that limit. IPv6 is refused: the server is an
+# AF_INET socket and would fail at bind time instead of here.
+_TAILSCALE_NETWORK = ipaddress.ip_network("100.64.0.0/10")
 
 
 def bind_host(value: str) -> str:
@@ -129,13 +131,12 @@ def bind_host(value: str) -> str:
     if value == "localhost":
         return value
     try:
-        address = ipaddress.ip_address(value)
+        address = ipaddress.IPv4Address(value)
     except ValueError:
         address = None
-    if address is not None and (address.is_loopback or any(
-            address in network for network in _TAILSCALE_NETWORKS)):
+    if address is not None and (address.is_loopback or address in _TAILSCALE_NETWORK):
         return value
-    raise argparse.ArgumentTypeError("host must be a loopback or Tailscale address")
+    raise argparse.ArgumentTypeError("host must be an IPv4 loopback or Tailscale address")
 
 
 def host_name(value: str) -> str:

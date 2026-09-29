@@ -234,14 +234,23 @@ class HostCheckTest(unittest.TestCase):
                     server.host_name(value)
 
     def test_only_loopback_or_tailnet_may_be_bound(self):
-        for value in ("127.0.0.1", "127.0.0.2", "::1", "localhost",
-                      "100.64.0.1", "100.101.102.103", "fd7a:115c:a1e0::1"):
+        for value in ("127.0.0.1", "127.0.0.2", "localhost", "100.64.0.1", "100.101.102.103"):
             self.assertEqual(server.bind_host(value), value)
-        for value in ("0.0.0.0", "::", "192.168.1.10", "10.0.0.5", "100.128.0.1",
-                      "fd7a:115c:a1e1::1", "203.0.113.7", "example.org", ""):
+        # IPv6 is refused here rather than failing later at bind time.
+        for value in ("0.0.0.0", "::", "::1", "fd7a:115c:a1e0::1", "192.168.1.10",
+                      "10.0.0.5", "100.128.0.1", "203.0.113.7", "example.org", ""):
             with self.subTest(value=value):
-                with self.assertRaisesRegex(argparse.ArgumentTypeError, "loopback or Tailscale"):
+                with self.assertRaisesRegex(argparse.ArgumentTypeError,
+                                            "IPv4 loopback or Tailscale"):
                     server.bind_host(value)
+
+    def test_port_80_accepts_a_host_without_port(self):
+        deck = server.Server(("127.0.0.1", 0), server.Handler, bind_and_activate=False)
+        self.addCleanup(deck.server_close)
+        deck.server_address = ("127.0.0.1", 80)
+        self.assertLessEqual({"127.0.0.1", "localhost", "127.0.0.1:80"}, deck.allowed_hosts())
+        deck.server_address = ("127.0.0.1", 8787)
+        self.assertNotIn("127.0.0.1", deck.allowed_hosts())
 
 
 if __name__ == "__main__":
