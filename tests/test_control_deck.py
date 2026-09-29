@@ -30,6 +30,18 @@ class ControlDeckTest(unittest.TestCase):
         run.assert_called_once_with(["/x/claude", "auth", "status"], cwd=checks.Path.home())
 
     @patch("tools.control_deck.checks._run")
+    @patch("tools.control_deck.checks._which")
+    def test_gemini_status_prefers_antigravity(self, which, run):
+        which.side_effect = lambda name: "/x/agy" if name == "agy" else None
+        run.return_value = (0, "gemini-3.8-flash-high\tGemini 3.8 Flash (High)")
+        state = checks.tool_status("gemini")
+        self.assertEqual(state["status"], "green")
+        self.assertIn("Antigravity", state["detail"])
+        run.assert_called_once_with(
+            ["/x/agy", "models"], cwd=checks.Path.home(), timeout=8.0
+        )
+
+    @patch("tools.control_deck.checks._run")
     def test_missing_gate_branch_is_red(self, run):
         run.return_value = (1, "")
         self.assertEqual(checks.gate_status(checks.DEFAULT_REPO, "origin/x"), "red")

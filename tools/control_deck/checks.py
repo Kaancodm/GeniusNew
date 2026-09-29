@@ -126,6 +126,16 @@ def docker_status() -> dict[str, str]:
 
 
 def tool_status(name: str) -> dict[str, str]:
+    if name == "gemini":
+        agy = _which("agy")
+        if agy:
+            code, out = _run([agy, "models"], cwd=Path.home(), timeout=8.0)
+            logged_in = code == 0 and "gemini-" in out
+            return _simple(
+                "green" if logged_in else "yellow",
+                "logged in via Antigravity" if logged_in else "Antigravity login required",
+            )
+
     exe = _which(name)
     if not exe:
         return _simple("red", "missing")
@@ -209,7 +219,7 @@ def project_resume(
     login_commands = {
         "codex": "codex login",
         "gh": "gh auth login",
-        "gemini": "gemini",
+        "gemini": "agy",
     }
     for name in missing:
         steps.append({
