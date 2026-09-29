@@ -163,6 +163,7 @@ Siehe:
 - `docs/ISOLATION-V01.md`
 - `docs/GATEWAY-V01.md`
 - `docs/ROADMAP-V01.md`
+- `docs/ROADMAP-V02.md` — Gates bis technisch beta-ready (v0.2)
 
 ## Betrieb als Dienst
 

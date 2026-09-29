@@ -109,6 +109,7 @@ bestanden melden.
 | Gemini: Kontext und Review-Maßstab | `GEMINI.md`, `.gemini/styleguide.md` |
 | Übergabe-Prompts zwischen Werkzeugen | `docs/HANDOVER.md` |
 | Roadmap v0.1 mit Status je Schritt | `docs/ROADMAP-V01.md` |
+| Gates bis technisch beta-ready (v0.2) | `docs/ROADMAP-V02.md` |
 | Bekannte Grenzen | `SECURITY.md` |
 | Verfassung (Rollen, §7 Audit, §8 Trennung) | `docs/CONSTITUTION-V1-DRAFT.md` |
 | Handoff-Format | `docs/HANDOFF-V2.md`, `schemas/handoff-v2.schema.json` |
