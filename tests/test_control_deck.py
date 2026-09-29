@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from tools.control_deck import actions, checks
+from tools.control_deck import actions, checks, mail_center
 
 
 class ControlDeckTest(unittest.TestCase):
@@ -72,6 +74,67 @@ class ControlDeckTest(unittest.TestCase):
         self.assertEqual(state["main_head"], "abc123")
         self.assertEqual(state["resume"][0]["value"], "codex login")
         self.assertTrue(any(step["value"].endswith("/pull/57") for step in state["resume"]))
+
+
+    def test_mail_snapshot_missing_is_offline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = mail_center.snapshot(Path(tmp) / "missing.json")
+        self.assertEqual(state["status"], "offline")
+        self.assertEqual(state["unread"], 0)
+        self.assertEqual(state["threads"], [])
+
+    def test_mail_snapshot_counts_categories_and_attention(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "mail.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "provider": "superhuman",
+                        "updated_at": 123,
+                        "threads": [
+                            {
+                                "id": "sale-1",
+                                "category": "sales",
+                                "subject": "Demo Anfrage",
+                                "sender": "lead@example.test",
+                                "unread": True,
+                                "important": True,
+                                "received_at": 120,
+                            },
+                            {
+                                "id": "sponsor-1",
+                                "split": "Sponsoring",
+                                "subject": "Partnerschaft",
+                                "sender": "partner@example.test",
+                                "unread": True,
+                                "received_at": 121,
+                            },
+                            {
+                                "id": "system-1",
+                                "split": "Security",
+                                "subject": "Security alert",
+                                "sender": "system@example.test",
+                                "unread": True,
+                                "critical": True,
+                                "received_at": 122,
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = mail_center.snapshot(path)
+
+        self.assertEqual(state["status"], "ready")
+        self.assertEqual(state["provider"], "superhuman")
+        self.assertEqual(state["unread"], 3)
+        self.assertEqual(state["important"], 2)
+        self.assertEqual(state["critical"], 1)
+        self.assertEqual(state["attention"], "critical")
+        self.assertEqual(state["categories"]["sales"]["unread"], 1)
+        self.assertEqual(state["categories"]["sponsoring"]["unread"], 1)
+        self.assertEqual(state["categories"]["system"]["critical"], 1)
+        self.assertNotIn("body", state["threads"][0])
 
 
 if __name__ == "__main__":
