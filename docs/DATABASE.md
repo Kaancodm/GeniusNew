@@ -136,6 +136,14 @@ die Reservation vor der Ausführungsgrenze angelegt.
 Retry mit derselben ID. Ein abgelaufener Pending-Job wird auf `REFUSED` gesetzt; seine
 ID wird nicht wieder freigegeben.
 
+**DB-erzwungene Zustandsmaschine:** Die Runtime-Rolle hat auf `job_ledger` kein
+`DELETE`. Ein `BEFORE UPDATE`-Trigger erlaubt ausschließlich
+`PENDING_APPROVAL → RESERVED | REFUSED`, `RESERVED → EXECUTION_COMMITTED | REFUSED`
+und `EXECUTION_COMMITTED → COMPLETED`. `COMPLETED` und `REFUSED` sind terminal.
+`job_id`, `subject`, `handoff_sha256`, `created_at` und `expires_at` sind nach
+dem Insert unveränderlich; `reserved_at` darf nur beim Übergang nach `RESERVED`
+erstmals gesetzt werden und danach nicht mehr geändert werden.
+
 Vor Übergabe an den Worker wird der Zustand auf `EXECUTION_COMMITTED` gesetzt. Ein Crash
 danach bedeutet: Wirkung möglicherweise eingetreten, Ergebnis unbekannt. Dieser Zustand
 wird **nie automatisch erneut ausgeführt**.
@@ -170,14 +178,16 @@ derselben `job_id` ist.
 
 **Zustandsinvariante:** Ein Acceptance-Datensatz darf nur aus einem
 `job_ledger`-Eintrag im Zustand `EXECUTION_COMMITTED` entstehen. Ein
-`BEFORE INSERT`-Trigger prüft und sperrt die zugehörige Ledger-Zeile und verweigert
-`PENDING_APPROVAL`, `RESERVED`, `REFUSED` und bereits `COMPLETED`. In derselben
-Transaktion wie der Acceptance-INSERT wird der Ledger-Zustand anschließend auf
-`COMPLETED` gesetzt. Scheitert einer der beiden Schritte, wird die gesamte Transaktion
-zurückgerollt. Im dauerhaft gespeicherten Zustand gilt daher: **jede**
-`acceptance_ledger`-Zeile gehört genau zu einem `job_ledger(COMPLETED)` mit identischer
-`job_id` und identischem `handoff_sha256`. Die Startprüfung validiert diese Invariante
-erneut und startet bei jeder Abweichung fail closed.
+`BEFORE INSERT`-Trigger sperrt die zugehörige Ledger-Zeile und verweigert
+`PENDING_APPROVAL`, `RESERVED`, `REFUSED` und bereits `COMPLETED`. Ein
+`AFTER INSERT`-Trigger setzt genau diese gesperrte Ledger-Zeile von
+`EXECUTION_COMMITTED` auf `COMPLETED`; aktualisiert er nicht exakt eine Zeile,
+schlägt die Transaktion fehl. Die Anwendung führt keinen separaten
+`COMPLETED`-Update außerhalb dieser Transaktion aus. Im dauerhaft gespeicherten
+Zustand gilt daher: **jede** `acceptance_ledger`-Zeile gehört genau zu einem
+`job_ledger(COMPLETED)` mit identischer `job_id` und identischem
+`handoff_sha256`. Die Startprüfung validiert diese Invariante erneut und startet bei
+jeder Abweichung fail closed.
 
 ### 4.4 `pending_jobs`
 
@@ -203,15 +213,17 @@ startet nicht. Umgekehrt darf es für `RESERVED`, `EXECUTION_COMMITTED`, `COMPLE
 oder `REFUSED` **keine** `pending_jobs`-Zeile geben.
 
 Ein falscher oder fremder Approval-Token verändert weder Ledger noch Pending-Zeile. Bei
-korrektem Approval werden **in derselben Transaktion** die `pending_jobs`-Zeile
-gelöscht, die Ledger-Zeile von `PENDING_APPROVAL` nach `RESERVED` überführt und
-`reserved_at` erstmals gesetzt. Bei Ablauf oder endgültigem Refusal wird ebenfalls in
-**derselben Transaktion** die Pending-Zeile gelöscht und der Ledger-Zustand auf
-`REFUSED` gesetzt. Dadurch kann kein erfolgreicher oder abgelaufener Approval-Pfad eine
-stale Pending-Zeile hinterlassen, die beim nächsten Start die eigene Invariante verletzt.
-Erst nach dem erfolgreichen Commit des Approval-Übergangs kann die Ausführungsgrenze
-erreicht werden. `created_at` existiert in jedem Zustand und darf nicht als Ersatz für
-den tatsächlichen Reservationszeitpunkt verwendet werden.
+korrektem Approval werden **in derselben Transaktion** ein neuer
+`approval_records(CONSUMED)`-Datensatz angelegt, der `approval_tokens`-Pointer auf
+diesen direkten Nachfolger verschoben, die `pending_jobs`-Zeile gelöscht, die
+Ledger-Zeile von `PENDING_APPROVAL` nach `RESERVED` überführt und `reserved_at`
+erstmals gesetzt. Bei Ablauf oder endgültigem Refusal wird ebenfalls in **derselben
+Transaktion** die Pending-Zeile gelöscht und der Ledger-Zustand auf `REFUSED` gesetzt.
+Sobald B6 umgesetzt ist, gehört auch das zugehörige Audit-Event in genau diese
+Transaktion. Dadurch kann kein erfolgreicher oder abgelaufener Approval-Pfad eine stale
+Pending-Zeile hinterlassen. Erst nach dem erfolgreichen Commit des Approval-Übergangs
+kann die Ausführungsgrenze erreicht werden. `created_at` existiert in jedem Zustand und
+darf nicht als Ersatz für den tatsächlichen Reservationszeitpunkt verwendet werden.
 
 ### 4.5 Approval-Speicher
 
@@ -257,13 +269,20 @@ einen Vorgänger desselben Tokens nennen. Die beiden Unique-Indizes erlauben gen
 Root und höchstens einen Nachfolger je Record: die Historie kann nicht verzweigen.
 
 Die Runtime-Rolle erhält auf `approval_records` **INSERT und SELECT, aber kein UPDATE
-und kein DELETE**. Ein DB-Trigger auf `approval_tokens` erzwingt bei jedem UPDATE,
-dass der neue `current_record_hash` auf einen Record zeigt, dessen `previous_hash`
-exakt dem alten `current_record_hash` entspricht. Der Pointer kann dadurch nur einen
-Schritt vorwärts, nie zurück auf einen alten `GRANTED`-Record. Der erste INSERT in
-`approval_tokens` muss auf den einzigen `GRANTED`-Root mit `previous_hash IS NULL`
-zeigen. Consume/Revoke sperren die Token-Zeile mit `SELECT ... FOR UPDATE` und sind nur
-aus `GRANTED` zulässig.
+und kein DELETE**. Ein `BEFORE INSERT`-Trigger auf `approval_records` erzwingt die
+Zustandsmaschine: `GRANTED` ist nur als Root mit `previous_hash IS NULL` zulässig;
+ein Nachfolger ist ausschließlich `CONSUMED` oder `REVOKED`, und sein Vorgänger
+muss `GRANTED` sein. `scope`, `issued_at` und `expires_at` müssen
+byte-/wertgleich zum Vorgänger bleiben; `changed_at` darf nicht vor dem Vorgänger
+liegen. Damit kann nach `CONSUMED` oder `REVOKED` nie wieder ein gültiger
+`GRANTED`-Zustand entstehen.
+
+Ein DB-Trigger auf `approval_tokens` erzwingt beim ersten INSERT, dass der Pointer auf
+den einzigen `GRANTED`-Root mit `previous_hash IS NULL` zeigt. Bei jedem UPDATE muss
+der neue `current_record_hash` auf **genau den bereits validierten direkten
+Nachfolger** zeigen, dessen `previous_hash` dem alten Pointer entspricht. Consume und
+Revoke sperren die Token-Zeile mit `SELECT ... FOR UPDATE` und sind nur aus
+`GRANTED` zulässig.
 
 Beim Start wird für jeden Token die vollständige unverzweigte Record-Kette vom Root bis
 zum Pointer geprüft, jeder `record_hash` neu berechnet und verlangt, dass der Pointer
@@ -293,7 +312,33 @@ abgelehnt. Erst danach werden Event-Hash, `previous_hash`, `record_hash`, lücke
 Indizes und der signierte Kopf geprüft und die vollständige Kette gegen den externen
 Anker verifiziert.
 
-### 4.7 Principal-Registry
+### 4.7 Signierte Audit-Köpfe
+
+Zu jedem dauerhaft angehängten Audit-Record wird der dazugehörige **bereits signierte**
+Kopf in derselben Datenbanktransaktion gespeichert:
+
+```sql
+create table audit_heads (
+    count bigint primary key check (count > 0),
+    version text not null,
+    head_hash char(64) not null unique,
+    signature bytea not null check (octet_length(signature) = 64),
+    created_at bigint not null
+);
+```
+
+Vor dem Commit erzeugt die `AuditAuthority` den Kopf für den neuen vollständigen
+Kettenstand. `audit_chain`-Append und `audit_heads`-Insert committen atomar. Beim
+Laden wird aus `version`, `count`, `head_hash` und `signature` ein
+`AuditHead` rekonstruiert und mit dem öffentlichen Audit-Schlüssel geprüft. Ein per
+SQL angehängter Record ohne passenden gültig signierten Kopf ist ein Startfehler.
+
+Ist die DB dem externen Anker voraus, darf beim Neustart **nur ein bereits in
+`audit_heads` gespeicherter und verifizierter Kopf** erneut an den Anker geschickt
+werden; der Dienst signiert beim Recovery niemals einen neuen Kopf über unverankerte
+DB-Inhalte.
+
+### 4.8 Principal-Registry
 
 ```sql
 create table api_key_digests (
@@ -401,16 +446,19 @@ sicherheitsrelevante Ablauf nicht als erfolgreich fortgesetzt werden.**
 
 Crash zwischen DB-Commit und Anchor-Bestätigung:
 
-- DB-Kette kann dem Anker voraus sein;
-- beim Neustart wird die **vollständige** Core-Kette ab Index 0 verifiziert;
+- DB-Kette und der in derselben Transaktion gespeicherte **bereits signierte** Kopf
+  können dem externen Anker voraus sein;
+- beim Neustart wird die **vollständige** Core-Kette ab Index 0 verifiziert und jeder
+  gespeicherte Audit-Kopf kryptografisch geprüft;
+- es darf keinen Record ohne passenden gültigen Kopf und keinen Kopf ohne passenden
+  vollständigen Kettenpräfix geben;
 - der bereits verankerte `count/head_hash` muss an exakt seiner Position in dieser
   vollständigen Geschichte wiedergefunden werden;
-- erweitert die DB-Kette diesen verankerten Präfix konsistent, wird **kein isoliertes
-  Suffix** an den Anker geschickt. Stattdessen wird aus der vollständigen DB-Kette der
-  neue signierte Kopf erzeugt und `anchor.commit(head, records, authority=...)` erhält erneut den **vollständigen**
-  Record-Snapshot von Index 0 bis zum neuen Tip;
-- ist der Anker der DB voraus, fehlt der verankerte Präfix oder teilt die DB nicht
-  dieselbe Geschichte, startet der Dienst nicht.
+- erweitert die DB-Kette diesen Präfix konsistent, wird nur der höchste bereits vor dem
+  Crash gespeicherte, gültig signierte Kopf zusammen mit dem vollständigen
+  Record-Snapshot bis zu diesem Kopf erneut committed;
+- ist der Anker der DB voraus, fehlt der verankerte Präfix, existiert ein unsignierter
+  DB-Suffix oder teilt die DB nicht dieselbe Geschichte, startet der Dienst nicht.
 
 ## 7. Transaktionen und Parallelität
 
@@ -422,7 +470,13 @@ Crash zwischen DB-Commit und Anchor-Bestätigung:
   Ausgangszustand.
 - Pending-Auflösung: Approval, Ablauf oder endgültiger Refusal entfernen
   `pending_jobs` und ändern den Ledger-Zustand in **derselben Transaktion**.
-- Approval-Zustandswechsel: `SELECT ... FOR UPDATE`.
+- Approval-Zustandswechsel: `SELECT ... FOR UPDATE`; bei erfolgreichem Consume sind
+  Record-Insert, Pointer-Update, Pending-Löschung und Ledger-Reservation eine
+  Transaktion.
+- Audit-Append: Event-Record und bereits signierter Audit-Kopf sind eine Transaktion.
+- Ab B6: jede sicherheitsrelevante Ledger-/Approval-Mutation und ihr Audit-Event werden
+  atomar gemeinsam committed; kein Zustand darf ohne seinen Audit-Nachweis sichtbar
+  werden.
 - Kein Worker läuft innerhalb einer lang gehaltenen DB-Transaktion.
 - Ein Commit-Fehler ist ein Refusal; kein In-Memory-Fallback.
 
@@ -432,20 +486,27 @@ Vor Öffnen des HTTP-Listeners:
 
 1. Datenbank erreichbar;
 2. erwartete Migrationen mit korrekten Checksums vorhanden;
-3. Digest-, Zeit- und State-Felder formal gültig;
+3. Digest-, Zeit- und State-Felder formal gültig; unbekannte oder gegenüber dem Code
+   **neuere Migrationen** sind ebenso ein Startfehler wie fehlende/falsche Checksums;
 4. gespeicherte Handoff-/Result-Wire-Paare gemeinsam erneut prüfen und für jede
    Acceptance exakt einen `job_ledger(COMPLETED)`-Eintrag mit identischer `job_id`
-   und identischem `handoff_sha256` verlangen; Acceptance bei jedem anderen
-   Ledger-Zustand ist ein Startfehler;
+   und identischem `handoff_sha256` verlangen;
 5. Pending-Wires aus Bytes neu parsen, Signatur prüfen und **bidirektional 1:1** mit
-   `job_ledger(PENDING_APPROVAL)` abgleichen; für `RESERVED`,
-   `EXECUTION_COMMITTED`, `COMPLETED` oder `REFUSED` darf keine Pending-Zeile
-   existieren;
-6. Approval-Hashes und Vorgängerketten prüfen;
-7. vollständige Audit-Kette verifizieren;
+   `job_ledger(PENDING_APPROVAL)` abgleichen; zusätzlich müssen
+   `sha256(pending_jobs.wire) = job_ledger.handoff_sha256`, `subject` und
+   `expires_at` exakt übereinstimmen;
+6. Approval-Hashes, Vorgängerketten, erlaubte Zustandsfolgen und unveränderliche
+   Scope-/Zeitfelder prüfen;
+7. vollständige Audit-Kette **und alle gespeicherten signierten Audit-Köpfe** prüfen;
+   ein Record ohne gültigen Kopf ist ein Startfehler;
 8. Audit-Kopf gegen Anchor-Store verifizieren; liegt die DB konsistent vor dem Anker,
-   den neuen Kopf nur zusammen mit dem **vollständigen** Record-Snapshot erneut committen;
-9. erst danach Requests annehmen.
+   nur den höchsten **bereits vor dem Crash gespeicherten und verifizierten** Kopf
+   zusammen mit dem vollständigen Record-Snapshot erneut committen;
+9. ab B6 Ledger und Approval-Speicher in beide Richtungen gegen die Audit-Kette
+   abgleichen: `acceptance_ledger ↔ RESULT_ACCEPTED`,
+   `job_ledger ↔ HANDOFF_ADMITTED/folgende Zustandsereignisse` und
+   Approval-Records ↔ `approval_record_hash`;
+10. erst danach Requests annehmen.
 
 Fehlt eine Tabelle, Migration, Signatur, Hash-Verknüpfung oder der Anchor-Store:
 **Start verweigern**.
@@ -457,7 +518,7 @@ Reihenfolge:
 1. `0001_core_foundation`: Migrationstabelle, Job-/Acceptance-Ledger, CI-PostgreSQL;
 2. `0002_pending_jobs`;
 3. `0003_approval_store`;
-4. `0004_audit_chain`;
+4. `0004_audit_chain`: Audit-Records plus `audit_heads`;
 5. `0005_portal_identity`: users, sessions, roles, quotas;
 6. `0006_portal_history`.
 
@@ -466,14 +527,31 @@ Migrationen laufen vor Dienststart, einzeln in Transaktionen. Kein automatisches
 
 ## 10. Secrets und DB-Rollen
 
-Mindestens getrennte Runtime-Rollen:
+Mindestens getrennte Rollen:
 
-- `genius_core`: nur Core-Tabellen;
-- `genius_portal`: nur Portal-Tabellen;
-- separate Migrationsrolle mit DDL-Rechten.
+- **Migrationsrolle:** Eigentümerin der Core-Tabellen und einzige Rolle mit DDL,
+  `TRIGGER`, `TRUNCATE` oder `REFERENCES`;
+- **`genius_core`:** Runtime, ausdrücklich **nicht** Eigentümerin der Tabellen und ohne
+  DDL/`TRIGGER`/`TRUNCATE`/`REFERENCES`;
+- **`genius_portal`:** nur Portal-Tabellen, ohne Zugriff auf Core-Tabellen.
 
-Der Anchor-Store verwendet keine dieser Zugangsdaten. Connection-Strings, Passwörter,
-Raw-Tokens und Dumps gehören nicht ins Repository.
+Mindest-Rechte der Core-Runtime pro Tabelle:
+
+| Tabelle | Runtime-Rechte |
+| --- | --- |
+| `schema_migrations` | SELECT |
+| `job_ledger` | SELECT, INSERT, UPDATE; **kein DELETE** |
+| `acceptance_ledger` | SELECT, INSERT; kein UPDATE/DELETE |
+| `pending_jobs` | SELECT, INSERT, DELETE; kein UPDATE |
+| `approval_records` | SELECT, INSERT; kein UPDATE/DELETE |
+| `approval_tokens` | SELECT, INSERT, UPDATE; kein DELETE |
+| `audit_chain` | SELECT, INSERT; kein UPDATE/DELETE |
+| `audit_heads` | SELECT, INSERT; kein UPDATE/DELETE |
+| `api_key_digests` | SELECT |
+
+Die Runtime darf Schutztrigger weder ändern noch deaktivieren. Der Anchor-Store verwendet
+keine dieser Zugangsdaten. Connection-Strings, Passwörter, Raw-Tokens und Dumps gehören
+nicht ins Repository.
 
 ## 11. Umsetzungsgates
 
@@ -488,13 +566,20 @@ Jeder DB-PR muss:
 - Acceptance gegen einen anderen als den im Job-Ledger gebundenen Handoff muss durch
   DB-Constraint und Startprüfung scheitern;
 - Acceptance aus `PENDING_APPROVAL`, `RESERVED` oder `REFUSED` muss durch den
-  DB-Trigger scheitern; nach erfolgreicher Acceptance müssen Acceptance-Insert und
-  Übergang nach `COMPLETED` atomar sein;
+  DB-Trigger scheitern; der Acceptance-Trigger selbst muss den Übergang nach
+  `COMPLETED` in derselben Transaktion erzwingen;
+- `job_ledger` darf nicht gelöscht oder rückwärts bewegt werden; verbotene
+  Zustandsübergänge und Änderungen an Identitätsfeldern müssen DB-seitig scheitern;
 - Approval, Ablauf und endgültiger Refusal eines Pending-Jobs müssen die Pending-Zeile
   und den Ledger-Übergang atomar auflösen; Neustart danach darf keine stale
   `pending_jobs`-Zeile finden;
-- Approval-Records sind für die Runtime append-only; ein Pointer-Rücksprung oder Fork
-  der Record-Kette muss in der DB bzw. spätestens beim Start fail closed scheitern;
+- Approval-Records sind für die Runtime append-only; `GRANTED` darf nur Root sein,
+  Nachfolger nur `CONSUMED`/`REVOKED` aus `GRANTED`; Scope und Gültigkeitsfenster
+  dürfen sich nicht ändern; Pointer-Rücksprung oder Fork müssen DB-seitig scheitern;
+- ein per SQL angehängtes Audit-Event ohne in derselben Transaktion gespeicherten,
+  gültig signierten Kopf muss beim Start abgelehnt werden;
+- ab B6 müssen Ledger/Approval-Zustand und Audit-Ereignisse in beide Richtungen
+  gegeneinander geprüft werden;
 - bei geschlossener `SECURITY.md`-Grenze den offen gehaltenen Test umkehren.
 
 Implementierungsreihenfolge:
