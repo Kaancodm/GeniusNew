@@ -53,8 +53,8 @@ anpassen.
 
 | # | Gate | Nachweis | Stand |
 | --- | --- | --- | --- |
-| A1 | Prozessstart im Worker kernel-seitig gesperrt (Seccomp), andere Plattformen fail closed | `test_a_spawn_below_the_audit_hook_…` umgekehrt | #57 (Codex) |
-| A2 | Worker liest keine Host-Dateien: eigener unprivilegierter OS-Nutzer und Landlock-Allowlist (nur Job-Verzeichnis, Python-Laufzeit lesend); ohne Landlock-Unterstützung fail closed. **Mindestziel**, falls Kaan die volle Lösung verschiebt: Root-Secret, DB-Zugangsdaten und Ankerzustand sind für den Worker nicht lesbar | `test_a_read_outside_the_temporary_directory_…` umgekehrt; Mindestziel: Test „Worker liest die Secret-Datei“ wird abgelehnt | Design #72 (Claude); Umsetzung nach #57 |
+| A1 | Prozessstart im Worker kernel-seitig gesperrt (Seccomp), andere Plattformen fail closed | `test_a_spawn_below_the_audit_hook_…` umgekehrt | erledigt: #57 (Codex), gemergt `8a358d1` |
+| A2 | Worker liest keine Host-Dateien: eigener unprivilegierter OS-Nutzer und Landlock-Allowlist (nur Job-Verzeichnis, Python-Laufzeit lesend); ohne Landlock-Unterstützung fail closed. **Mindestziel**, falls Kaan die volle Lösung verschiebt: Root-Secret, DB-Zugangsdaten und Ankerzustand sind für den Worker nicht lesbar | `test_a_read_outside_the_temporary_directory_…` umgekehrt; Mindestziel: Test „Worker liest die Secret-Datei“ wird abgelehnt | Design #72 (Claude); Umsetzung kann starten (#57 gemergt) |
 
 ### B — Persistenz (nach `docs/DATABASE.md`)
 
