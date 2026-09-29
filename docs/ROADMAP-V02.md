@@ -54,13 +54,13 @@ anpassen.
 | # | Gate | Nachweis | Stand |
 | --- | --- | --- | --- |
 | A1 | Prozessstart im Worker kernel-seitig gesperrt (Seccomp), andere Plattformen fail closed | `test_a_spawn_below_the_audit_hook_…` umgekehrt | erledigt: #57 (Codex), gemergt `8a358d1` |
-| A2 | Worker liest keine Host-Dateien: eigener unprivilegierter OS-Nutzer und Landlock-Allowlist (nur Job-Verzeichnis, Python-Laufzeit lesend); ohne Landlock-Unterstützung fail closed. **Mindestziel**, falls Kaan die volle Lösung verschiebt: Root-Secret, DB-Zugangsdaten und Ankerzustand sind für den Worker nicht lesbar | `test_a_read_outside_the_temporary_directory_…` umgekehrt; Mindestziel: Test „Worker liest die Secret-Datei“ wird abgelehnt | Design #72 (Claude); Umsetzung kann starten (#57 gemergt) |
+| A2 | Worker liest keine Host-Dateien: eigener unprivilegierter OS-Nutzer und Landlock-Allowlist (nur Job-Verzeichnis, Python-Laufzeit lesend); ohne Landlock-Unterstützung fail closed. **Mindestziel**, falls Kaan die volle Lösung verschiebt: Root-Secret, DB-Zugangsdaten und Ankerzustand sind für den Worker nicht lesbar | `test_a_read_outside_the_temporary_directory_…` umgekehrt; Mindestziel: Test „Worker liest die Secret-Datei“ wird abgelehnt | Design #72 gemergt; Umsetzung #76 (Claude) |
 
 ### B — Persistenz (nach `docs/DATABASE.md`)
 
 | # | Gate | Nachweis | Stand |
 | --- | --- | --- | --- |
-| B0 | `docs/DATABASE.md` gemergt, inklusive der Review-Befunde aus #56 (Vereinigungsmenge dort) | Doku; Claude-Security-Review, Freigabe durch Kaan | #70 (ChatGPT im Auftrag Kaans); Claude DB Review APPROVED an `dc0e825`; Freigabe Kaan offen |
+| B0 | `docs/DATABASE.md` gemergt, inklusive der Review-Befunde aus #56 (Vereinigungsmenge dort) | Doku; Claude-Security-Review, Freigabe durch Kaan | erledigt: #70 gemergt (Claude DB Review APPROVED an `dc0e825`, Freigabe Kaan 29.09.2026) |
 | B1 | `0001_core_foundation`: PostgreSQL-Dienst in der CI, `psycopg` hash-gepinnt, Migrationen mit Checksum, Start verweigert bei fehlender DB oder falscher Migration | Start-Refusal-Tests gegen echtes PostgreSQL | offen |
 | B2 | Job-Ledger persistent: Tests A–C aus Konflikt 4, Runtime ohne DELETE, nur Vorwärtsübergänge | Ledger-Grenztest in `test_orchestrator.py` umgekehrt | offen |
 | B3 | Annahme-Ledger persistent, Annahme nur aus `EXECUTION_COMMITTED` | Ledger-Grenztest in `test_verifier.py` umgekehrt | offen |
@@ -73,10 +73,10 @@ anpassen.
 
 | # | Gate | Nachweis | Stand |
 | --- | --- | --- | --- |
-| C1 | **Server-Einstieg** statt nur Demo: `python -m geniusnew serve` liest Root-Secret, Policy, DB- und Anker-Verbindung ausschließlich aus serverseitiger Konfiguration; das Demo-Secret wird außerhalb der Demo abgelehnt | Refusal-Tests für jede fehlende/ungültige Einstellung | #61 (Claude); DB-Verbindung folgt mit B1 |
+| C1 | **Server-Einstieg** statt nur Demo: `python -m geniusnew serve` liest Root-Secret, Policy, DB- und Anker-Verbindung ausschließlich aus serverseitiger Konfiguration; das Demo-Secret wird außerhalb der Demo abgelehnt | Refusal-Tests für jede fehlende/ungültige Einstellung | #61 gemergt; DB-Verbindung folgt mit B1 |
 | C2 | Anker als eigener Dienst unter eigenem OS-Nutzer, Lebenszyklus außerhalb des Kerns, signierte Anker-Antworten mit Nonce (Teile aus #32, neu auf `main` gebaut) | Anker-Rückschnitt-Grenztest umgekehrt oder neu begründet | #62 (Claude) |
 | C3 | Rolle „Freigebende“ mit eigener HTTP-Route; keine Selbstfreigabe | Refusal-Tests für fremde Rolle, eigene Aufträge, Doppelentscheidung | offen |
-| C4 | HTTP-Härtung: Body-Limit, Timeouts, Rate-Limit pro API-Key; TLS über Reverse-Proxy mit Beispielkonfiguration in `docs/` | Tests für Limits; Doku | Body-Limit und Socket-Timeout auf `main`; Rate-Limit, Job- und Verbindungsgrenze sowie geprüfte nginx-Vorlage #71 (Claude) |
+| C4 | HTTP-Härtung: Body-Limit, Timeouts, Rate-Limit pro API-Key; TLS über Reverse-Proxy mit Beispielkonfiguration in `docs/` | Tests für Limits; Doku | Body-Limit und Socket-Timeout auf `main`; Rate-Limit, Job- und Verbindungsgrenze sowie geprüfte nginx-Vorlage #71 (Claude, von Kaan am 29.09.2026 zum Merge freigegeben) |
 | C5 | Betriebsanleitung: systemd-Units (Kern, Anker, Nutzer getrennt), Backup und Restore von DB und Anker-Zustand, Ablauf der Schlüsselrotation. Ein Backup, das hinter dem Anker liegt, startet nicht (richtig so); der auditierte Weg zurück in den Betrieb ohne stilles Zurücksetzen des Ankers braucht Kaans Entscheidung | Doku + einmal durchgespielter Restore gegen die CI-Datenbank | offen |
 
 ### D — Portal (Vercel, nach `docs/MIGRATION-MATRIX.md` neu gebaut)
@@ -101,7 +101,7 @@ A1 → B0 → B1 → B2 → B3 → B4 → B5 → B6 → B7 → C1 → C2 → C3 
 C5 → E1 → E2 → E3.
 
 Zuständigkeit (Vorschlag, je Branch ein Implementierer; Rollen nach #66): Codex B1–B4, C3, jeder DB-PR mit „Claude DB Review: APPROVED“ am exakten Head; Claude C1
-(#61), C2 (#62, Neuaufbau aus #32), C4 (#71) und das Design von A2 (#72); B5 und B6 Claude (Security) mit
+(#61), C2 (#62, Neuaufbau aus #32), C4 (#71) sowie Design und Umsetzung von A2 (#72, #76; Entscheidung Kaan 29.09.2026); B5 und B6 Claude (Security) mit
 Codex; E2 prüft Claude, E3 und jeder Deploy bleiben bei Kaan.
 
 A2 und C2 hängen am selben Betriebsmodell (eigene OS-Nutzer) und können parallel zu B
@@ -110,9 +110,12 @@ Implementierer.
 
 ## Offene Entscheidungen für Kaan
 
-1. A2 vor der Beta schließen (Vorschlag) oder als gelistete Grenze in die Beta nehmen.
+1. ~~A2 vor der Beta schließen oder als Grenze in die Beta nehmen~~ — entschieden am
+   29.09.2026: A2 vor der Beta, Umsetzung Claude (#76).
 2. Portal→Kern-Authentisierung: signierte Requests (Vorschlag, ohne neue Abhängigkeit
    über Ed25519) oder mTLS.
-3. Zielplattform des Servers (Distribution, Kernel ≥ 5.13 für Landlock).
+3. Zielplattform des Servers: laut Server-Evidenz in #57 Debian 13, Kernel 6.12, x86_64
+   (reicht für Landlock ABI 4). Offen: ob Landlock dort aktiv ist (Einzeiler in
+   `docs/ISOLATION-A2.md`).
 4. Gehört das Portal (D1–D3) zur Beta, oder ist die Beta zunächst die Kern-API und das
    Portal ein eigener Meilenstein danach (Vorschlag aus #60)?
