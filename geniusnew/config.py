@@ -60,7 +60,8 @@ _MAX_SECRET_BYTES = 4096
 _MAX_CONFIG_BYTES = 1024 * 1024
 
 _TOP_KEYS = frozenset({"service", "policy", "principals"})
-_SERVICE_KEYS = frozenset({"listen_host", "listen_port", "root_secret_file", "anchor_state"})
+_SERVICE_KEYS = frozenset({"listen_host", "listen_port", "root_secret_file", "anchor_state",
+                           "database_dsn_file"})
 _POLICY_KEYS = frozenset({"version", "orchestrator_id", "handoff_ttl_seconds",
                           "allowed_tools", "allowed_sandbox_profiles", "grants"})
 _GRANT_KEYS = frozenset({"subject", "user_id", "worker_agent_id", "tier", "tools",
@@ -85,6 +86,7 @@ class ServiceConfig:
     listen_port: int
     root_secret: bytes
     anchor_state: str
+    database_dsn: str
     policy: Policy
     principals: Mapping[str, str]
     workers: tuple[Worker, ...]
@@ -135,31 +137,49 @@ def _absolute(value: Any, name: str) -> str:
     return value
 
 
-def read_root_secret(path: str) -> bytes:
-    """The root secret from a private regular file, byte for byte."""
+def _read_private_file(path: str, name: str) -> bytes:
+    """Read bounded bytes from an owner-only file without following links."""
     try:
         # O_NONBLOCK so that a FIFO at this path is refused below instead of
         # blocking the start until something writes to it.
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
                              | getattr(os, "O_CLOEXEC", 0))
     except OSError as exc:
-        raise ContractError("root secret file cannot be opened without following links") from exc
+        raise ContractError(f"{name} file cannot be opened without following links") from exc
     try:
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode):
-            _fail("root secret file must be a regular file")
+            _fail(f"{name} file must be a regular file")
         if info.st_uid != os.geteuid():
-            _fail("root secret file must be owned by the service user")
+            _fail(f"{name} file must be owned by the service user")
         if info.st_mode & 0o077:
-            _fail("root secret file must not be readable or writable by group or others")
+            _fail(f"{name} file must not be readable or writable by group or others")
         # One byte past the limit is enough to know it was exceeded.
         secret = os.read(descriptor, _MAX_SECRET_BYTES + 1)
     finally:
         os.close(descriptor)
+    if len(secret) > _MAX_SECRET_BYTES:
+        _fail(f"{name} file must be at most {_MAX_SECRET_BYTES} bytes")
+    return secret
+
+
+def read_database_dsn(path: str) -> str:
+    """Keep database credentials out of TOML, argv and inherited environment."""
+    raw = _read_private_file(_absolute(path, "service.database_dsn_file"), "database DSN")
+    try:
+        dsn = raw.decode("utf-8").strip()
+    except UnicodeDecodeError:
+        raise ContractError("database DSN file must be UTF-8") from None
+    if not dsn or "\x00" in dsn:
+        _fail("database DSN must be non-empty and contain no NUL")
+    return dsn
+
+
+def read_root_secret(path: str) -> bytes:
+    """The root secret from a private regular file, byte for byte."""
+    secret = _read_private_file(path, "root secret")
     if len(secret) < _MIN_SECRET_BYTES:
         _fail(f"root secret must be at least {_MIN_SECRET_BYTES} bytes")
-    if len(secret) > _MAX_SECRET_BYTES:
-        _fail(f"root secret file must be at most {_MAX_SECRET_BYTES} bytes")
     if secret == DEMO_ROOT_SECRET:
         _fail("the published demo root secret must not be used by a server")
     return secret
@@ -238,6 +258,7 @@ def parse_config(data: Mapping[str, Any]) -> ServiceConfig:
         root_secret=read_root_secret(
             _absolute(service["root_secret_file"], "service.root_secret_file")),
         anchor_state=_anchor_state(service["anchor_state"]),
+        database_dsn=read_database_dsn(service["database_dsn_file"]),
         policy=policy,
         principals=_principals(top["principals"], policy),
         workers=_workers(policy),

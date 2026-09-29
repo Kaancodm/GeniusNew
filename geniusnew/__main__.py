@@ -21,7 +21,7 @@ import sys
 import threading
 from typing import Sequence
 
-from .config import load_config
+from .config import ServiceConfig, load_config, read_database_dsn
 from .contracts import ContractError
 from .http_entry import PrincipalRegistry, serve
 from .wiring import Service, build
@@ -51,6 +51,13 @@ def _refuse_discontinuous_start(service: Service) -> None:
 
 def _serve(config_path: str) -> int:
     config = load_config(config_path)
+    from .database import open_database
+
+    with open_database(config.database_dsn):
+        return _run_service(config)
+
+
+def _run_service(config: ServiceConfig) -> int:
     service = build(root_secret=config.root_secret, policy=config.policy,
                     principals=config.principals, workers=config.workers,
                     anchor_state=config.anchor_state)
@@ -97,11 +104,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("serve", help="run the HTTP service")
     run.add_argument("--config", required=True, help="path to the TOML configuration")
+    migration = commands.add_parser("migrate", help="apply Core migrations as the schema owner")
+    migration.add_argument("--dsn-file", required=True, help="private migration DSN file")
     commands.add_parser("digest-api-key", help="SHA-256 digest of the key on stdin")
     arguments = parser.parse_args(argv)
     try:
         if arguments.command == "serve":
             return _serve(arguments.config)
+        if arguments.command == "migrate":
+            from .database import migrate
+
+            migrate(read_database_dsn(arguments.dsn_file))
+            return 0
         return _digest_api_key()
     except ContractError as exc:
         # The message is the refusal; a traceback would add nothing an operator
