@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Genius Control Deck</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,system-ui,sans-serif;background:#090d13;color:#e8edf2}
+body{margin:0;padding:18px;background:linear-gradient(180deg,#0d131d,#080b10);min-height:100vh}
+header{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:18px}
+h1{font-size:1.35rem;margin:0}.muted{color:#8d99a6}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}
+.card{background:#111923;border:1px solid #23303e;border-radius:14px;padding:14px}
+.row{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:8px 0;border-bottom:1px solid #1d2934}
+.row:last-child{border-bottom:0}.dot{width:11px;height:11px;border-radius:50%;display:inline-block;margin-right:8px}
+.green{background:#35d07f}.yellow{background:#f0bf4f}.red{background:#ef5b5b}
+.gates{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px}.gate{background:#0c1219;border:1px solid #1e2a36;border-radius:10px;padding:10px}
+code{font-size:.82rem;color:#cbd6df;word-break:break-all}.cmd{display:flex;gap:8px;align-items:center;margin-top:8px}
+button{background:#172230;color:#eaf0f5;border:1px solid #334253;border-radius:8px;padding:7px 10px}
+button:active{transform:translateY(1px)}.wide{grid-column:1/-1}
+</style>
+</head>
+<body>
+<header><div><h1>Genius Control Deck</h1><div class="muted">Server-first · read-only · Beta Gates</div></div><div id="stamp" class="muted">lädt…</div></header>
+<div class="grid">
+<section class="card"><h2>System</h2><div id="system"></div></section>
+<section class="card"><h2>Agenten</h2><div id="tools"></div></section>
+<section class="card wide"><h2>Beta Gates</h2><div id="gates" class="gates"></div></section>
+<section class="card wide"><h2>TERM Befehle</h2><div id="commands"></div></section>
+</div>
+<script>
+const dot=s=>'<span class="dot '+s+'"></span>';
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function row(name,v){return '<div class="row"><span>'+dot(v.status)+esc(name)+'</span><span class="muted">'+esc(v.detail||v.head||'')+'</span></div>'}
+async function load(){
+ const r=await fetch('/api/status',{cache:'no-store'}); const d=await r.json();
+ document.getElementById('stamp').textContent=new Date(d.generated_at*1000).toLocaleTimeString();
+ document.getElementById('system').innerHTML=row('Git',d.repo)+row('Tailscale',d.services.tailscale)+row('Desktop Commander',d.services.desktop_commander)+row('Docker',d.services.docker)+row('tmux',d.tmux);
+ document.getElementById('tools').innerHTML=Object.entries(d.tools).map(([k,v])=>row(k,v)).join('');
+ document.getElementById('gates').innerHTML=d.gates.map(g=>'<div class="gate">'+dot(g.status)+'<b>'+esc(g.id)+'</b> '+esc(g.name)+'</div>').join('');
+ document.getElementById('commands').innerHTML=Object.entries(d.commands).map(([k,v])=>'<div class="cmd"><button data-cmd="'+esc(v)+'">Kopieren</button><code>'+esc(k)+': '+esc(v)+'</code></div>').join('');
+ document.querySelectorAll('button[data-cmd]').forEach(b=>b.onclick=()=>navigator.clipboard.writeText(b.dataset.cmd));
+}
+load(); setInterval(load,15000);
+</script>
+</body></html>
