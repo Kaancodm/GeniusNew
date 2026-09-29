@@ -23,6 +23,13 @@
       "gate": "pre-ai-beta"
     },
     {
+      "title": "Intellifluence für Launch-/Influencer-Outreach",
+      "source": "appsumo/freebie",
+      "verdict": "NACH BETA",
+      "reason": "Erst aktivieren, wenn GeniusNew eine öffentliche Beta/Landingpage und ein konkretes Marketingziel hat. Das 1-Jahres-Angebot soll nicht während der Entwicklungsphase ablaufen.",
+      "gate": "launch-marketing"
+    },
+    {
       "title": "TwinGenius mit zwei unabhängigen Branches/Evaluatoren",
       "source": "saved-ideas",
       "verdict": "NACH BETA",
