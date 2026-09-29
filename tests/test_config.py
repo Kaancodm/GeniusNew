@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from geniusnew.config import DEMO_ROOT_SECRET, load_config, parse_config, read_root_secret
+from geniusnew.config import DEMO_ROOT_SECRET, load_config, parse_config, read_root_secret, read_database_dsn
 from geniusnew.contracts import ContractError
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "docs" / "examples" / "geniusnew.toml"
@@ -27,6 +27,8 @@ class Files:
         self.root = Path(self._directory.name)
         self.secret_path = self.write_secret(ROOT_SECRET)
         self.anchor_path = str(self.root / "anchor.state")
+        self.dsn_path = self.write_secret(b"host=localhost dbname=test user=genius_core",
+                                          name="database_dsn")
 
     def tearDown(self):
         self._directory.cleanup()
@@ -44,6 +46,7 @@ class Files:
                 "listen_port": 8080,
                 "root_secret_file": self.secret_path,
                 "anchor_state": self.anchor_path,
+                "database_dsn_file": self.dsn_path,
             },
             "policy": {
                 "version": "policy-v1",
@@ -93,6 +96,7 @@ class ValidConfigurationTest(Files, unittest.TestCase):
         text = EXAMPLE.read_text()
         text = text.replace("/etc/geniusnew/root_secret", self.secret_path)
         text = text.replace("/var/lib/geniusnew/anchor.state", self.anchor_path)
+        text = text.replace("/etc/geniusnew/database_dsn", self.dsn_path)
         path = self.root / "example.toml"
         path.write_text(text)
         config = load_config(str(path))
@@ -106,6 +110,11 @@ class StructureTest(Files, unittest.TestCase):
     def refused(self, data, message):
         with self.assertRaisesRegex(ContractError, message):
             parse_config(data)
+
+    def test_a_missing_database_connection_is_refused(self):
+        data = self.data()
+        data["service"].pop("database_dsn_file", None)
+        self.refused(data, "missing keys: database_dsn_file")
 
     def test_a_configuration_that_is_not_a_table_is_refused(self):
         self.refused(["service"], "must be a table")
@@ -257,6 +266,39 @@ class RootSecretTest(Files, unittest.TestCase):
         path = self.write_secret(DEMO_ROOT_SECRET, name="demo")
         with self.assertRaisesRegex(ContractError, "demo root secret"):
             read_root_secret(path)
+
+
+class DatabaseConfigTest(Files, unittest.TestCase):
+
+    def test_database_credentials_are_read_from_the_private_file_and_not_printed(self):
+        dsn = b"host=localhost dbname=test user=genius_core password=DSN-SECRET-CANARY"
+        self.dsn_path = self.write_secret(dsn, name="dsn-canary")
+        config = parse_config(self.data())
+        self.assertEqual(config.database_dsn, dsn.decode())
+        self.assertNotIn("DSN-SECRET-CANARY", repr(config))
+        self.assertNotIn("database_dsn", repr(config))
+
+    def test_invalid_database_file_contents_are_refused(self):
+        for raw, message in ((b"", "non-empty"), (b" \n", "non-empty"),
+                             (b"host=localhost\x00", "no NUL"), (b"\xff", "UTF-8"),
+                             (b"x" * 4097, "at most")):
+            with self.subTest(raw=raw[:20]):
+                path = self.write_secret(raw, name="bad-dsn")
+                with self.assertRaisesRegex(ContractError, message):
+                    read_database_dsn(path)
+
+    def test_database_credentials_require_private_regular_owned_files(self):
+        path = self.write_secret(b"host=localhost", name="public-dsn", mode=0o644)
+        with self.assertRaisesRegex(ContractError, "group or others"):
+            read_database_dsn(path)
+        link = self.root / "dsn-link"
+        link.symlink_to(self.dsn_path)
+        with self.assertRaisesRegex(ContractError, "without following links"):
+            read_database_dsn(str(link))
+        with self.assertRaisesRegex(ContractError, "regular file"):
+            read_database_dsn(str(self.root))
+        with self.assertRaisesRegex(ContractError, "absolute path"):
+            read_database_dsn("relative")
 
 
 class AnchorStateTest(Files, unittest.TestCase):

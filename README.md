@@ -43,19 +43,20 @@ ein Befehl, der einen Job über
 HTTP durch alle Schichten schickt, die Audit-Kette gegen den verankerten Kopf prüft und
 den Job danach fünfzehnmal angreift.
 
-**Voraussetzungen:** Linux (oder WSL), Python 3.11 oder neuer, `git`. Die direkte
-Abhängigkeit `cryptography` liefert die Ed25519-Signaturen von Handoff, Ergebnis und
-Audit-Kopf. Sie und ihre Abhängigkeiten sind mit Versionen und Hashes in
+**Voraussetzungen:** Linux (oder WSL), Python 3.11 oder neuer, `git`, `libpq`
+(Debian/Ubuntu: `libpq5`). `cryptography` liefert die Ed25519-Signaturen, `psycopg`
+den synchronen PostgreSQL-Zugriff. Beide und ihre Abhängigkeiten sind mit Versionen und Hashes in
 `requirements.txt` gepinnt. Für den Quickstart ist nach der Installation kein externer Internetzugriff erforderlich — der HTTP-Eingang lauscht
-nur auf `127.0.0.1` —, und nichts bleibt auf der Platte zurück außer temporären
-Verzeichnissen, die wieder verschwinden.
+nur auf `127.0.0.1`. Die vollständige Testsuite braucht zusätzlich einen lokalen
+PostgreSQL-Testcluster und `GENIUSNEW_TEST_ADMIN_DSN` gemäß
+[PostgreSQL-B1-Anleitung](docs/POSTGRES-B1.md). Die Demo benötigt keine Datenbank.
 
 ```sh
 git clone https://github.com/Kaancodm/GeniusNew.git
 cd GeniusNew
 python3 -m venv .venv && . .venv/bin/activate
 python3 -m pip install --require-hashes -r requirements.txt
-python3 -W error::ResourceWarning -m unittest discover -s tests   # Sekunden, endet mit OK
+python3 -W error::ResourceWarning -m unittest discover -s tests   # Test-DB vorher einrichten
 ./scripts/demo.sh                                                 # der Nachweis
 ```
 
@@ -173,8 +174,14 @@ aus einer TOML-Konfiguration (Vorlage: `docs/examples/geniusnew.toml`):
 ```sh
 head -c 32 /dev/urandom > /etc/geniusnew/root_secret && chmod 600 /etc/geniusnew/root_secret
 python -m geniusnew digest-api-key < api-key-file   # Digest für [principals]
+python -m geniusnew migrate --dsn-file /etc/geniusnew/migration_dsn
 python -m geniusnew serve --config /etc/geniusnew/geniusnew.toml
 ```
+
+Vorher Core-Datenbank, getrennte Rollen und private DSN-Dateien gemäß
+[PostgreSQL-B1-Anleitung](docs/POSTGRES-B1.md) einrichten. `serve` verweigert eine
+unerreichbare Datenbank sowie fehlende, geänderte oder unbekannte Migrationen vor
+dem Öffnen des HTTP-Listeners. Es führt selbst keine Migration aus.
 
 Der Dienst startet nicht, wenn etwas fehlt oder nicht stimmt: unbekannte Schlüssel,
 eine Nicht-Loopback-Adresse (TLS kommt vom Reverse-Proxy), eine Root-Secret-Datei mit
@@ -185,7 +192,8 @@ ist, verweigert er nach einem Neustart mit bereits verankerten Einträgen den St
 
 ## Lokale Prüfung
 
-In der aktivierten venv aus dem Quickstart, immer nacheinander. Der Refusal-Guard
+In der aktivierten venv aus dem Quickstart mit konfigurierter PostgreSQL-Test-DSN,
+immer nacheinander. Der Refusal-Guard
 prüft die vom Thema betroffenen Module; hier ist die Worker-Isolation das Beispiel:
 
 ```sh
