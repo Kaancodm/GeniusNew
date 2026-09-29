@@ -1,0 +1,36 @@
+# Example configuration for `python -m geniusnew serve --config <this file>`.
+# Checked by geniusnew/config.py; every table has a closed key set, and any
+# unknown or missing key refuses the start. This file starts nothing as it is:
+# the principal below is a placeholder, not a SHA-256 digest.
+
+[service]
+# Loopback only. TLS, rate limiting and the public address belong to a
+# reverse proxy on the same host (docs/ROADMAP-V02.md gate C4).
+listen_host = "127.0.0.1"
+listen_port = 8080
+# A regular file owned by the service user, mode 0600, at least 32 random bytes,
+# used exactly as stored. For example: head -c 32 /dev/urandom > root_secret
+root_secret_file = "/etc/geniusnew/root_secret"
+# The anchor's signed-head file. Its directory must exist.
+anchor_state = "/var/lib/geniusnew/anchor.state"
+
+[policy]
+version = "policy-v1"
+orchestrator_id = "orchestrator-1"
+handoff_ttl_seconds = 60
+allowed_tools = ["summarize"]
+allowed_sandbox_profiles = ["isolated"]
+
+[[policy.grants]]
+subject = "subject-example"
+user_id = "user-example"
+worker_agent_id = "worker-summarize"
+tier = "basic"
+tools = ["summarize"]
+sandbox_profile = "isolated"
+requires_approval = false
+
+[principals]
+# SHA-256 of an API key, from: python -m geniusnew digest-api-key < key-file
+# The key itself is never written here.
+REPLACE_WITH_SHA256_OF_THE_API_KEY = "subject-example"

@@ -165,6 +165,24 @@ Siehe:
 - `docs/ROADMAP-V01.md`
 - `docs/ROADMAP-V02.md` — Gates bis technisch beta-ready (v0.2)
 
+## Betrieb als Dienst
+
+Neben der Demo startet `python -m geniusnew serve` den Kern als Dienst, ausschließlich
+aus einer TOML-Konfiguration (Vorlage: `docs/examples/geniusnew.toml`):
+
+```sh
+head -c 32 /dev/urandom > /etc/geniusnew/root_secret && chmod 600 /etc/geniusnew/root_secret
+python -m geniusnew digest-api-key < api-key-file   # Digest für [principals]
+python -m geniusnew serve --config /etc/geniusnew/geniusnew.toml
+```
+
+Der Dienst startet nicht, wenn etwas fehlt oder nicht stimmt: unbekannte Schlüssel,
+eine Nicht-Loopback-Adresse (TLS kommt vom Reverse-Proxy), eine Root-Secret-Datei mit
+Gruppen- oder Fremdrechten, das Demo-Secret, ein Principal ohne Grant oder ein Tool ohne
+Worker. SIGTERM beendet ihn sauber. Solange die Audit-Kette nicht dauerhaft gespeichert
+ist, verweigert er nach einem Neustart mit bereits verankerten Einträgen den Start
+(`SECURITY.md`).
+
 ## Lokale Prüfung
 
 In der aktivierten venv aus dem Quickstart, immer nacheinander. Der Refusal-Guard

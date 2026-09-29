@@ -207,8 +207,10 @@ class Service:
             self.anchor.close()
 
 
-def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
-          workers: Iterable[Worker], clock: Callable[[], int] | None = None,
+def build(*, root_secret: bytes, policy: Policy,
+          workers: Iterable[Worker], api_keys: Mapping[bytes, str] | None = None,
+          principals: Mapping[str, str] | None = None,
+          clock: Callable[[], int] | None = None,
           gateway_id: str = "gateway-1", verifier_id: str = "verifier-1",
           job_ids: Callable[[], str] | None = None,
           runner_factory: Callable[..., WorkerRunner] | None = None,
@@ -220,7 +222,13 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
     one is given so that a restarted service resumes from what it committed.
     Passing an in-process `AuditAnchor` is a test seam, the same way
     `runner_factory` is: it puts the anchor back inside the writer's memory.
+
+    Callers name principals by exactly one of `api_keys` (plaintext keys, hashed
+    here) or `principals` (SHA-256 digests to subjects). A server reads the
+    digests from its configuration so that no plaintext key has to exist on it.
     """
+    if (api_keys is None) == (principals is None):
+        _fail("pass exactly one of api_keys or principals")
     if anchor is not None and not isinstance(anchor, AuditAnchor):
         _fail("anchor must be an AuditAnchor")
     if anchor is not None and anchor_state is not None:
@@ -287,7 +295,8 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
         recorder=recorder, policy=policy,
         handoff_verifier=handoff_verifier, now=now, pending=pending)
     entry = HttpEntry(
-        registry=PrincipalRegistry.from_api_keys(api_keys),
+        registry=(PrincipalRegistry.from_api_keys(api_keys) if api_keys is not None
+                  else PrincipalRegistry(principals)),
         submit=submit, complete=complete, job_ids=job_ids,
     )
     return Service(
