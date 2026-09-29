@@ -14,7 +14,12 @@ class LayaShadowTests(unittest.TestCase):
     def test_request_is_bounded_and_lists_only_configured_agents(self):
         wire = build_request("review the gateway")
         payload = json.loads(wire)
-        self.assertEqual(payload["options"], ["claude", "gemini", "codex", "zen"])
+        question = payload["questions"]["agent"]
+        self.assertEqual(question["type"], "choice")
+        self.assertEqual(
+            list(question["criteria"]),
+            ["claude", "gemini", "codex", "zen"],
+        )
         self.assertNotIn("allow", payload)
         self.assertNotIn("deny", payload)
 
@@ -23,7 +28,7 @@ class LayaShadowTests(unittest.TestCase):
 
         def decide(wire):
             seen.append(json.loads(wire))
-            return b'{"choice":"gemini"}'
+            return b'{"answers":{"agent":{"type":"choice","choice":"gemini"}}}'
 
         result = observe("database design", "claude", decide)
         self.assertEqual(result.authoritative_choice, "claude")
@@ -46,13 +51,18 @@ class LayaShadowTests(unittest.TestCase):
         result = observe(
             "route this",
             "zen",
-            lambda _wire: b'{"choice":"untrusted-agent"}',
+            lambda _wire: b'{"answers":{"agent":{"type":"choice","choice":"untrusted-agent"}}}',
         )
         self.assertEqual(result.status, "UNKNOWN")
         self.assertEqual(result.authoritative_choice, "zen")
 
-    def test_parser_accepts_nested_result_shape(self):
-        self.assertEqual(parse_choice(b'{"result":{"choice":"claude"}}'), "claude")
+    def test_parser_accepts_jev_answer_shape(self):
+        self.assertEqual(
+            parse_choice(
+                b'{"answers":{"agent":{"type":"choice","choice":"claude"}}}'
+            ),
+            "claude",
+        )
 
     def test_task_size_is_bounded(self):
         with self.assertRaisesRegex(ShadowError, "task"):
