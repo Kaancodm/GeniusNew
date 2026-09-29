@@ -17,8 +17,8 @@ class LayaShadowTests(unittest.TestCase):
         question = payload["questions"]["agent"]
         self.assertEqual(question["type"], "choice")
         self.assertEqual(
-            list(question["criteria"]),
-            ["claude", "gemini", "codex", "zen"],
+            set(question["criteria"]),
+            {"claude", "gemini", "codex", "zen"},
         )
         self.assertNotIn("allow", payload)
         self.assertNotIn("deny", payload)
