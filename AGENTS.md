@@ -2,10 +2,14 @@
 
 Gilt für jeden Assistenten, der in diesem Repository arbeitet: Claude Code, ChatGPT /
 Codex, GitHub Copilot, Gemini. **Wer was macht, steht in `docs/COLLABORATION.md`:**
-Codex setzt um und mergt, Gemini Pro und NotebookLM führen die Wissensdatenbank,
-Kaan entscheidet, Claude Code sorgt für Ordnung und Struktur, löst Konflikte zwischen
-den Plattformen (mit Überschreibrecht) und hilft bei einem Hilferuf. Kurzfassung für Copilot:
-`.github/copilot-instructions.md`. Aktueller Projektstand: `docs/STATUS.md`.
+Codex setzt Kerncode um und mergt, Gemini Pro und NotebookLM pflegen `docs/STATUS.md`,
+Kaan entscheidet Ziele und Architektur, ChatGPT übernimmt neue Werkzeuge, Server-Pflege,
+Infrastruktur und erstellt die Datenbank-Dokumentation (`docs/DATABASE.md`) in Kaans
+Auftrag, Claude Code besitzt `docs/COLLABORATION.md` und `docs/DECISIONS.md`, reviewt
+den DB-Entwurf und DB-Code sicherheitstechnisch, sorgt für Ordnung und Struktur, löst
+Konflikte zwischen den Plattformen (mit Überschreibrecht) und hilft bei einem Hilferuf.
+Kurzfassung für Copilot: `.github/copilot-instructions.md`. Aktueller Projektstand:
+`docs/STATUS.md`.
 
 ## Was das ist
 
@@ -81,16 +85,16 @@ bestanden melden.
 - Vor dem Push: Tests, Demo und Refusal-Guard für die geänderten Module lokal grün.
 - Mergen: Codex mergt eigene PRs selbst, sobald `contracts` grün ist und kein
   blockierender Review-Befund offen ist. Ausnahmen mit Kaans ausdrücklichem OK: neue
-  Abhängigkeit, eine Grenze aus `SECURITY.md` wird geändert, Tags. Gemini mergt seine
-  Wissens-PRs (`gemini/wissen-*`, nur `docs/STATUS.md` und `docs/DECISIONS.md`) selbst
-  bei grüner CI, den DB-Design-PR (`gemini/db-design`, `docs/DATABASE.md`) erst nach
-  Kaans Technikentscheidung. **DB-PRs** brauchen zusätzlich die ausdrückliche Gemini-Freigabe
-  (Gemini ist Head der Datenbank). Alle anderen Assistenten mergen nur mit Kaans
-  ausdrücklichem OK.
-- `docs/STATUS.md`, `docs/DECISIONS.md` und `docs/DATABASE.md` schreibt nur Gemini
-  (Ausnahme: Claude Code bei einem Konflikt, siehe `docs/COLLABORATION.md`). Wer etwas zum Stand
-  beiträgt, schreibt es in den Wissensblock seiner PR-Beschreibung
-  (`docs/COLLABORATION.md`).
+  Abhängigkeit, eine Grenze aus `SECURITY.md` wird geändert, Tags. Gemini mergt seinen
+  Wissens-PR (`gemini/wissen-*`, nur `docs/STATUS.md`) selbst bei grüner CI.
+  **DB-Code-PRs** (Codex) brauchen zusätzlich `Claude DB Review: APPROVED` am exakten
+  Head-SHA; `docs/DATABASE.md` erstellt ChatGPT im Auftrag von Kaan, Claude reviewt den
+  Entwurf sicherheitstechnisch, Kaan entscheidet offene Punkte und gibt frei. ChatGPT-
+  und Claude-eigene PRs mergt Kaan; keines der beiden mergt selbst.
+- `docs/STATUS.md` schreibt nur Gemini, `docs/COLLABORATION.md` und
+  `docs/DECISIONS.md` nur Claude Code (Ausnahme bei Konflikten: siehe
+  `docs/COLLABORATION.md`). Wer etwas zum Stand beiträgt, schreibt es in den
+  Wissensblock seiner PR-Beschreibung (`docs/COLLABORATION.md`).
 - Kommentare erklären das *Warum* und die Grenze, nicht das *Was*; so wie der
   umgebende Code.
 
@@ -100,7 +104,7 @@ bestanden melden.
 | --- | --- |
 | Projektstand und nächste Schritte (Wissensdatenbank) | `docs/STATUS.md` |
 | Entscheidungen mit Datum und Begründung (Wissensdatenbank) | `docs/DECISIONS.md` |
-| Datenbank im Code: Design, Schema, Vorgaben (Head: Gemini) | `docs/DATABASE.md` (entsteht), `docs/COLLABORATION.md` |
+| Datenbank im Code: Design, Schema, Vorgaben (Entwurf: ChatGPT im Auftrag von Kaan) | `docs/DATABASE.md` (entsteht), `docs/COLLABORATION.md` |
 | Wer macht was, Ablauf, Konflikte und Hilferuf an Claude | `docs/COLLABORATION.md` |
 | Gemini: Kontext und Review-Maßstab | `GEMINI.md`, `.gemini/styleguide.md` |
 | Übergabe-Prompts zwischen Werkzeugen | `docs/HANDOVER.md` |
