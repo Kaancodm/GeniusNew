@@ -13,6 +13,9 @@ listen_port = 8080
 root_secret_file = "/etc/geniusnew/root_secret"
 # The anchor's signed-head file. Its directory must exist.
 anchor_state = "/var/lib/geniusnew/anchor.state"
+# Private UTF-8 libpq connection string file, owned by the service user, mode 0600.
+# Keep it outside the repository and worker allowlist (like root_secret).
+database_dsn_file = "/etc/geniusnew/database_dsn"
 
 [policy]
 version = "policy-v1"
