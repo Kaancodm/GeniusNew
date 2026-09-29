@@ -35,7 +35,8 @@ def free_port() -> int:
         return probe.getsockname()[1]
 
 
-def configuration(*, secret_path: str, anchor_path: str, port: int, digest: str, database_dsn_file: str) -> str:
+def configuration(*, secret_path: str, anchor_path: str, port: int, digest: str, database_dsn_file: str,
+                  rate_per_minute: int = 60, burst: int = 20) -> str:
     return f"""
 [service]
 listen_host = "127.0.0.1"
@@ -43,6 +44,12 @@ listen_port = {port}
 root_secret_file = "{secret_path}"
 anchor_state = "{anchor_path}"
 database_dsn_file = "{database_dsn_file}"
+
+[service.limits]
+rate_per_minute = {rate_per_minute}
+burst = {burst}
+max_in_flight = 8
+max_connections = 64
 
 [policy]
 version = "policy-serve"
@@ -199,6 +206,34 @@ class ServeTest(unittest.TestCase):
         self.assertIn(b"stopping", self.stderr)
         for canary in (ROOT_SECRET, API_KEY, PAYLOAD_CANARY.encode()):
             self.assertNotIn(canary, self.stderr)
+
+    def test_the_configured_rate_limit_applies_to_the_running_service(self):
+        text = self.config.read_text()
+        self.config.write_text(text.replace("rate_per_minute = 60\nburst = 20",
+                                            "rate_per_minute = 1\nburst = 1"))
+        self.start()
+        self.assertEqual(self.post(API_KEY, {"text": "first"})[0], 202)
+        status, body = self.post(API_KEY, {"text": "second"})
+        self.assertEqual((status, body), (429, {"error": "TOO_MANY_REQUESTS"}))
+        self.stop()
+
+    def test_the_configured_limits_reach_the_service_and_the_listener(self):
+        from geniusnew.__main__ import _run_service
+        from geniusnew.config import load_config
+
+        text = self.config.read_text().replace("max_connections = 64", "max_connections = 3")
+        self.config.write_text(text.replace("max_in_flight = 8", "max_in_flight = 2"))
+        config = load_config(str(self.config))
+        with patch("geniusnew.__main__.build") as build_service, \
+                patch("geniusnew.__main__.serve", side_effect=RuntimeError("stop here")) as listener:
+            build_service.return_value.anchor.committed = (0, None)
+            build_service.return_value.chain.records = ()
+            with self.assertRaisesRegex(RuntimeError, "stop here"):
+                _run_service(config)
+        self.assertEqual(build_service.call_args.kwargs["limits"], config.limits)
+        self.assertEqual(config.limits.max_in_flight, 2)
+        self.assertEqual(listener.call_args.kwargs["max_connections"], 3)
+        build_service.return_value.close.assert_called_once_with()
 
     def test_an_unknown_key_is_refused_by_the_running_service(self):
         self.start()
