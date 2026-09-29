@@ -144,6 +144,17 @@ def tool_status(name: str) -> dict[str, str]:
     if name == "gh":
         code, _ = _run([exe, "auth", "status"], cwd=Path.home())
         return _simple("green" if code == 0 else "yellow", "logged in" if code == 0 else "login required")
+    if name == "gemini":
+        code, out = _run(
+            [exe, "-p", "Reply only OK", "--output-format", "json"],
+            cwd=Path.home(),
+            timeout=8.0,
+        )
+        logged_in = code == 0 and '"error"' not in out
+        return _simple(
+            "green" if logged_in else "yellow",
+            "logged in" if logged_in else "login required",
+        )
 
     code, out = _run([exe, "--version"], cwd=Path.home())
     version = out.splitlines()[0] if out else "installed"
@@ -164,11 +175,105 @@ def gate_status(repo: Path, ref: str | None) -> str:
     return "green" if code == 0 else "yellow"
 
 
+def _priorities(gates: list[dict[str, str]], tools: dict[str, dict[str, str]]) -> list[dict[str, str | None]]:
+    steps: list[dict[str, str | None]] = []
+    for tool in ("codex", "gh", "gemini"):
+        if tools[tool]["status"] != "green":
+            steps.append({"title": f"{tool} anmelden", "detail": tools[tool]["detail"], "action": None})
+    for gate in gates:
+        if gate["status"] != "green":
+            action = "tests" if gate["id"] in {"A1", "A2", "B0"} else None
+            steps.append({"title": f"{gate['id']} {gate['name']}", "detail": "nächstes offenes Beta-Gate", "action": action})
+    return steps[:3]
+
+
+def project_resume(
+    gates: list[dict[str, str]], tools: dict[str, dict[str, str]], repo: Path
+) -> dict[str, Any]:
+    by_id = {gate["id"]: gate for gate in gates}
+    missing = [name for name in ("codex", "gh", "gemini") if tools[name]["status"] != "green"]
+    if missing:
+        focus = "Gate 0 – Entwicklungsumgebung fertigstellen"
+        stopped = "Agent-/GitHub-Logins"
+    elif by_id["A1"]["status"] != "green":
+        focus = "A1 – Worker-Seccomp"
+        stopped = "PR #57 ist geprüft, aber noch nicht auf main"
+    elif by_id["B0"]["status"] != "green":
+        focus = "B0 – Datenbankdesign"
+        stopped = "PR #70 ist reviewt, aber noch nicht auf main"
+    else:
+        focus = "B1 – PostgreSQL-Fundament"
+        stopped = "B1 kann begonnen werden"
+
+    steps: list[dict[str, str | None]] = []
+    login_commands = {
+        "codex": "codex login",
+        "gh": "gh auth login",
+        "gemini": "gemini",
+    }
+    for name in missing:
+        steps.append({
+            "title": f"{name} anmelden",
+            "type": "command",
+            "value": login_commands[name],
+            "detail": "TERM-Befehl kopieren und Auth im Browser bestätigen",
+        })
+    if by_id["A1"]["status"] != "green":
+        steps.append({
+            "title": "A1 Seccomp – PR #57",
+            "type": "url",
+            "value": "https://github.com/Kaancodm/GeniusNew/pull/57",
+            "detail": "Server-Evidenz grün; Merge-Entscheidung offen",
+        })
+    if by_id["B0"]["status"] != "green":
+        steps.append({
+            "title": "B0 DB-Design – PR #70",
+            "type": "url",
+            "value": "https://github.com/Kaancodm/GeniusNew/pull/70",
+            "detail": "Claude DB Review: APPROVED; Merge-Entscheidung offen",
+        })
+    if by_id["B0"]["status"] == "green":
+        steps.append({
+            "title": "B1 PostgreSQL-Fundament",
+            "type": "action",
+            "value": "tests",
+            "detail": "Baseline prüfen, danach B1-Leaf-Issue/Branch starten",
+        })
+
+    merged = sum(1 for gate in gates if gate["status"] == "green")
+    return {
+        "focus": focus,
+        "stopped_at": stopped,
+        "main_head": repo_status(repo).get("head", ""),
+        "merged_gates": merged,
+        "total_gates": len(gates),
+        "resume": steps[:5],
+    }
+
+
+def research_items() -> list[dict[str, str]]:
+    path = Path(__file__).with_name("research.json")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        items = data.get("items", [])
+        if not isinstance(items, list):
+            return []
+        return [item for item in items if isinstance(item, dict)][:20]
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
 def snapshot(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
     gates = [
         {"id": gate, "name": name, "status": gate_status(repo, ref)}
         for gate, name, ref in BETA_GATES
     ]
+    tools = {
+        "claude": tool_status("claude"),
+        "codex": tool_status("codex"),
+        "gemini": tool_status("gemini"),
+        "gh": tool_status("gh"),
+    }
     return {
         "generated_at": int(time.time()),
         "repo": repo_status(repo),
@@ -177,12 +282,10 @@ def snapshot(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
             "desktop_commander": service_status("desktop-commander-remote.service", user=True),
             "docker": docker_status(),
         },
-        "tools": {
-            "claude": tool_status("claude"),
-            "codex": tool_status("codex"),
-            "gemini": tool_status("gemini"),
-            "gh": tool_status("gh"),
-        },
+        "tools": tools,
+        "priorities": _priorities(gates, tools),
+        "project": project_resume(gates, tools, repo),
+        "research": research_items(),
         "tmux": _simple(
             "green" if Path(f"/tmp/tmux-{os.getuid()}/default").exists() else "yellow",
             "genius session" if Path(f"/tmp/tmux-{os.getuid()}/default").exists() else "check from TERM",
