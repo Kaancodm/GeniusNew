@@ -33,7 +33,9 @@ Architekturentscheidung und ist **nicht** Teil dieses Experiments.
 
 ## Lokaler Anschluss
 
-Der Adapter erwartet einen Jev-kompatiblen HTTP-Endpunkt auf Loopback. Beispiel:
+Der Adapter erwartet einen Jev-kompatiblen HTTP-Endpunkt auf Loopback und sendet
+`state` plus eine typisierte `choice`-Frage unter `questions.agent`. Aus der
+Antwort wird ausschließlich `answers.agent.choice` gelesen. Beispiel:
 
 ```python
 from experiments.laya_shadow import http_decider, observe
