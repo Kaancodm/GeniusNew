@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import argparse
+import http.client
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tools.control_deck import actions, checks, mail_center
+from tools.control_deck import actions, checks, mail_center, server
 
 
 class ControlDeckTest(unittest.TestCase):
@@ -135,6 +138,119 @@ class ControlDeckTest(unittest.TestCase):
         self.assertEqual(state["categories"]["sponsoring"]["unread"], 1)
         self.assertEqual(state["categories"]["system"]["critical"], 1)
         self.assertNotIn("body", state["threads"][0])
+
+
+class HostCheckTest(unittest.TestCase):
+    """A browser page must not reach the deck through a rebound DNS name."""
+
+    def setUp(self):
+        self.actions = []
+        patches = [
+            patch.object(server, "mail_snapshot", return_value={"subject": "MAIL-CANARY"}),
+            patch.object(server, "run_action",
+                         side_effect=lambda name, repo: self.actions.append(name) or {"ok": True}),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.deck = server.Server(("127.0.0.1", 0), server.Handler)
+        self.deck.repo = checks.DEFAULT_REPO
+        self.port = self.deck.server_address[1]
+        loop = threading.Thread(target=self.deck.serve_forever, daemon=True)
+        loop.start()
+        self.addCleanup(loop.join, 10)
+        self.addCleanup(self.deck.server_close)
+        self.addCleanup(self.deck.shutdown)
+
+    def request(self, method, path, host, headers=None, body=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            conn.putrequest(method, path, skip_host=True)
+            if host is not None:
+                conn.putheader("Host", host)
+            for name, value in (headers or {}).items():
+                conn.putheader(name, value)
+            if body is not None:
+                conn.putheader("Content-Length", str(len(body)))
+            conn.endheaders(body)
+            response = conn.getresponse()
+            return response.status, response.read()
+        finally:
+            conn.close()
+
+    def post_action(self, host, origin=None):
+        headers = {"Content-Type": "application/json"}
+        if origin is not None:
+            headers["Origin"] = origin
+        return self.request("POST", "/api/action", host, headers, b'{"action":"git_status"}')
+
+    def test_loopback_host_reads_mail(self):
+        for name in ("127.0.0.1", "localhost"):
+            with self.subTest(name=name):
+                status, body = self.request("GET", "/api/mail", f"{name}:{self.port}")
+                self.assertEqual(status, 200)
+                self.assertIn(b"MAIL-CANARY", body)
+
+    def test_foreign_host_is_refused_before_any_route(self):
+        for path in ("/", "/api/status", "/api/mail"):
+            with self.subTest(path=path):
+                status, body = self.request("GET", path, f"attacker.example:{self.port}")
+                self.assertEqual(status, 421)
+                self.assertNotIn(b"MAIL-CANARY", body)
+
+    def test_missing_host_and_wrong_port_are_refused(self):
+        self.assertEqual(self.request("GET", "/api/mail", None)[0], 421)
+        self.assertEqual(self.request("GET", "/api/mail", "127.0.0.1:1")[0], 421)
+
+    def test_foreign_host_cannot_start_an_action(self):
+        status, _ = self.post_action(f"attacker.example:{self.port}")
+        self.assertEqual(status, 421)
+        self.assertEqual(self.actions, [])
+
+    def test_foreign_origin_cannot_start_an_action(self):
+        status, _ = self.post_action(f"127.0.0.1:{self.port}", origin="http://attacker.example")
+        self.assertEqual(status, 403)
+        self.assertEqual(self.actions, [])
+
+    def test_own_origin_starts_an_action(self):
+        status, _ = self.post_action(f"127.0.0.1:{self.port}",
+                                     origin=f"http://127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        self.assertEqual(self.actions, ["git_status"])
+
+    def test_a_named_proxy_host_is_accepted_with_its_https_origin(self):
+        self.deck.extra_hosts = frozenset({"deck.tailnet.example"})
+        status, body = self.request("GET", "/api/mail", "deck.tailnet.example")
+        self.assertEqual(status, 200)
+        self.assertIn(b"MAIL-CANARY", body)
+        status, _ = self.post_action("deck.tailnet.example", origin="https://deck.tailnet.example")
+        self.assertEqual((status, self.actions), (200, ["git_status"]))
+
+    def test_proxy_host_names_are_bare(self):
+        self.assertEqual(server.host_name("deck.tailnet.example"), "deck.tailnet.example")
+        for value in ("", "a b", "http://x", "x/y", "user@x", "x\\y", "a" * 254):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(argparse.ArgumentTypeError, "bare host"):
+                    server.host_name(value)
+
+    def test_only_loopback_or_tailnet_may_be_bound(self):
+        for value in ("127.0.0.1", "127.0.0.2", "localhost", "100.64.0.1", "100.101.102.103"):
+            self.assertEqual(server.bind_host(value), value)
+        # IPv6 is refused here rather than failing later at bind time.
+        for value in ("0.0.0.0", "::", "::1", "fd7a:115c:a1e0::1", "192.168.1.10",
+                      "10.0.0.5", "100.128.0.1", "203.0.113.7", "example.org", ""):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(argparse.ArgumentTypeError,
+                                            "IPv4 loopback or Tailscale"):
+                    server.bind_host(value)
+
+    def test_port_80_accepts_a_host_without_port(self):
+        deck = server.Server(("127.0.0.1", 0), server.Handler, bind_and_activate=False)
+        self.addCleanup(deck.server_close)
+        deck.server_address = ("127.0.0.1", 80)
+        self.assertLessEqual({"127.0.0.1", "localhost", "127.0.0.1:80"}, deck.allowed_hosts())
+        deck.server_address = ("127.0.0.1", 8787)
+        self.assertNotIn("127.0.0.1", deck.allowed_hosts())
 
 
 if __name__ == "__main__":
