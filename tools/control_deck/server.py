@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .actions import allowed_actions, run_action
 from .checks import DEFAULT_REPO, snapshot
 
 STATIC = Path(__file__).with_name("static")
@@ -25,7 +26,29 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self) -> None:
-        self.send_error(405)
+        if urlparse(self.path).path != "/api/action":
+            self.send_error(404)
+            return
+        if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+            self.send_error(415)
+            return
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self.send_error(400)
+            return
+        if size <= 0 or size > 1024:
+            self.send_error(413)
+            return
+        try:
+            payload = json.loads(self.rfile.read(size))
+            action = payload["action"]
+            if not isinstance(action, str) or action not in allowed_actions():
+                raise ValueError
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+            self.send_error(400)
+            return
+        self._json(run_action(action, self.server.repo))
 
     def _json(self, payload: object) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode()
