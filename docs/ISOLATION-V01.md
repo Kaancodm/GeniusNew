@@ -25,9 +25,11 @@ Der Python-Worker:
   und Core-Dumps;
 - erhält eine ersetzte Umgebung, deren Verzeichnisse im temporären Job-Verzeichnis liegen;
 - darf keine Python-Socket-Operationen ausführen;
-- darf nicht durch `/proc`, `/sys` oder `/dev` lesen, einschließlich der Umgebung und
-  Dateideskriptoren des Elternprozesses; andere vom Dienstnutzer lesbare Pfade bleiben
-  lesbar;
+- darf nur sein Job-Verzeichnis und, lesend, die Python-Laufzeit, `geniusnew/` und das
+  Verzeichnis seines Worker-Moduls erreichen. Das setzt der Kernel mit Landlock durch
+  (Gate A2, `docs/ISOLATION-A2.md`); der Audit-Hook prüft dieselbe Allowlist und meldet
+  einen Verstoß. `/proc`, `/sys` und `/dev` bleiben gesperrt;
+- darf keine TCP-Verbindung aufbauen und keinen TCP-Port binden (Landlock ABI ≥ 4);
 - darf über die überwachten Python-APIs keine Prozesse, Programme oder Shells starten
   und keine fremden Prozesse signalisieren;
 - erhält **vor dem Python-Audit-Hook einen Seccomp-Filter**. Der Kernel beendet das Kind
@@ -49,8 +51,9 @@ Eine erkannte verbotene Operation ergibt ein signiertes Ergebnis
 der Ausnahmetext überschreitet die Prozessgrenze nicht.
 
 Der Filter wird derzeit nur unter Linux auf x86_64 mit 64-Bit-Interpreter
-unterstützt. Überall sonst verweigert `IsolatedWorkerRunner` die Ausführung fail closed,
-genau wie bei fehlenden POSIX-Ressourcenlimits.
+unterstützt, Landlock ab ABI 4 (Linux 6.7). Überall sonst verweigert
+`IsolatedWorkerRunner` die Ausführung fail closed, genau wie bei fehlenden
+POSIX-Ressourcenlimits.
 
 ## Nachweise durch Tests
 
@@ -72,6 +75,13 @@ genau wie bei fehlenden POSIX-Ressourcenlimits.
   bleiben erhalten.
 - Fehlschläge beim Setzen von `no_new_privs` oder Installieren des Filters werden
   fail closed abgelehnt.
+- Landlock allein, ohne Hook, in einem Wegwerfprozess: Lesen und Auflisten außerhalb,
+  Schreiben außerhalb und in erlaubte Leseverzeichnisse sowie TCP-`connect` werden vom
+  Kernel abgelehnt; Job-Verzeichnis und Leseverzeichnisse bleiben nutzbar.
+- Der Hook allein lehnt dieselben Lesezugriffe ab und markiert den Verstoß.
+- Jeder Fehlschlag beim Einrichten von Landlock (ABI unter 4, Ruleset, Regel,
+  `no_new_privs`, `restrict_self`) wird fail closed abgelehnt.
+- Eine `0600`-Datei des Dienstnutzers außerhalb der Allowlist erreicht die Ausgabe nicht.
 
 `geniusnew/isolation.py` und `geniusnew/isolation_child.py` stehen in
 `scripts/refusals.py`: Wird eine dort erfasste Ablehnung entfernt, muss die Suite
@@ -79,29 +89,22 @@ fehlschlagen.
 
 ## Bekannte Grenze (offen gehalten)
 
-Ein zusätzlicher Test belegt weiterhin eine bestehende Lücke:
+- **Lesbar bleiben Laufzeit, Paket und Worker-Modul:** Ein Secret in einem dieser
+  Verzeichnisse würde herausgegeben. Test:
+  `test_the_package_source_is_readable_and_this_is_the_boundary`.
 
-- **Lesen außerhalb der Sandbox:** Ein Worker kann Dateien außerhalb von `/proc`,
-  `/sys` und `/dev` lesen, soweit der Dienstnutzer darauf zugreifen darf. Seine
-  Ausgabe kann zum Client zurückgehen.
-  Test:
-  `test_a_read_outside_the_temporary_directory_is_allowed_and_this_is_the_boundary`.
-
-Der zuvor offen gehaltene Prozessstart unterhalb des Python-Audit-Hooks wird durch den
-Seccomp-Filter geschlossen und durch
-`test_a_spawn_below_the_audit_hook_is_killed_by_the_kernel` abgesichert.
-
-Das verbleibende Host-Lesen braucht eine kernel-erzwungene Pfadkontrolle, zum Beispiel
-Landlock oder eine entsprechend stärkere Container-/Namespace-Grenze. Eine weitere
-Python-Audit-Hook-Regel reicht dafür nicht als Nachweis.
+Geschlossen und abgesichert sind der Prozessstart unterhalb des Python-Audit-Hooks
+(Seccomp, `test_a_spawn_below_the_audit_hook_is_killed_by_the_kernel`) und das Lesen
+von Host-Dateien außerhalb der Allowlist (Landlock,
+`test_a_service_secret_outside_the_allowlist_cannot_be_read`).
 
 ## Bewusst außerhalb des Umfangs
 
 Dies bleibt eine Prozessgrenze, keine microVM und keine vollständige
-Container-Sicherheitsgrenze. Seccomp schützt hier gezielt gegen das Starten neuer
-Prozesse und Programme. Rohe Netzwerk- und Datei-Syscalls aus bereits geladenem
-nativem Code werden dadurch nicht allgemein eingeschränkt; Kernel-Exploits sind
-ebenfalls außerhalb dieses Modells.
+Container-Sicherheitsgrenze. Seccomp sperrt das Starten neuer Prozesse und Programme,
+Landlock Dateizugriffe außerhalb der Allowlist und TCP. UDP und Unix-Sockets aus
+bereits geladenem nativem Code schränkt keine der beiden Schichten ein;
+Kernel-Exploits sind ebenfalls außerhalb dieses Modells.
 
 Vor der Ausführung beliebiger nativer Erweiterungen oder nicht vertrauenswürdigen
 Drittanbieter-Codes muss eine stärkere, durch das Betriebssystem erzwungene Sandbox
