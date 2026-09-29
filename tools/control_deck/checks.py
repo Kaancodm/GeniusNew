@@ -57,12 +57,20 @@ def _run(args: list[str], *, cwd: Path | None = None, timeout: float = 3.0) -> t
             env={
                 **os.environ,
                 "LC_ALL": "C",
+                "PATH": (
+                    f"{Path.home()}/.local/bin:/usr/local/bin:/usr/bin:/bin:"
+                    + os.environ.get("PATH", "")
+                ),
                 "XDG_RUNTIME_DIR": os.environ.get(
                     "XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"
                 ),
                 "DBUS_SESSION_BUS_ADDRESS": os.environ.get(
                     "DBUS_SESSION_BUS_ADDRESS",
                     f"unix:path=/run/user/{os.getuid()}/bus",
+                ),
+                "DOCKER_HOST": os.environ.get(
+                    "DOCKER_HOST",
+                    f"unix:///run/user/{os.getuid()}/docker.sock",
                 ),
             },
         )
@@ -99,15 +107,26 @@ def service_status(name: str, *, user: bool = False) -> dict[str, str]:
     return _simple("green" if code == 0 and state == "active" else "red", state)
 
 
+def _which(name: str) -> str | None:
+    search_path = (
+        f"{Path.home()}/.local/bin:/usr/local/bin:/usr/bin:/bin:"
+        + os.environ.get("PATH", "")
+    )
+    return shutil.which(name, path=search_path)
+
+
 def docker_status() -> dict[str, str]:
-    if not shutil.which("docker"):
+    if not _which("docker"):
         return _simple("red", "not installed")
     code, out = _run(["docker", "info", "--format", "{{.ServerVersion}}"], cwd=Path.home())
-    return _simple("green" if code == 0 else "red", out if code == 0 else "daemon unavailable")
+    if code == 0:
+        return _simple("green", out)
+    detail = out.splitlines()[0] if out else "daemon unavailable"
+    return _simple("red", detail)
 
 
 def tool_status(name: str) -> dict[str, str]:
-    exe = shutil.which(name)
+    exe = _which(name)
     if not exe:
         return _simple("red", "missing")
 
@@ -165,8 +184,8 @@ def snapshot(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
             "gh": tool_status("gh"),
         },
         "tmux": _simple(
-            "green" if _run(["tmux", "has-session", "-t", "genius"], cwd=Path.home())[0] == 0 else "red",
-            "genius",
+            "green" if Path(f"/tmp/tmux-{os.getuid()}/default").exists() else "yellow",
+            "genius session" if Path(f"/tmp/tmux-{os.getuid()}/default").exists() else "check from TERM",
         ),
         "gates": gates,
         "commands": COMMANDS,
