@@ -16,6 +16,13 @@
       "gate": "experiment"
     },
     {
+      "title": "Braintrust Eval Lab für KI-Worker/Router",
+      "source": "braintrust.dev/docs/evaluation-quickstart",
+      "verdict": "REVIEW NÖTIG",
+      "reason": "Zeitpunkt fest markiert: nach Core/DB und bevor die echte KI-Beta startet. Zuerst nur synthetische/bereinigte Eval-Daten; keine Secrets oder Kundendaten.",
+      "gate": "pre-ai-beta"
+    },
+    {
       "title": "TwinGenius mit zwei unabhängigen Branches/Evaluatoren",
       "source": "saved-ideas",
       "verdict": "NACH BETA",
@@ -42,13 +49,6 @@
       "verdict": "NACH BETA",
       "reason": "Kann Dev-Orchestrierung vereinfachen, darf Beta-Persistenz nicht verdrängen.",
       "gate": "post-beta"
-    },
-    {
-      "title": "Braintrust Eval Lab für KI-Worker/Router",
-      "source": "braintrust.dev/docs/evaluation-quickstart",
-      "verdict": "REVIEW NÖTIG",
-      "reason": "Zeitpunkt fest markiert: nach Core/DB und bevor die echte KI-Beta startet. Zuerst nur synthetische/bereinigte Eval-Daten; keine Secrets oder Kundendaten.",
-      "gate": "pre-ai-beta"
     }
   ]
 }
