@@ -641,6 +641,15 @@ def _commit_request(head: AuditHead, records: Iterable[AuditRecord]) -> dict[str
     }
 
 
+def _check_commit_size(head: AuditHead, records: Iterable[AuditRecord]) -> None:
+    """Keep a committed head usable by both anchor transport and state reload."""
+    request = _commit_request(head, records)
+    _frame({"nonce": "0" * (_NONCE_BYTES * 2), "request": request},
+           _MAX_REQUEST_BYTES)
+    if head.count * len(_head_line(head)) > _MAX_STATE_BYTES:
+        _fail("anchor state would exceed its restart bound")
+
+
 class AnchorClient(AuditAnchor):
     """The service's side of a served anchor: it asks, and believes only signed answers.
 

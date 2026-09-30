@@ -16,6 +16,7 @@ import psycopg
 from psycopg.pq import TransactionStatus
 
 from .audit import AuditAuthority, AuditEvent, AuditVerifier, rehydrate_event
+from . import anchor_process
 from .audit_chain import (AuditChain, AuditHead, AuditRecord, _EMPTY_HASH,
                           _MAX_COUNT, _record_hash, _verify_head, sign_head, verify)
 from .contracts import ContractError
@@ -153,6 +154,29 @@ class PostgresAuditChain(AuditChain):
         except psycopg.Error:
             raise ContractError("audit transaction is unavailable") from None
 
+    @contextmanager
+    def anchor_lock(self):
+        """Keep a committed snapshot ordered through its independent anchor ack."""
+        with self._lock:
+            if self._connection.info.transaction_status != TransactionStatus.IDLE:
+                _fail("anchor lock must begin outside an existing transaction")
+            acquired = False
+            try:
+                self._connection.execute("SELECT pg_advisory_lock(%s)", (_AUDIT_LOCK,))
+                acquired = True
+                yield
+            except psycopg.Error:
+                raise ContractError("audit anchor lock is unavailable") from None
+            finally:
+                if acquired:
+                    try:
+                        released = self._connection.execute(
+                            "SELECT pg_advisory_unlock(%s)", (_AUDIT_LOCK,)).fetchone()
+                    except psycopg.Error:
+                        raise ContractError("audit anchor lock could not be released") from None
+                    if released != (True,):
+                        _fail("audit anchor lock was not held")
+
     def append(self, event: AuditEvent, *, transaction=None) -> AuditRecord:
         if not isinstance(event, AuditEvent):
             _fail("event is invalid")
@@ -182,6 +206,9 @@ class PostgresAuditChain(AuditChain):
                                           previous_hash=previous_hash))
         head = sign_head(count=index + 1, head_hash=record.record_hash,
                          authority=self._authority)
+        # A stored suffix must never outgrow the full-chain anchor protocol:
+        # otherwise every restart would fail after this transaction commits.
+        anchor_process._check_commit_size(head, records + (record,))
         connection.execute(
             'INSERT INTO public.audit_chain (index, previous_hash, record_hash, event) '
             'VALUES (%s, %s, %s, %s)',

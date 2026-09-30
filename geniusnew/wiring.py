@@ -135,12 +135,14 @@ class _AnchoredAudit:
 
     def append(self, event: AuditEvent) -> None:
         with self._lock:
-            self.chain.append(event)
-            self._commit_locked()
+            with self.chain.anchor_lock():
+                self.chain.append(event)
+                self._commit_locked()
 
     def head(self):
         with self._lock:
-            return self._commit_locked()
+            with self.chain.anchor_lock():
+                return self._commit_locked()
 
     def _commit_locked(self):
         head, records = self.chain.snapshot(self.audit)
