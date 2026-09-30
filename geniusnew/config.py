@@ -33,7 +33,10 @@ start, not per request.
 
 **No anchor state.** Without it the anchor forgets every committed head when the
 service restarts, and a shortened chain verifies again. The demo may do that; a
-server may not.
+server may not. A server names either `anchor_state` (the anchor as the service's
+child) or `anchor_socket` with `anchor_reply_public_key` (gate C2: the anchor as
+its own service, whose replies the service believes only when signed by that key).
+Both, or neither, is refused.
 
 Nothing here reads the environment. A secret in an environment variable is
 visible in `/proc/<pid>/environ` to the same user and inherited by every child,
@@ -44,6 +47,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 import stat
 import tomllib
 from dataclasses import dataclass
@@ -60,8 +64,11 @@ _MAX_SECRET_BYTES = 4096
 _MAX_CONFIG_BYTES = 1024 * 1024
 
 _TOP_KEYS = frozenset({"service", "policy", "principals"})
-_SERVICE_KEYS = frozenset({"listen_host", "listen_port", "root_secret_file", "anchor_state",
+_SERVICE_KEYS = frozenset({"listen_host", "listen_port", "root_secret_file",
                            "database_dsn_file"})
+# One anchor mode is required, and exactly one (see `_anchor`): a child of the
+# service persisted at `anchor_state`, or a separate service at `anchor_socket`.
+_ANCHOR_KEYS = frozenset({"anchor_state", "anchor_socket", "anchor_reply_public_key"})
 _POLICY_KEYS = frozenset({"version", "orchestrator_id", "handoff_ttl_seconds",
                           "allowed_tools", "allowed_sandbox_profiles", "grants"})
 _GRANT_KEYS = frozenset({"subject", "user_id", "worker_agent_id", "tier", "tools",
@@ -85,7 +92,9 @@ class ServiceConfig:
     listen_host: str
     listen_port: int
     root_secret: bytes
-    anchor_state: str
+    anchor_state: str | None
+    anchor_socket: str | None
+    anchor_reply_public_key: bytes | None
     database_dsn: str
     policy: Policy
     principals: Mapping[str, str]
@@ -95,13 +104,15 @@ class ServiceConfig:
         # The dataclass default would print the root secret.
         return (f"ServiceConfig(listen_host={self.listen_host!r}, "
                 f"listen_port={self.listen_port!r}, anchor_state={self.anchor_state!r}, "
+                f"anchor_socket={self.anchor_socket!r}, "
                 f"policy={self.policy.version!r}, principals={len(self.principals)})")
 
 
-def _table(value: Any, name: str, keys: frozenset[str]) -> Mapping[str, Any]:
+def _table(value: Any, name: str, keys: frozenset[str],
+           optional: frozenset[str] = frozenset()) -> Mapping[str, Any]:
     if not isinstance(value, dict):
         _fail(f"{name} must be a table")
-    unknown = set(value) - keys
+    unknown = set(value) - keys - optional
     if unknown:
         _fail(f"{name} has unknown keys: {', '.join(sorted(unknown))}")
     missing = keys - set(value)
@@ -192,6 +203,26 @@ def _anchor_state(value: Any) -> str:
     return path
 
 
+def _anchor(service: Mapping[str, Any]) -> tuple[str | None, str | None, bytes | None]:
+    """Exactly one anchor mode: a persisted child, or a served anchor and its key.
+
+    Both at once would leave it unclear which anchor the audit head is committed
+    to, and neither would start a service that forgets its heads on restart.
+    """
+    served = {"anchor_socket", "anchor_reply_public_key"} & set(service)
+    if "anchor_state" in service:
+        if served:
+            _fail("service.anchor_state and a served anchor are mutually exclusive")
+        return _anchor_state(service["anchor_state"]), None, None
+    if served != {"anchor_socket", "anchor_reply_public_key"}:
+        _fail("service needs anchor_state, or anchor_socket with anchor_reply_public_key")
+    socket_path = _absolute(service["anchor_socket"], "service.anchor_socket")
+    key = service["anchor_reply_public_key"]
+    if type(key) is not str or not re.fullmatch(r"[0-9a-f]{64}", key):
+        _fail("service.anchor_reply_public_key must be 64 lowercase hex characters")
+    return None, socket_path, bytes.fromhex(key)
+
+
 def _strings(value: Any, name: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(type(item) is str for item in value):
         _fail(f"{name} must be a list of strings")
@@ -250,14 +281,17 @@ def _workers(policy: Policy) -> tuple[Worker, ...]:
 def parse_config(data: Mapping[str, Any]) -> ServiceConfig:
     """Check a parsed configuration and read the secret it names."""
     top = _table(data, "configuration", _TOP_KEYS)
-    service = _table(top["service"], "service", _SERVICE_KEYS)
+    service = _table(top["service"], "service", _SERVICE_KEYS, _ANCHOR_KEYS)
     policy = _policy(top["policy"])
+    anchor_state, anchor_socket, anchor_reply_public_key = _anchor(service)
     return ServiceConfig(
         listen_host=_loopback_host(service["listen_host"]),
         listen_port=_port(service["listen_port"]),
         root_secret=read_root_secret(
             _absolute(service["root_secret_file"], "service.root_secret_file")),
-        anchor_state=_anchor_state(service["anchor_state"]),
+        anchor_state=anchor_state,
+        anchor_socket=anchor_socket,
+        anchor_reply_public_key=anchor_reply_public_key,
         database_dsn=read_database_dsn(service["database_dsn_file"]),
         policy=policy,
         principals=_principals(top["principals"], policy),

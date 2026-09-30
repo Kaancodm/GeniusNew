@@ -15,8 +15,19 @@ boundary and no new chain logic.
 ## What the boundary is, and is not
 
 It is a memory boundary: the anchored count and hash are not objects the writer
-can reach. It is **not** a lifecycle boundary. The service starts this process,
-so it can also end it.
+can reach. As a child it is **not** a lifecycle boundary: the service starts
+this process, so it can also end it.
+
+`serve` removes that. Started on its own — by the operator, under its own
+operating-system user — the anchor listens on a Unix socket and the service
+holds an `AnchorClient` instead. A socket, unlike a pipe the service created,
+can be answered by whoever gets to its path first, so every served reply is
+signed with the anchor's own Ed25519 key over the nonce of the request it
+answers. The client is configured with the public half and refuses any reply
+that is unsigned, signed by another key, or signed for another request. What a
+separate user buys — the service can neither stop the anchor nor cut its state
+file back — is a property of the deployment, not of this code; `SECURITY.md`
+says which one a given installation has.
 
 ## Surviving a restart
 
@@ -48,16 +59,26 @@ anchor check when the anchor cannot be reached.
 
 from __future__ import annotations
 
+import argparse
 from contextlib import suppress
 import json
 import os
+import re
 import select
+import signal
+import socket
+import stat
 import subprocess
 import sys
 import time
 from threading import Lock
 from typing import Any, BinaryIO, Iterable
 import weakref
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (Ed25519PrivateKey,
+                                                              Ed25519PublicKey)
 
 from .audit import AuditAuthority, AuditEvent, AuditVerifier, rehydrate_event
 from .audit_chain import (AuditAnchor, AuditHead, AuditRecord, _bounded_chain, _count,
@@ -76,6 +97,17 @@ _REPLY_SECONDS = 30.0
 _HEAD_KEYS = frozenset({"count", "head_hash", "signature", "version"})
 _MAX_STATE_BYTES = 16 * 1024 * 1024
 _RECORD_KEYS = frozenset({"event", "index", "previous_hash", "record_hash"})
+
+# The served protocol wraps the child's messages; it does not change them.
+_REQUEST_KEYS = frozenset({"nonce", "request"})
+_REPLY_KEYS = frozenset({"nonce", "reply", "signature"})
+_NONCE_BYTES = 32
+_NONCE = re.compile(r"\A[0-9a-f]{64}\Z")
+# Domain separation: a reply signature cannot be replayed as any other
+# signature this project makes, and no other signature passes as a reply.
+_REPLY_LABEL = b"geniusnew/anchor-reply/ed25519/v1\n"
+_SOCKET_MODE = 0o660
+_BACKLOG = 8
 
 
 def _fail(message: str) -> None:
@@ -245,23 +277,208 @@ def _serve(requests: BinaryIO, replies: BinaryIO, state_path: str | None = None)
     replies.write(_frame(_committed(anchor.committed), _MAX_REPLY_BYTES))
     replies.flush()
     while (data := _read_frame(requests)) is not None:
-        before = anchor.committed
         try:
             message = _decode(data, "anchor request")
-            reply = _handle(message, anchor, verifier)
         except ContractError as refusal:
             reply = _refusal(refusal)
-        if state_path is not None and anchor.committed != before:
-            # Only a commit moves the anchor, so `message` is one with a head.
-            try:
-                _append(state_path, _head(message["head"]))
-            except OSError:
-                # Memory has moved and the file has not. Ending here leaves
-                # the file as the truth a restart resumes from.
+        else:
+            reply = _answer(message, anchor, verifier, state_path)
+            if reply is None:
                 return 2
         replies.write(_frame(reply, _MAX_REPLY_BYTES))
         replies.flush()
     return 0
+
+
+def _answer(message: dict[str, Any], anchor: AuditAnchor, verifier: AuditVerifier,
+            state_path: str | None) -> dict[str, Any] | None:
+    """One request answered, and written down first if it moved the anchor.
+
+    None means the head could not be written: memory has moved and the file
+    has not, and the caller must end rather than answer, so the file stays the
+    truth a restart resumes from.
+    """
+    before = anchor.committed
+    try:
+        reply = _handle(message, anchor, verifier)
+    except ContractError as refusal:
+        return _refusal(refusal)
+    if state_path is not None and anchor.committed != before:
+        # Only a commit moves the anchor, so `message` is one with a head.
+        try:
+            _append(state_path, _head(message["head"]))
+        except OSError:
+            return None
+    return reply
+
+
+# --- the served anchor -------------------------------------------------------
+
+def _reply_message(nonce: str, reply: dict[str, Any]) -> bytes:
+    return _REPLY_LABEL + canonical({"nonce": nonce, "reply": reply})
+
+
+def _nonce(value: Any) -> str:
+    if type(value) is not str or not _NONCE.match(value):
+        _fail("anchor nonce must be 32 bytes of lowercase hex")
+    return value
+
+
+def _serve_connection(requests: BinaryIO, replies: BinaryIO, anchor: AuditAnchor,
+                      verifier: AuditVerifier, key: Ed25519PrivateKey,
+                      state_path: str) -> int:
+    """Answer one client until it hangs up. 2 means a head could not be written."""
+    while (data := _read_frame(requests)) is not None:
+        try:
+            envelope = _decode(data, "anchor request")
+            if set(envelope) != _REQUEST_KEYS:
+                _fail("anchor request envelope is malformed")
+            nonce = _nonce(envelope["nonce"])
+            if not isinstance(envelope["request"], dict):
+                _fail("anchor request envelope is malformed")
+        except ContractError:
+            # Without a nonce there is nothing to bind a refusal to, and an
+            # unbound reply is worth less to the client than none at all.
+            return 0
+        reply = _answer(envelope["request"], anchor, verifier, state_path)
+        if reply is None:
+            return 2
+        signature = key.sign(_reply_message(nonce, reply)).hex()
+        replies.write(_frame({"nonce": nonce, "reply": reply, "signature": signature},
+                             _MAX_REPLY_BYTES))
+        replies.flush()
+    return 0
+
+
+def _absolute(path: Any, noun: str) -> str:
+    if isinstance(path, os.PathLike):
+        path = os.fspath(path)
+    if type(path) is not str or not os.path.isabs(path):
+        _fail(f"{noun} must be an absolute path")
+    return path
+
+
+def _reply_key(path: str) -> Ed25519PrivateKey:
+    """The anchor's identity across its own restarts: made once, owner-only.
+
+    A new key on every start would force the service to be reconfigured each
+    time, and a reconfiguration step is where an operator learns to accept
+    whatever key is presented.
+    """
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        fd = None
+    except OSError:
+        _fail("anchor key file cannot be created")
+    if fd is not None:
+        key = Ed25519PrivateKey.generate()
+        try:
+            _write_all(fd, key.private_bytes(serialization.Encoding.Raw,
+                                             serialization.PrivateFormat.Raw,
+                                             serialization.NoEncryption()))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        return key
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        _fail("anchor key file cannot be read")
+    try:
+        mode = os.fstat(fd).st_mode
+        data = os.read(fd, 33)
+    finally:
+        os.close(fd)
+    if not stat.S_ISREG(mode) or mode & 0o077:
+        _fail("anchor key file must be a regular file only its owner can read")
+    if len(data) != 32:
+        _fail("anchor key file must hold exactly 32 bytes")
+    return Ed25519PrivateKey.from_private_bytes(data)
+
+
+def _public_bytes(key: Ed25519PrivateKey) -> bytes:
+    return key.public_key().public_bytes(serialization.Encoding.Raw,
+                                         serialization.PublicFormat.Raw)
+
+
+def _listen(path: str) -> socket.socket:
+    if os.path.lexists(path):
+        # Taking a path over would let a stale or planted socket, or whatever
+        # else sits there, decide who answers as the anchor.
+        _fail("anchor socket path already exists")
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    # Set before bind, so the socket is never reachable wider than intended.
+    previous = os.umask(0o777 & ~_SOCKET_MODE)
+    try:
+        server.bind(path)
+    except OSError:
+        server.close()
+        _fail("anchor socket cannot be bound")
+    finally:
+        os.umask(previous)
+    server.listen(_BACKLOG)
+    return server
+
+
+class _Stopping:
+    """SIGTERM ends the anchor between connections, never inside one.
+
+    Ending inside one could interrupt the append of a head and leave a torn
+    line, which the next start refuses: safe, but an outage an ordinary stop
+    should not cause.
+    """
+
+    def __init__(self) -> None:
+        self.busy = False
+        self.requested = False
+
+    def __call__(self, signum: int, frame: Any) -> None:
+        if not self.busy:
+            raise SystemExit(0)
+        self.requested = True
+
+
+def _run_server(*, socket_path: str, state_path: str, key_path: str,
+                audit_public_key: str) -> int:
+    """Serve one anchor on a socket until stopped. Refuses before binding."""
+    socket_path = _absolute(socket_path, "socket path")
+    state_path = _absolute(state_path, "state path")
+    key = _reply_key(_absolute(key_path, "key path"))
+    verifier = _verifier_from({"kind": "init", "public_key": audit_public_key})
+    anchor = _load(state_path, verifier)
+    server = _listen(socket_path)
+    bound = os.stat(socket_path)
+    stopping = _Stopping()
+    signal.signal(signal.SIGTERM, stopping)
+    try:
+        while True:
+            connection, _ = server.accept()
+            stopping.busy = True
+            with connection:
+                # A client that stops mid-frame must not hold the anchor.
+                connection.settimeout(_REPLY_SECONDS)
+                reader = connection.makefile("rb")
+                writer = connection.makefile("wb")
+                try:
+                    code = _serve_connection(reader, writer, anchor, verifier, key,
+                                             state_path)
+                except OSError:
+                    code = 0
+                finally:
+                    for stream in (reader, writer):
+                        with suppress(OSError):
+                            stream.close()
+            stopping.busy = False
+            if code or stopping.requested:
+                return code
+    finally:
+        server.close()
+        # Only the socket this process bound: never a path someone replaced.
+        with suppress(OSError):
+            current = os.stat(socket_path)
+            if (current.st_dev, current.st_ino) == (bound.st_dev, bound.st_ino):
+                os.unlink(socket_path)
 
 
 # --- the writer's side -------------------------------------------------------
@@ -387,18 +604,7 @@ class AnchorProcess(AuditAnchor):
         the child checks with is the one it was started with, not one the
         writer hands over per call.
         """
-        if not isinstance(head, AuditHead):
-            _fail("head is invalid")
-        chain = _bounded_chain(records, _count(head.count, "head.count") + 1)
-        if not all(isinstance(record, AuditRecord) and isinstance(record.event, AuditEvent)
-                   for record in chain):
-            _fail("records must be AuditRecord values carrying an AuditEvent")
-        return self._exchange({
-            "head": {"count": head.count, "head_hash": head.head_hash,
-                     "signature": head.signature, "version": head.version},
-            "kind": "commit",
-            "records": [record.to_dict() for record in chain],
-        })
+        return self._exchange(_commit_request(head, records))
 
     def _exchange(self, message: dict[str, Any]) -> tuple[int, str]:
         frame = _frame(message, _MAX_REQUEST_BYTES)
@@ -419,6 +625,105 @@ class AnchorProcess(AuditAnchor):
         return _state(_decode(reply, "anchor reply"))
 
 
+def _commit_request(head: AuditHead, records: Iterable[AuditRecord]) -> dict[str, Any]:
+    """The commit as data, checked before anything leaves this process."""
+    if not isinstance(head, AuditHead):
+        _fail("head is invalid")
+    chain = _bounded_chain(records, _count(head.count, "head.count") + 1)
+    if not all(isinstance(record, AuditRecord) and isinstance(record.event, AuditEvent)
+               for record in chain):
+        _fail("records must be AuditRecord values carrying an AuditEvent")
+    return {
+        "head": {"count": head.count, "head_hash": head.head_hash,
+                 "signature": head.signature, "version": head.version},
+        "kind": "commit",
+        "records": [record.to_dict() for record in chain],
+    }
+
+
+class AnchorClient(AuditAnchor):
+    """The service's side of a served anchor: it asks, and believes only signed answers.
+
+    Like `AnchorProcess` it does not call the base constructor, so there is no
+    local state to fall back on. Each request opens its own connection, so an
+    anchor restarted between two requests is simply asked again — and must
+    answer with the same key, since the key is what the client trusts, not the
+    path.
+    """
+
+    def __init__(self, *, socket_path: str | os.PathLike[str],
+                 reply_public_key: bytes) -> None:
+        self._socket_path = _absolute(socket_path, "socket_path")
+        if type(reply_public_key) is not bytes or len(reply_public_key) != 32:
+            _fail("reply_public_key must be 32 bytes")
+        try:
+            self._reply_key = Ed25519PublicKey.from_public_bytes(reply_public_key)
+        except ValueError:
+            raise ContractError("reply_public_key is not an Ed25519 public key") from None
+        self._lock = Lock()
+
+    @property
+    def committed(self) -> tuple[int, str]:
+        return self._exchange({"kind": "committed"})
+
+    def commit(self, head: AuditHead, records: Iterable[AuditRecord], *,
+               authority: AuditAuthority | AuditVerifier) -> tuple[int, str]:
+        """As `AnchorProcess.commit`: the anchor checks with the key it was started with."""
+        return self._exchange(_commit_request(head, records))
+
+    def _exchange(self, request: dict[str, Any]) -> tuple[int, str]:
+        nonce = os.urandom(_NONCE_BYTES).hex()
+        frame = _frame({"nonce": nonce, "request": request}, _MAX_REQUEST_BYTES)
+        with self._lock:
+            try:
+                data = _ask(self._socket_path, frame)
+            except (_Unreachable, OSError):
+                data = None
+        if data is None:
+            _fail("anchor service is unreachable")
+        envelope = _decode(data, "anchor reply")
+        if set(envelope) != _REPLY_KEYS:
+            _fail("anchor reply envelope is malformed")
+        # Compared before the signature, so a correctly signed reply to some
+        # earlier request cannot stand in for this one.
+        if envelope["nonce"] != nonce:
+            _fail("anchor reply answers another request")
+        if not self._signed(nonce, envelope["reply"], envelope["signature"]):
+            _fail("anchor reply is not signed by the anchor")
+        return _state(envelope["reply"])
+
+    def _signed(self, nonce: str, reply: Any, signature: Any) -> bool:
+        if not isinstance(reply, dict) or type(signature) is not str:
+            return False
+        try:
+            self._reply_key.verify(bytes.fromhex(signature), _reply_message(nonce, reply))
+        except (ValueError, InvalidSignature):
+            return False
+        return True
+
+
+def _ask(path: str, frame: bytes) -> bytes:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(_REPLY_SECONDS)
+        connection.connect(path)
+        connection.sendall(frame)
+        size = int.from_bytes(_receive(connection, 4), "big")
+        if size > _MAX_REPLY_BYTES:
+            raise _Unreachable()
+        return _receive(connection, size)
+
+
+def _receive(connection: socket.socket, size: int) -> bytes:
+    chunks: list[bytes] = []
+    while size:
+        chunk = connection.recv(size)
+        if not chunk:
+            raise _Unreachable()
+        chunks.append(chunk)
+        size -= len(chunk)
+    return b"".join(chunks)
+
+
 def _send(process: subprocess.Popen[bytes], frame: bytes) -> bytes:
     _write_all(process.stdin.fileno(), frame)
     deadline = time.monotonic() + _REPLY_SECONDS
@@ -428,6 +733,29 @@ def _send(process: subprocess.Popen[bytes], frame: bytes) -> bytes:
     return _read_exact(process.stdout, size, deadline)
 
 
+def _main(argv: list[str]) -> int:
+    """Child mode by default; `serve` and `public-key` for an operator."""
+    if not argv or argv[0] not in ("serve", "public-key"):
+        return _serve(sys.stdin.buffer, sys.stdout.buffer, argv[0] if argv else None)
+    parser = argparse.ArgumentParser(prog="python -m geniusnew.anchor_process")
+    commands = parser.add_subparsers(dest="command", required=True)
+    serve = commands.add_parser("serve", help="serve the anchor on a Unix socket")
+    for option in ("--socket", "--state", "--key", "--audit-public-key"):
+        serve.add_argument(option, required=True)
+    public = commands.add_parser("public-key", help="print the anchor's reply key")
+    public.add_argument("--key", required=True)
+    arguments = parser.parse_args(argv)
+    try:
+        if arguments.command == "public-key":
+            print(_public_bytes(_reply_key(_absolute(arguments.key, "key path"))).hex())
+            return 0
+        return _run_server(socket_path=arguments.socket, state_path=arguments.state,
+                           key_path=arguments.key,
+                           audit_public_key=arguments.audit_public_key)
+    except ContractError as refusal:
+        print(f"anchor refused to start: {refusal}", file=sys.stderr)
+        return 1
+
+
 if __name__ == "__main__":
-    raise SystemExit(_serve(sys.stdin.buffer, sys.stdout.buffer,
-                            sys.argv[1] if len(sys.argv) > 1 else None))
+    raise SystemExit(_main(sys.argv[1:]))

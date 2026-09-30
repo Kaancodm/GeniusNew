@@ -21,7 +21,7 @@ import urllib.request
 
 from geniusnew import wiring
 
-from geniusnew.anchor_process import AnchorProcess
+from geniusnew.anchor_process import AnchorClient, AnchorProcess
 from geniusnew.approvals import ApprovalStore
 from geniusnew.audit_chain import AuditAnchor, sign_head, verify
 from geniusnew.contracts import ContractError, Grant, Policy
@@ -464,6 +464,54 @@ class EndToEndTest(Fixture, unittest.TestCase):
         with self.assertRaisesRegex(ContractError, 'did not wire'):
             record(foreign)
         self.assertEqual(self.service.chain.records, ())
+
+    def served_anchor(self):
+        """The operator's anchor, started apart from any service. Returns a client factory."""
+        import subprocess
+        import sys
+        import tempfile
+        import time
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = {name: os.path.join(directory.name, f'anchor.{name}')
+                for name in ('sock', 'state', 'key')}
+        command = [sys.executable, '-m', 'geniusnew.anchor_process']
+        public = subprocess.run([*command, 'public-key', '--key', path['key']],
+                                capture_output=True, text=True, timeout=30, check=True)
+        audit_public = self.service.audit.verifier().public_key.hex()
+        process = subprocess.Popen(
+            [*command, 'serve', '--socket', path['sock'], '--state', path['state'],
+             '--key', path['key'], '--audit-public-key', audit_public],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(process.wait, 10)
+        self.addCleanup(process.terminate)
+        deadline = time.monotonic() + 10
+        while not os.path.exists(path['sock']):
+            self.assertIsNone(process.poll(), 'the anchor did not start')
+            self.assertLess(time.monotonic(), deadline, 'the anchor did not start')
+            time.sleep(0.02)
+        key = bytes.fromhex(public.stdout.strip())
+        return lambda: AnchorClient(socket_path=path['sock'], reply_public_key=key)
+
+    def test_a_served_anchor_outlives_the_service_and_stops_a_silent_new_history(self):
+        """Restarting the service no longer restarts the anchor.
+
+        Until the chain itself is persisted, a restarted service has no
+        history to continue, and the anchor refuses the new one it would start.
+        Refusing every job is the fail-closed answer; resetting would be the
+        silent one this exists to prevent.
+        """
+        client = self.served_anchor()
+        options = dict(root_secret=ROOT_SECRET, policy=self.policy_for(),
+                       api_keys={API_KEY: 'subject-demo'},
+                       workers=(DeterministicSummarizer(),), clock=lambda: self.clock[0])
+        first = build(**options, anchor=client())
+        self.assertEqual(self.post(url=self.url_for(first))[1]['status'], 'SUCCEEDED')
+        anchored = client().committed
+        self.assertEqual(anchored, (4, first.chain.records[-1].record_hash))
+        restarted = build(**options, anchor=client())
+        self.assertEqual(self.post(url=self.url_for(restarted)), (409, {'error': 'REJECTED'}))
+        self.assertEqual(client().committed, anchored)
 
     def url_for(self, service):
         server = serve(service.entry)

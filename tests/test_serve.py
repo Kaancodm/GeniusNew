@@ -232,6 +232,80 @@ class ServeTest(unittest.TestCase):
         self.assertIn(b"not persisted yet (gate B5)", result.stderr)
         self.assertNotIn(b"listening on", result.stderr)
 
+    def use_served_anchor(self, *, reply_key=None, run=True):
+        """Point the configuration at an anchor the test runs as its own process (gate C2)."""
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        socket_path = os.path.join(directory.name, "anchor.sock")
+        key_path = os.path.join(directory.name, "anchor.key")
+        anchor = [sys.executable, "-m", "geniusnew.anchor_process"]
+        public = subprocess.run([*anchor, "public-key", "--key", key_path], cwd=ROOT,
+                                capture_output=True, text=True, timeout=30).stdout.strip()
+        # The audit public key is derived from the same root secret the service uses.
+        probe = build(root_secret=ROOT_SECRET, policy=Policy(
+            version="p", orchestrator_id="orchestrator-1", handoff_ttl_seconds=60,
+            allowed_tools=("summarize",), allowed_sandbox_profiles=("isolated",),
+            grants=(Grant(subject="s", user_id="u", worker_agent_id="w", tier="basic",
+                          tools=("summarize",), sandbox_profile="isolated",
+                          requires_approval=False),)),
+            principals={hashlib.sha256(b"x").hexdigest(): "s"},
+            workers=(DeterministicSummarizer(),))
+        audit_public = probe.audit.verifier().public_key.hex()
+        probe.close()
+        if run:
+            self.anchor_process = subprocess.Popen(
+                [*anchor, "serve", "--socket", socket_path,
+                 "--state", os.path.join(directory.name, "anchor.state"),
+                 "--key", key_path, "--audit-public-key", audit_public],
+                cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            self.addCleanup(self.stop_anchor)
+            deadline = time.monotonic() + 10
+            while not os.path.exists(socket_path):
+                self.assertIsNone(self.anchor_process.poll(), "the anchor did not start")
+                self.assertLess(time.monotonic(), deadline, "the anchor did not start")
+                time.sleep(0.02)
+        text = self.config.read_text().replace(
+            f'anchor_state = "{self.root / "anchor.state"}"',
+            f'anchor_socket = "{socket_path}"\n'
+            f'anchor_reply_public_key = "{reply_key or public}"')
+        self.assertIn("anchor_socket", text)
+        self.config.write_text(text)
+
+    def stop_anchor(self):
+        if self.anchor_process.poll() is None:
+            self.anchor_process.terminate()
+            self.anchor_process.wait(timeout=10)
+        self.anchor_process.stderr.close()
+
+    def test_a_job_runs_behind_a_served_anchor_that_outlives_the_service(self):
+        self.use_served_anchor()
+        self.start()
+        self.assertEqual(self.post(API_KEY, {"text": "first"})[0], 202)
+        self.stop()
+        # Stopping the service does not stop an anchor it did not start.
+        self.assertIsNone(self.anchor_process.poll())
+        result = run_module("serve", "--config", str(self.config))
+        # The chain is not persisted yet (gate B5): a new history behind the
+        # surviving anchor is refused instead of begun silently.
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"refused: the anchor has committed", result.stderr)
+        self.assertNotIn(b"listening on", result.stderr)
+
+    def test_a_served_anchor_that_is_not_running_refuses_the_start(self):
+        self.use_served_anchor(run=False)
+        result = run_module("serve", "--config", str(self.config))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"refused: anchor service is unreachable", result.stderr)
+        self.assertNotIn(b"listening on", result.stderr)
+
+    def test_an_anchor_that_answers_with_another_key_refuses_the_start(self):
+        self.use_served_anchor(reply_key="cd" * 32)
+        result = run_module("serve", "--config", str(self.config))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"refused:", result.stderr)
+        self.assertNotIn(b"listening on", result.stderr)
+        self.assertNotIn(b"Traceback", result.stderr)
+
     def test_a_refused_configuration_exits_non_zero_without_a_traceback(self):
         self.config.write_text(self.config.read_text().replace(
             'listen_host = "127.0.0.1"', 'listen_host = "0.0.0.0"'))
