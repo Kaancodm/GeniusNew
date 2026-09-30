@@ -502,6 +502,14 @@ def _check_approvals(connection):
         "SELECT token_digest, current_record_hash FROM public.approval_tokens").fetchall())
     if set(records) != set(pointers):
         _fail("approval records and pointers do not match")
+    jobs = {
+        job_id: (digest, state, reserved_at, expires_at, pending_id)
+        for job_id, digest, state, reserved_at, expires_at, pending_id in connection.execute(
+            "SELECT j.job_id,j.handoff_sha256,j.state,j.reserved_at,j.expires_at,p.job_id "
+            "FROM public.job_ledger j LEFT JOIN public.pending_jobs p ON p.job_id=j.job_id"
+        ).fetchall()
+    }
+    consumed_jobs = set()
     for digest, history in records.items():
         roots = [record for record in history if record.previous_hash is None]
         if len(roots) != 1 or roots[0].state != "GRANTED" or roots[0].changed_at != roots[0].issued_at:
@@ -519,6 +527,19 @@ def _check_approvals(connection):
         tip = successors[0] if successors else root
         if pointers[digest] != tip.record_hash:
             _fail("approval pointer must name the only history tip")
+        if tip.state == "CONSUMED":
+            scope = tip.scope
+            job = jobs.get(scope.job_id)
+            if scope.job_id in consumed_jobs or job is None:
+                _fail("consumed approval does not match its reserved job")
+            handoff_sha256, state, reserved_at, expires_at, pending_id = job
+            if (handoff_sha256 != scope.handoff_sha256
+                    or state not in ("RESERVED", "EXECUTION_COMMITTED", "COMPLETED")
+                    or reserved_at != tip.changed_at
+                    or expires_at != scope.handoff_expires_at
+                    or pending_id is not None):
+                _fail("consumed approval does not match its reserved job")
+            consumed_jobs.add(scope.job_id)
 
 
 class PostgresPendingJobs(PendingJobs):
@@ -660,6 +681,16 @@ class PostgresApprovalStore(ApprovalStore):
         _approval_record((record.token_digest.hex(), canonical(scope.to_dict()), record.issued_at,
                           record.expires_at, record.state, record.changed_at, None, record.record_hash))
         with _store_transaction(self._connection, self._lock) as connection:
+            job = connection.execute(
+                "SELECT j.state,j.subject,j.handoff_sha256,j.expires_at,"
+                "p.subject,p.wire,p.expires_at "
+                "FROM public.job_ledger j LEFT JOIN public.pending_jobs p ON p.job_id=j.job_id "
+                "WHERE j.job_id=%s FOR UPDATE OF j", (scope.job_id,)).fetchone()
+            if (job is None or job[0] != "PENDING_APPROVAL"
+                    or job[1] != job[4] or job[2] != scope.handoff_sha256
+                    or job[3] != scope.handoff_expires_at or job[6] != job[3]
+                    or job[5] is None or sha256(job[5]).hexdigest() != job[2]):
+                _fail("approval grant needs its exact pending job")
             if connection.execute("SELECT 1 FROM public.approval_tokens WHERE token_digest=%s",
                                   (record.token_digest.hex(),)).fetchone():
                 _fail("approval token collision")
