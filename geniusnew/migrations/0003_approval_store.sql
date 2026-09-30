@@ -47,6 +47,9 @@ begin
             raise exception 'approval scope and lifetime are immutable' using errcode = '23514';
         end if;
     end if;
+    if new.state = 'CONSUMED' and new.changed_at >= new.expires_at then
+        raise exception 'expired approval cannot be consumed' using errcode = '23514';
+    end if;
     return new;
 end;
 $$;
