@@ -21,6 +21,7 @@ import sys
 import threading
 from typing import Sequence
 
+from .anchor_process import AnchorClient
 from .config import ServiceConfig, load_config, read_database_dsn
 from .contracts import ContractError
 from .http_entry import PrincipalRegistry, serve
@@ -58,9 +59,17 @@ def _serve(config_path: str) -> int:
 
 
 def _run_service(config: ServiceConfig) -> int:
-    service = build(root_secret=config.root_secret, policy=config.policy,
-                    principals=config.principals, workers=config.workers,
-                    anchor_state=config.anchor_state)
+    if config.anchor_socket is not None:
+        # Served anchor (gate C2): its lifecycle is not ours, so `service.close`
+        # leaves it running and `_refuse_discontinuous_start` asks it.
+        anchor = AnchorClient(socket_path=config.anchor_socket,
+                              reply_public_key=config.anchor_reply_public_key)
+        service = build(root_secret=config.root_secret, policy=config.policy,
+                        principals=config.principals, workers=config.workers, anchor=anchor)
+    else:
+        service = build(root_secret=config.root_secret, policy=config.policy,
+                        principals=config.principals, workers=config.workers,
+                        anchor_state=config.anchor_state)
     try:
         _refuse_discontinuous_start(service)
         server = serve(service.entry, host=config.listen_host, port=config.listen_port)

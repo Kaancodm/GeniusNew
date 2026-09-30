@@ -72,16 +72,24 @@ PrivateTmp=yes
 WantedBy=multi-user.target
 ```
 
-Im Dienst:
+Im Dienst (`python -m geniusnew serve`) stehen statt `anchor_state` zwei Zeilen in
+`[service]` der TOML-Datei (`docs/examples/geniusnew.toml`):
+
+```toml
+anchor_socket = "/run/geniusnew-anchor/anchor.sock"
+anchor_reply_public_key = "<Ausgabe von public-key, 64 Hex-Zeichen>"
+```
+
+Genau ein Modus ist erlaubt: `anchor_state` (Kind-Prozess) **oder** beide Zeilen oben.
+Beides, nur eine der beiden Zeilen oder keines verweigert den Start. Läuft der Anker
+nicht oder antwortet er mit einem anderen Schlüssel, verweigert der Start ebenfalls.
+Wer den Dienst selbst zusammenbaut, übergibt einen `AnchorClient`:
 
 ```python
 anchor = AnchorClient(socket_path="/run/geniusnew-anchor/anchor.sock",
                       reply_public_key=bytes.fromhex("<Ausgabe von public-key>"))
 service = build(..., anchor=anchor)
 ```
-
-Einen produktiven Startpunkt, der diese Werte aus einer Konfiguration liest, gibt es
-noch nicht (`docs/BETA-READINESS.md`, B6).
 
 ## Neustart des Dienstes
 

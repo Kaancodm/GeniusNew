@@ -316,6 +316,70 @@ class AnchorStateTest(Files, unittest.TestCase):
             parse_config(data)
 
 
+class AnchorModeTest(Files, unittest.TestCase):
+    """Gate C2: the anchor as a child, or as its own service, and never both or neither."""
+
+    KEY = "ab" * 32
+
+    def served(self, **changes):
+        data = self.data()
+        del data["service"]["anchor_state"]
+        data["service"].update({"anchor_socket": str(self.root / "anchor.sock"),
+                                "anchor_reply_public_key": self.KEY})
+        data["service"].update(changes)
+        return data
+
+    def test_a_served_anchor_is_accepted_and_the_child_is_not_configured(self):
+        config = parse_config(self.served())
+        self.assertEqual(config.anchor_socket, str(self.root / "anchor.sock"))
+        self.assertEqual(config.anchor_reply_public_key, bytes.fromhex(self.KEY))
+        self.assertIsNone(config.anchor_state)
+
+    def test_a_child_anchor_configures_no_socket(self):
+        config = parse_config(self.data())
+        self.assertIsNone(config.anchor_socket)
+        self.assertIsNone(config.anchor_reply_public_key)
+
+    def test_no_anchor_is_refused(self):
+        data = self.data()
+        del data["service"]["anchor_state"]
+        with self.assertRaisesRegex(ContractError, "needs anchor_state, or anchor_socket"):
+            parse_config(data)
+
+    def test_both_modes_are_refused(self):
+        data = self.served()
+        data["service"]["anchor_state"] = self.anchor_path
+        with self.assertRaisesRegex(ContractError, "mutually exclusive"):
+            parse_config(data)
+
+    def test_a_socket_without_its_reply_key_is_refused(self):
+        data = self.served()
+        del data["service"]["anchor_reply_public_key"]
+        with self.assertRaisesRegex(ContractError, "needs anchor_state, or anchor_socket"):
+            parse_config(data)
+
+    def test_a_reply_key_without_its_socket_is_refused(self):
+        data = self.served()
+        del data["service"]["anchor_socket"]
+        with self.assertRaisesRegex(ContractError, "needs anchor_state, or anchor_socket"):
+            parse_config(data)
+
+    def test_a_relative_socket_is_refused(self):
+        with self.assertRaisesRegex(ContractError, "absolute path"):
+            parse_config(self.served(anchor_socket="anchor.sock"))
+
+    def test_a_reply_key_that_is_not_lowercase_hex_of_32_bytes_is_refused(self):
+        for key in ("", "ab" * 31, "ab" * 33, "AB" * 32, "zz" * 32, b"ab" * 32, 7):
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(ContractError, "64 lowercase hex"):
+                    parse_config(self.served(anchor_reply_public_key=key))
+
+    def test_the_example_documents_the_served_mode(self):
+        text = EXAMPLE.read_text()
+        self.assertIn("anchor_socket", text)
+        self.assertIn("anchor_reply_public_key", text)
+
+
 class PrincipalsAndWorkersTest(Files, unittest.TestCase):
 
     def test_no_principals_are_refused(self):
