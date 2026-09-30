@@ -507,13 +507,6 @@ def _check_approvals(connection):
         "SELECT token_digest, current_record_hash FROM public.approval_tokens").fetchall())
     if set(records) != set(pointers):
         _fail("approval records and pointers do not match")
-    jobs = {
-        job_id: (digest, state, reserved_at, expires_at, pending_id)
-        for job_id, digest, state, reserved_at, expires_at, pending_id in connection.execute(
-            "SELECT j.job_id,j.handoff_sha256,j.state,j.reserved_at,j.expires_at,p.job_id "
-            "FROM public.job_ledger j LEFT JOIN public.pending_jobs p ON p.job_id=j.job_id"
-        ).fetchall()
-    }
     consumed_jobs = set()
     for digest, history in records.items():
         roots = [record for record in history if record.previous_hash is None]
@@ -534,8 +527,13 @@ def _check_approvals(connection):
             _fail("approval pointer must name the only history tip")
         if tip.state == "CONSUMED":
             scope = tip.scope
-            job = jobs.get(scope.job_id)
-            if scope.job_id in consumed_jobs or job is None:
+            if scope.job_id in consumed_jobs:
+                _fail("consumed approval does not match its reserved job")
+            job = connection.execute(
+                "SELECT j.handoff_sha256,j.state,j.reserved_at,j.expires_at,p.job_id "
+                "FROM public.job_ledger j LEFT JOIN public.pending_jobs p ON p.job_id=j.job_id "
+                "WHERE j.job_id=%s", (scope.job_id,)).fetchone()
+            if job is None:
                 _fail("consumed approval does not match its reserved job")
             handoff_sha256, state, reserved_at, expires_at, pending_id = job
             if (handoff_sha256 != scope.handoff_sha256

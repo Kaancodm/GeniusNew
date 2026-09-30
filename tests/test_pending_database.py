@@ -158,6 +158,18 @@ class DurablePendingTest(ApprovalFixture, unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "consumed approval.*reserved job"):
             database.PostgresApprovalStore(self.connection)
 
+    def test_consumed_receipt_without_its_job_refuses_recovery(self):
+        pending, approvals = self.stores()
+        self.add(pending)
+        scope = self.scope()
+        grant = approvals.grant(scope, now=101, ttl_seconds=60)
+        approvals.consume(grant.token, scope, now=102, subject="subject-demo")
+        with self.db.connect() as owner, owner.transaction():
+            owner.execute("SET LOCAL session_replication_role = replica")
+            owner.execute("DELETE FROM public.job_ledger WHERE job_id='job-demo'")
+        with self.assertRaisesRegex(ContractError, "consumed approval.*reserved job"):
+            database.PostgresApprovalStore(self.connection)
+
     def test_grant_rechecks_that_its_job_is_still_pending(self):
         pending, approvals = self.stores()
         self.add(pending)
