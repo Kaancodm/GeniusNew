@@ -201,7 +201,7 @@ class PostgresJobLedger(JobLedger):
             "INSERT INTO public.job_ledger (job_id, subject, handoff_sha256, state, "
             "created_at, reserved_at, updated_at, expires_at) "
             "VALUES (%s, %s, %s, 'RESERVED', %s, %s, %s, %s) "
-            "ON CONFLICT (job_id) DO NOTHING",
+            "ON CONFLICT DO NOTHING",
             (reservation.job_id, reservation.subject, reservation.handoff_sha256,
              reservation.reserved_at, reservation.reserved_at, reservation.reserved_at,
              reservation.expires_at))
