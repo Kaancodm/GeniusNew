@@ -4,6 +4,7 @@ import hashlib
 import unittest
 from dataclasses import replace
 from threading import Barrier, Thread
+from unittest.mock import patch
 
 import psycopg
 
@@ -75,6 +76,51 @@ class DurablePendingTest(ApprovalFixture, unittest.TestCase):
             self.assertEqual(self.rows(), [("PENDING_APPROVAL", None)])
         self.assertEqual(self.connection.execute(
             "SELECT count(*) FROM approval_records").fetchone(), (1,))
+
+    def test_changed_scope_field_cannot_consume_the_bound_pending_job(self):
+        pending, approvals = self.stores()
+        self.add(pending)
+        grant = approvals.grant(self.scope(), now=101, ttl_seconds=60)
+        altered = replace(self.scope(), risk_tier="other")
+        with self.assertRaisesRegex(ContractError, "approval scope does not match"):
+            approvals.consume(grant.token, altered, now=102, subject="subject-demo")
+        self.assertEqual(self.rows(), [("PENDING_APPROVAL", None)])
+
+    def test_approval_transition_rejects_a_boolean_time_before_sql(self):
+        _, approvals = self.stores()
+        grant = approvals.grant(self.scope(), now=101, ttl_seconds=60)
+        with self.assertRaisesRegex(ContractError, "approval time is invalid"):
+            approvals.revoke(grant.token, self.scope(), now=True)
+        self.assertEqual(self.connection.execute(
+            "SELECT count(*) FROM approval_records").fetchone(), (1,))
+
+    def test_a_duplicate_generated_token_is_a_collision(self):
+        approvals = database.PostgresApprovalStore(
+            self.connection, token_source=lambda: b"approval-collision-test-token-00")
+        approvals.grant(self.scope(), now=101, ttl_seconds=60)
+        with self.assertRaisesRegex(ContractError, "approval token collision"):
+            approvals.grant(self.scope(), now=101, ttl_seconds=60)
+        self.assertEqual(self.connection.execute(
+            "SELECT count(*) FROM approval_records").fetchone(), (1,))
+
+    def test_pending_queue_bound_is_checked_before_insert(self):
+        pending, _ = self.stores()
+        with patch("geniusnew.database._MAX_PENDING", 0):
+            with self.assertRaisesRegex(ContractError, "too many jobs"):
+                self.add(pending)
+        self.assertEqual(self.rows(), [])
+
+    def test_pending_wire_must_bind_the_original_issuance_time(self):
+        pending, _ = self.stores()
+        self.add(pending)
+        row = self.connection.execute(
+            "SELECT p.job_id,p.subject,p.wire,p.trace_id,p.expires_at,j.state,j.subject,"
+            "j.handoff_sha256,j.created_at,j.expires_at FROM public.pending_jobs p "
+            "JOIN public.job_ledger j ON j.job_id=p.job_id").fetchone()
+        changed = list(row)
+        changed[8] += 1
+        with self.assertRaisesRegex(ContractError, "pending wire does not bind its issuance"):
+            pending._waiting(tuple(changed))
 
     def assert_refused(self, now):
         pending, _ = self.stores()
