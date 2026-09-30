@@ -40,6 +40,11 @@ class ApprovalRecoveryValidationTest(ApprovalFixture, unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "approval record is invalid"):
             _approval_record(self.row(expires=101))
 
+    def test_recomputed_hash_cannot_consume_at_token_expiry(self):
+        with self.assertRaisesRegex(ContractError, "approval record is invalid"):
+            _approval_record(self.row(state="CONSUMED", previous="f" * 64,
+                                      changed=160, expires=160))
+
     def test_a_terminal_state_cannot_be_the_history_root(self):
         terminal = self.row(state="CONSUMED")
         with self.assertRaisesRegex(ContractError, "one granted root"):
