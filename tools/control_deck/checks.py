@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import time
@@ -303,3 +304,58 @@ def snapshot(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
         "gates": gates,
         "commands": COMMANDS,
     }
+
+def agent_socket() -> str:
+    return f"/run/user/{os.getuid()}/genius-deck-agents.sock"
+
+
+def agent_session(name: str) -> dict[str, str]:
+    if name not in {"grok-build", "hermes"}:
+        return _simple("yellow", "Kein Server-Adapter")
+    code, out = _run(
+        ["tmux", "-S", agent_socket(), "list-panes", "-t", name,
+         "-F", "#{pane_dead}:#{pane_current_command}"],
+        cwd=Path.home(),
+    )
+    active = code == 0 and any(line.startswith("0:") for line in out.splitlines())
+    return _simple("green" if active else "yellow",
+                   "Terminal geöffnet · Eingabe/Anmeldung in TERM" if active else "Sitzung nicht gestartet")
+
+
+def agent_hub() -> dict[str, Any]:
+    """Inspect installed clients without model calls or credential reads."""
+    launch = Path(__file__).resolve().parents[2]
+    cards = [
+        {"id": "grok", "name": "Grok", "status": "yellow",
+         "detail": "Web-App · Anmeldung wird im Browser geprüft",
+         "url": "https://grok.com/", "url_label": "Grok öffnen"},
+        {"id": "grok_bot", "name": "Grok Bot", "status": "yellow",
+         "detail": "Externer Bot · hier kein unterstützter Steuerungsadapter",
+         "note": "Vorhandenen Bot auf deinem Gerät öffnen. SSH-Einrichtung allein ist kein Live-Nachweis.",
+         "disabled_label": "Direktstart nicht verfügbar"},
+    ]
+    for key, label, binary, session in (
+        ("grok_build", "Grok Build", "grok", "grok-build"),
+        ("hermes", "Hermes", "hermes", "hermes"),
+    ):
+        installed = tool_status(binary)
+        running = agent_session(session)
+        available = installed["status"] == "green"
+        sandbox = bool(_which("bwrap"))
+        status = running["status"] if available else "red"
+        detail = installed["detail"] + " · " + running["detail"]
+        if key == "grok_build" and not sandbox:
+            status, detail = "red", "bubblewrap fehlt · Start gesperrt"
+        command = (
+            f"cd {shlex.quote(str(launch))} && python3 -m tools.control_deck.actions "
+            f"--start-agent {key}"
+        )
+        cards.append({
+            "id": key, "name": label, "status": status, "detail": detail,
+            "command": command if available and (key != "grok_build" or sandbox) else None,
+            "action": key + "_status",
+            "note": ("Begrenzte Sandbox · Projektdateien nur lesen · keine automatische Aufgabe"
+                     if key == "grok_build" else
+                     "Nutzt den in Hermes konfigurierten Modellanbieter; kein eigenes Modellkontingent. Keine automatische Aufgabe."),
+        })
+    return {"generated_at": int(time.time()), "agents": cards}

@@ -22,10 +22,23 @@ button:active{transform:translateY(1px)}.wide{grid-column:1/-1}.clickable{cursor
 .sheet pre{white-space:pre-wrap;word-break:break-word;background:#080c11;padding:12px;border-radius:10px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
 .projectfocus{font-size:1.05rem;font-weight:800;margin-bottom:6px}.projectmeta{display:flex;gap:10px;flex-wrap:wrap;margin:8px 0 14px}.pill{border:1px solid #334253;border-radius:999px;padding:5px 9px;font-size:.78rem;color:#c7d2dd}.resume{display:grid;gap:8px}.resumeitem{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;background:#0c1219;border:1px solid #1e2a36;border-radius:10px;padding:10px}.resumeitem a{color:#dce8f5;text-decoration:none}
 .headeractions{display:flex;gap:8px;align-items:center}.mailbtn{font-weight:800;min-width:52px}.mailbtn[data-attention="important"]{border-color:#f4d47c}.mailbtn[data-attention="critical"]{border-color:#ff9a9a}.mailcount{margin-left:4px}.sheet #pbody{white-space:pre-wrap;line-height:1.5}
+
+.agentgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:12px}
+.agentcard{background:#0b121b;border:1px solid #293949;border-radius:12px;padding:14px;min-width:0}
+.agentcard h3{margin:0 0 8px}.agentcard p{font-size:.85rem;line-height:1.5;overflow-wrap:anywhere}
+.agentcard .actions{display:flex;gap:8px;flex-wrap:wrap}.agentcard a{color:#dce8f5;text-decoration:none;border:1px solid #334253;border-radius:8px;padding:8px 12px;font-size:.82rem}
+.agentcard button:disabled{opacity:.55}.agentnote{font-size:.8rem;color:#adb9c7}
+@media(max-width:520px){.agentgrid{grid-template-columns:1fr}.resumeitem{grid-template-columns:1fr}.row{flex-wrap:wrap}body{padding:12px}}
 </style>
 </head>
 <body>
 <header><div><h1>Genius Control Deck</h1><div class="muted">Server-first · Beta-Arbeitszentrale</div></div><div class="headeractions"><button id="mailButton" class="mailbtn" data-attention="none" aria-label="Mail Center">✉<span id="mailBadge" class="mailcount">…</span></button><div id="stamp" class="muted">lädt…</div></div></header>
+<section class="card wide" id="agentHub">
+<h2>Grok &amp; Hermes</h2>
+<p class="muted">Deine Zugänge an einem Ort. Laufende Terminals warten auf deinen Auftrag.</p>
+<div id="agentCards" class="agentgrid" aria-live="polite">Serverstatus wird geprüft…</div>
+<p class="agentnote">TERM: Befehl kopieren und in Termius auf dem Server einfügen. Statusabfragen starten keine Modellaufträge.</p>
+</section>
 <section class="card wide" id="projectCard">
  <h2>Projektstand / Weiterarbeiten</h2>
  <div id="projectSummary"></div>
@@ -74,10 +87,38 @@ async function load(){
  document.querySelectorAll('[data-kind="item"]').forEach(b=>b.onclick=()=>openPanel(b.dataset.name,'Statusdetails und sichere Aktion für '+b.dataset.name,actionFor[b.dataset.name]));
  document.querySelectorAll('[data-kind="gate"]').forEach(b=>b.onclick=()=>openPanel(b.dataset.id+' '+b.dataset.name,nextFor[b.dataset.id]||'Gate ist noch offen. Abhängigkeiten zuerst abschließen.',null));
  document.querySelectorAll('[data-research]').forEach(b=>b.onclick=()=>openPanel(b.dataset.research,b.dataset.reason,null));
- document.querySelectorAll('button[data-cmd]').forEach(b=>b.onclick=()=>navigator.clipboard.writeText(b.dataset.cmd));
- document.querySelectorAll('[data-resume-cmd]').forEach(b=>b.onclick=async()=>{await navigator.clipboard.writeText(b.dataset.resumeCmd);const old=b.textContent;b.textContent='✓ Kopiert';setTimeout(()=>b.textContent=old,1200)});
+ document.querySelectorAll('button[data-cmd]').forEach(b=>b.onclick=()=>copyCommand(b.dataset.cmd));
+ document.querySelectorAll('[data-resume-cmd]').forEach(b=>b.onclick=async()=>{await copyCommand(b.dataset.resumeCmd);const old=b.textContent;b.textContent='✓ Kopiert';setTimeout(()=>b.textContent=old,1200)});
  document.querySelectorAll('[data-resume-action]').forEach(b=>b.onclick=()=>{openPanel('Wiedereinstieg','Sichere Prüfung wird gestartet.',b.dataset.resumeAction)});
 }
+
+let agentsLoading=false;
+async function copyCommand(value){
+ try{
+  if(navigator.clipboard && window.isSecureContext){await navigator.clipboard.writeText(value);return true}
+  const box=document.createElement('textarea');box.value=value;box.style.position='fixed';box.style.opacity='0';document.body.appendChild(box);box.select();box.setSelectionRange(0,value.length);const ok=document.execCommand('copy');box.remove();if(ok)return true;
+ }catch(e){}
+ openPanel('TERM-Befehl',value,null);return false;
+}
+async function loadAgents(){
+ if(agentsLoading)return;agentsLoading=true;
+ try{
+  const r=await fetch('/api/agents',{cache:'no-store'});if(!r.ok)throw new Error('Serverstatus nicht verfügbar');
+  const d=await r.json();
+  agentCards.innerHTML=d.agents.map(a=>{
+   const state=a.status==='green'?'TERMINAL OFFEN':a.status==='red'?'BLOCKIERT':'OFFEN';
+   const link=a.url?'<a href="'+esc(a.url)+'" target="_blank" rel="noopener noreferrer">'+esc(a.url_label)+'</a>':'';
+   const cmd=a.command?'<button data-agent-cmd="'+esc(a.command)+'">Start / Öffnen · TERM</button>':'';
+   const action=a.action?'<button data-agent-check="'+esc(a.action)+'">Installation prüfen</button>':'';
+   const disabled=a.disabled_label?'<button disabled>'+esc(a.disabled_label)+'</button>':'';
+   return '<article class="agentcard"><h3>'+esc(a.name)+'</h3><span class="badge '+esc(a.status)+'">'+state+'</span><p>'+esc(a.detail)+'</p><p class="muted">'+esc(a.note||'')+'</p><div class="actions">'+link+cmd+action+disabled+'</div></article>';
+  }).join('');
+  document.querySelectorAll('[data-agent-cmd]').forEach(b=>b.onclick=async()=>{if(await copyCommand(b.dataset.agentCmd)){b.textContent='✓ Kopiert · in Termius einfügen'}});
+  document.querySelectorAll('[data-agent-check]').forEach(b=>b.onclick=()=>{openPanel('Installation prüfen','Lokale Versionsprüfung · kein Modellaufruf',b.dataset.agentCheck);runAction(b.dataset.agentCheck)});
+ }catch(e){agentCards.textContent='Agentenstatus derzeit nicht erreichbar. Erneuter Versuch folgt.'}
+ finally{agentsLoading=false}
+}
+loadAgents();setInterval(loadAgents,15000);
 mailButton.onclick=()=>openPanel('Mail Center',mailSummary(mailState),null);
 pclose.onclick=()=>panel.classList.remove('open');panel.onclick=e=>{if(e.target===panel)panel.classList.remove('open')};prun.onclick=()=>runAction(prun.dataset.action);
 runAll.onclick=async()=>{const acts=JSON.parse(runAll.dataset.actions||'[]');if(!acts.length){openPanel('Nächste Schritte','Die aktuellen Top-3 benötigen eine Anmeldung oder menschliche Freigabe; nichts darf automatisch ausgeführt werden.',null);return}openPanel('Schritte ausführen','Allowlist-Aktionen werden nacheinander ausgeführt.',null);poutput.hidden=false;poutput.textContent='';runAll.disabled=true;for(const a of acts){const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a})});const d=await r.json();poutput.textContent+=a+': '+(d.ok?'✓ PASS':'× FAIL')+'\n'+(d.output||'')+'\n\n';if(!d.ok)break}runAll.disabled=false;load()};
