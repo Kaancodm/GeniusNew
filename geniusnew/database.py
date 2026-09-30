@@ -612,12 +612,17 @@ class PostgresPendingJobs(PendingJobs):
         return None
 
     def refuse(self, job_id, subject, *, now):
+        if type(now) is not int or not 1 <= now <= _MAX_TIME:
+            _fail("refusal time is invalid")
         with _store_transaction(self._connection, self._lock) as connection:
             row = connection.execute(
-                "SELECT state,subject FROM public.job_ledger WHERE job_id=%s FOR UPDATE",
+                "SELECT state,subject,created_at FROM public.job_ledger "
+                "WHERE job_id=%s FOR UPDATE",
                 (job_id,)).fetchone()
-            if row != ("PENDING_APPROVAL", subject):
+            if row is None or row[:2] != ("PENDING_APPROVAL", subject):
                 _fail("only this subject's pending job may be refused")
+            if now < row[2]:
+                _fail("refusal time precedes job creation")
             connection.execute("DELETE FROM public.pending_jobs WHERE job_id=%s", (job_id,))
             connection.execute("UPDATE public.job_ledger SET state='REFUSED',updated_at=%s "
                                "WHERE job_id=%s", (now, job_id))

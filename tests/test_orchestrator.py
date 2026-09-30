@@ -1,5 +1,6 @@
 import hashlib
 import itertools
+from concurrent.futures import ThreadPoolExecutor
 import os
 import select
 import signal
@@ -404,6 +405,40 @@ class OrchestratorTest(Fixture, unittest.TestCase):
                                    reservation(job_id='job-second'), now=110)
         self.assertEqual(decision.reason_code, 'JOB_LEDGER_FULL')
         self.assertEqual(ledger.job_ids(), frozenset({'job-first'}))
+
+    def test_two_orchestrators_report_capacity_race_as_ledger_full(self):
+        gate = threading.Barrier(2)
+
+        class RacingLedger(ProcessLocalJobLedger):
+            def __init__(self):
+                super().__init__()
+                self.calls = 0
+                self.calls_lock = threading.Lock()
+
+            def is_full(self):
+                full = super().is_full()
+                with self.calls_lock:
+                    self.calls += 1
+                    wait = self.calls <= 2
+                if wait:
+                    gate.wait(timeout=3)
+                return full
+
+        ledger = RacingLedger()
+        instances = [self.orchestrator_for(job_ledger=ledger) for _ in range(2)]
+
+        def attempt(index):
+            try:
+                instances[index]._reserve(reservation(job_id=f'job-race-{index}'), now=110)
+                return 'RESERVED'
+            except Denied as refusal:
+                return refusal.decision.reason_code
+
+        with mock.patch.object(orchestrator_module, '_MAX_JOBS', 1):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                outcomes = list(executor.map(attempt, range(2)))
+        self.assertCountEqual(outcomes, ['RESERVED', 'JOB_LEDGER_FULL'])
+        self.assertEqual(len(ledger.job_ids()), 1)
 
     def test_an_oversized_job_id_is_refused_before_the_ledger_stores_it(self):
         for call in (lambda: self.wire(job_id='j' * 129),
