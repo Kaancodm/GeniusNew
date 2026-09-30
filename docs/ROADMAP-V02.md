@@ -62,7 +62,7 @@ anpassen.
 | --- | --- | --- | --- |
 | B0 | `docs/DATABASE.md` gemergt, inklusive der Review-Befunde aus #56 (Vereinigungsmenge dort) | Doku; Claude-Security-Review, Freigabe durch Kaan | erledigt: #70 gemergt (Claude DB Review APPROVED an `dc0e825`, Freigabe Kaan 29.09.2026) |
 | B1 | `0001_core_foundation`: PostgreSQL-Dienst in der CI, `psycopg` hash-gepinnt, Migrationen mit Checksum, Start verweigert bei fehlender DB oder falscher Migration | Start-Refusal-Tests gegen echtes PostgreSQL | erledigt: #78 (Codex) gemergt `706e76d`, Claude DB Review APPROVED an `99ef6e3`; Auflagen für B2 im Review auf #78 |
-| B2 | Job-Ledger persistent: Tests A–C aus Konflikt 4, Runtime ohne DELETE, nur Vorwärtsübergänge | Ledger-Grenztest in `test_orchestrator.py` umgekehrt | offen |
+| B2 | Job-Ledger persistent: Tests A–C aus Konflikt 4, Runtime ohne DELETE, nur Vorwärtsübergänge | Ledger-Grenztest in `test_orchestrator.py` umgekehrt | erledigt: #90 (Codex, auf Claudes Übergabe #83) gemergt (`9a797b1`), Claude DB Review APPROVED an `ec64894`; Runtime-Rechteprüfung E1/E2 beim Start |
 | B3 | Annahme-Ledger persistent, Annahme nur aus `EXECUTION_COMMITTED` | Ledger-Grenztest in `test_verifier.py` umgekehrt | offen |
 | B4 | Wartende Jobs und Approval-Speicher persistent, append-only, verzweigungsfrei | Neustart verliert keinen wartenden Job; verbrauchter Token bleibt verbraucht | offen |
 | B5 | Audit-Kette persistent; signierter Kopf in derselben Transaktion; Neustart verankert nur bereits signierte Köpfe nach | Per SQL angehängtes Event → Start verweigert | offen |
@@ -74,9 +74,9 @@ anpassen.
 | # | Gate | Nachweis | Stand |
 | --- | --- | --- | --- |
 | C1 | **Server-Einstieg** statt nur Demo: `python -m geniusnew serve` liest Root-Secret, Policy, DB- und Anker-Verbindung ausschließlich aus serverseitiger Konfiguration; das Demo-Secret wird außerhalb der Demo abgelehnt | Refusal-Tests für jede fehlende/ungültige Einstellung | erledigt: #61 gemergt; DB-Verbindung mit B1 (#78) |
-| C2 | Anker als eigener Dienst unter eigenem OS-Nutzer, Lebenszyklus außerhalb des Kerns, signierte Anker-Antworten mit Nonce (Teile aus #32, neu auf `main` gebaut) | Anker-Rückschnitt-Grenztest umgekehrt oder neu begründet | #62 (Claude): Anker-Dienst mit signierten Antworten, `serve` bindet ihn über `anchor_socket`/`anchor_reply_public_key` an; Grenztest neu begründet; offen bis Merge |
+| C2 | Anker als eigener Dienst unter eigenem OS-Nutzer, Lebenszyklus außerhalb des Kerns, signierte Anker-Antworten mit Nonce (Teile aus #32, neu auf `main` gebaut) | Anker-Rückschnitt-Grenztest umgekehrt oder neu begründet | erledigt: #62 gemergt (`24f521b`): Anker-Dienst mit signierten Antworten, `serve` bindet ihn über `anchor_socket`/`anchor_reply_public_key` an; Grenztest neu begründet. Offen im Betriebsmodell (C5): eigener OS-Nutzer auf dem Server |
 | C3 | Rolle „Freigebende“ mit eigener HTTP-Route; keine Selbstfreigabe | Refusal-Tests für fremde Rolle, eigene Aufträge, Doppelentscheidung | offen |
-| C4 | HTTP-Härtung: Body-Limit, Timeouts, Rate-Limit pro API-Key; TLS über Reverse-Proxy mit Beispielkonfiguration in `docs/` | Tests für Limits; Doku | Body-Limit und Socket-Timeout auf `main`; Rate-Limit, Job- und Verbindungsgrenze sowie geprüfte nginx-Vorlage: #71 gemergt (`080f1f4`); offen: Limits in `[service]` der TOML einstellbar |
+| C4 | HTTP-Härtung: Body-Limit, Timeouts, Rate-Limit pro API-Key; TLS über Reverse-Proxy mit Beispielkonfiguration in `docs/` | Tests für Limits; Doku | Body-Limit und Socket-Timeout auf `main`; Rate-Limit, Job- und Verbindungsgrenze sowie geprüfte nginx-Vorlage: #71 gemergt (`080f1f4`); Limits in `[service.limits]` der TOML einstellbar: dieser PR (Claude) |
 | C5 | Betriebsanleitung: systemd-Units (Kern, Anker, Nutzer getrennt), Backup und Restore von DB und Anker-Zustand, Ablauf der Schlüsselrotation. Ein Backup, das hinter dem Anker liegt, startet nicht (richtig so); der auditierte Weg zurück in den Betrieb ohne stilles Zurücksetzen des Ankers braucht Kaans Entscheidung | Doku + einmal durchgespielter Restore gegen die CI-Datenbank | offen |
 
 ### D — Portal (Vercel, nach `docs/MIGRATION-MATRIX.md` neu gebaut)

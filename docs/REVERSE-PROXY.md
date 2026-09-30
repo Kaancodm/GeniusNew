@@ -46,11 +46,14 @@ ist für ihn keine Identität. Er bekommt also nichts vom Proxy, dem er vertraue
 | Proxy | Kern | Warum |
 | --- | --- | --- |
 | `client_max_body_size 16k` | `_MAX_BODY_BYTES` = 16 KiB | Größeres wird schon am Proxy abgelehnt (`413`) |
-| `max_conns=64` am Upstream | `max_connections` = 64 | Darüber antwortet der Proxy selbst mit `502`, statt dem Kern Verbindungen zu geben, die er ungelesen schließt |
+| `max_conns=64` am Upstream | `[service.limits] max_connections` = 64 | Darüber antwortet der Proxy selbst mit `502`, statt dem Kern Verbindungen zu geben, die er ungelesen schließt |
 | `proxy_read_timeout 45s` | `wall_seconds` ≤ 30 s | Ein Job antwortet erst, wenn sein Worker fertig ist |
-| `limit_req` 120/min, Burst 20 pro Adresse | 60/min, Burst 20 pro Principal | Pro Principal entscheidet der Kern; das Limit pro Adresse liegt darüber |
+| `limit_req` 120/min, Burst 20 pro Adresse | `[service.limits] rate_per_minute` = 60, `burst` = 20 pro Principal | Pro Principal entscheidet der Kern; das Limit pro Adresse liegt darüber |
 
-Ändert sich ein Wert im Kern, ändert sich die Vorlage im selben PR.
+Die Werte des Kerns stehen in der TOML-Konfiguration unter `[service.limits]`
+(Vorlage: `docs/examples/geniusnew.toml`); jede Obergrenze im Code verhindert, dass ein
+Tippfehler ein Limit aufhebt. Wer dort einen Wert ändert, passt die Proxy-Vorlage mit an.
+Ändert sich ein Standardwert im Kern, ändert sich die Vorlage im selben PR.
 
 ## Grenzen
 

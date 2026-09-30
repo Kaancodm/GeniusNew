@@ -26,7 +26,7 @@ from geniusnew.approvals import ApprovalStore
 from geniusnew.audit_chain import AuditAnchor, sign_head, verify
 from geniusnew.contracts import ContractError, Grant, Policy
 from geniusnew.gateway import Gateway
-from geniusnew.http_entry import serve
+from geniusnew.http_entry import HttpLimits, serve
 from geniusnew.isolation import IsolatedWorkerRunner
 from geniusnew.results import WorkerAuthority, accept
 from geniusnew.verifier import Rejected
@@ -184,6 +184,25 @@ class EndToEndTest(Fixture, unittest.TestCase):
         self.assertTrue(runners)
         self.assertTrue(all(isinstance(runner, IsolatedWorkerRunner)
                             for runner in runners))
+
+    def test_configured_limits_reach_the_entry(self):
+        limited = build(root_secret=ROOT_SECRET, policy=self.policy_for(),
+                        api_keys={API_KEY: 'subject-demo'},
+                        workers=(DeterministicSummarizer(),), clock=lambda: self.clock[0],
+                        limits=HttpLimits(rate_per_minute=1, burst=1))
+        self.addCleanup(limited.close)
+        headers = {'Content-Type': 'application/json',
+                   'Authorization': 'Bearer ' + API_KEY.decode()}
+        body = json.dumps({'text': REQUEST}).encode()
+        statuses = [limited.entry.handle(method='POST', path='/jobs', headers=headers,
+                                         body=body).status for _ in range(2)]
+        self.assertEqual(statuses, [202, 429])
+
+    def test_limits_that_are_not_http_limits_are_refused(self):
+        with self.assertRaisesRegex(ContractError, 'limits must be HttpLimits'):
+            build(root_secret=ROOT_SECRET, policy=self.policy_for(),
+                  api_keys={API_KEY: 'subject-demo'},
+                  workers=(DeterministicSummarizer(),), limits={'burst': 1})
 
     def test_default_composition_anchors_in_its_own_process(self):
         self.assertIsInstance(self.service.anchor, AnchorProcess)
