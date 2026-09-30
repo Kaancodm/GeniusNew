@@ -179,6 +179,21 @@ class DurablePendingTest(ApprovalFixture, unittest.TestCase):
         self.assertEqual(self.connection.execute(
             "SELECT count(*) FROM public.approval_records").fetchone(), (0,))
 
+    def test_grant_rejects_scope_fields_changed_after_creation(self):
+        pending, approvals = self.stores()
+        self.add(pending)
+        scope = self.scope()
+        for field, value in (("job_id", "foreign-job"),
+                             ("user_id", "foreign-user"),
+                             ("worker_agent_id", "foreign-worker"),
+                             ("risk_tier", "foreign-tier"),
+                             ("policy_version", "foreign-policy")):
+            with self.subTest(field=field), self.assertRaisesRegex(
+                    ContractError, "approval grant needs its exact pending job"):
+                approvals.grant(replace(scope, **{field: value}), now=101, ttl_seconds=60)
+        self.assertEqual(self.connection.execute(
+            "SELECT count(*) FROM public.approval_records").fetchone(), (0,))
+
     def test_wrong_token_and_wrong_scope_leave_both_rows_untouched(self):
         pending, approvals = self.stores()
         waiting = self.add(pending)
@@ -327,6 +342,47 @@ class DurablePendingTest(ApprovalFixture, unittest.TestCase):
                 with self.assertRaises(ContractError):
                     self.stores()
                 owner.execute("UPDATE pending_jobs SET " + column + "=%s", (original,))
+
+    def test_database_rejects_oversized_pending_and_approval_bytes(self):
+        pending, _ = self.stores()
+        self.add(pending)
+        with self.db.connect() as owner:
+            owner.execute("DELETE FROM public.pending_jobs")
+            for column, value in (("wire", b"x" * 16385),
+                                  ("trace_id", "x" * 65)):
+                with self.subTest(column=column), self.assertRaises(psycopg.errors.CheckViolation):
+                    with owner.transaction():
+                        owner.execute(
+                            "INSERT INTO public.pending_jobs "
+                            "(job_id,subject,wire,trace_id,expires_at) "
+                            "VALUES (%s,%s,%s,%s,%s)",
+                            ("job-demo", "subject-demo",
+                             value if column == "wire" else self.wire,
+                             value if column == "trace_id" else "trace-demo", 160))
+        with self.db.connect() as owner:
+            with self.assertRaises(psycopg.errors.CheckViolation):
+                owner.execute(
+                    "INSERT INTO public.approval_records "
+                    "(token_digest,record_hash,scope,issued_at,expires_at,state,changed_at) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                    ("a" * 64, "b" * 64, b"x" * 16385, 101, 160, "GRANTED", 101))
+
+    def test_owner_oversized_bytes_refuse_before_python_fetch(self):
+        pending, approvals = self.stores()
+        self.add(pending)
+        approvals.grant(self.scope(), now=101, ttl_seconds=60)
+        with self.db.connect() as owner:
+            owner.execute("ALTER TABLE public.pending_jobs DROP CONSTRAINT pending_jobs_wire_check")
+            owner.execute("UPDATE public.pending_jobs SET wire=%s", (b"x" * 16385,))
+        with self.assertRaisesRegex(ContractError, "stored pending wire exceeds"):
+            database.PostgresPendingJobs(
+                self.connection, policy=self.policy, verifier=self.key.verifier())
+        with self.db.connect() as owner:
+            owner.execute("ALTER TABLE public.approval_records "
+                          "DROP CONSTRAINT approval_records_scope_check")
+            owner.execute("UPDATE public.approval_records SET scope=%s", (b"x" * 16385,))
+        with self.assertRaisesRegex(ContractError, "stored approval scope exceeds"):
+            database.PostgresApprovalStore(self.connection)
 
     def test_start_refuses_stale_pending_for_reserved_job(self):
         pending, _ = self.stores()

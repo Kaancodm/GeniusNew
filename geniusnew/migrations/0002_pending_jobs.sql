@@ -2,8 +2,8 @@
 create table public.pending_jobs (
     job_id text primary key references public.job_ledger(job_id),
     subject text not null,
-    wire bytea not null,
-    trace_id text not null,
+    wire bytea not null check (octet_length(wire) <= 16384),
+    trace_id text not null check (octet_length(trace_id) <= 64),
     expires_at bigint not null
 );
 revoke all on public.pending_jobs from public;

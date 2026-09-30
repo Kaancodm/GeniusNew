@@ -2,7 +2,7 @@
 create table public.approval_records (
     token_digest char(64) not null,
     record_hash char(64) not null unique,
-    scope bytea not null,
+    scope bytea not null check (octet_length(scope) <= 16384),
     issued_at bigint not null,
     expires_at bigint not null,
     state text not null check (state in ('GRANTED', 'CONSUMED', 'REVOKED')),

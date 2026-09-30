@@ -26,8 +26,8 @@ from psycopg.conninfo import conninfo_to_dict
 
 from .approvals import (ApprovalGrant, ApprovalReceipt, ApprovalScope, ApprovalStore,
                         _Record, _record_hash, _scope_matches)
-from .contracts import (ContractError, HandoffVerifier, Policy, canonical, decode_wire,
-                        validate, validate_pending)
+from .contracts import (ContractError, HandoffVerifier, Policy, _MAX_WIRE_BYTES,
+                        _wire_object, canonical, decode_wire, validate, validate_pending)
 from .orchestrator import JobLedger, Reservation
 from .results import WorkerVerifier, accept as accept_result
 from .verifier import AcceptanceLedger
@@ -45,6 +45,7 @@ _MIGRATION_LOCK = 0x47454E4955534231
 # `audit.py` use it; a test pins the three together.
 _MAX_TIME = 4102444800
 _MAX_JOB_ID_BYTES = 128
+_MAX_TRACE_BYTES = 64
 
 _CORE_TABLES = ("schema_migrations", "job_ledger", "acceptance_ledger", "pending_jobs",
                 "approval_records", "approval_tokens")
@@ -254,13 +255,15 @@ class PostgresJobLedger(JobLedger):
         if approval_record_hash is None:
             return self.reserve(reservation)
         row = self._execute(
-            "SELECT r.scope,r.changed_at FROM public.job_ledger j "
+            "SELECT CASE WHEN octet_length(r.scope) <= %s THEN r.scope ELSE NULL END,"
+            "r.changed_at FROM public.job_ledger j "
             "JOIN public.approval_records r ON r.record_hash=%s "
             "JOIN public.approval_tokens t ON t.token_digest=r.token_digest "
             "AND t.current_record_hash=r.record_hash "
             "WHERE j.job_id=%s AND j.subject=%s AND j.handoff_sha256=%s "
             "AND j.expires_at=%s AND j.state='RESERVED' AND j.reserved_at=%s "
-            "AND r.state='CONSUMED'", (approval_record_hash, reservation.job_id,
+            "AND r.state='CONSUMED'", (_MAX_WIRE_BYTES, approval_record_hash,
+            reservation.job_id,
             reservation.subject, reservation.handoff_sha256, reservation.expires_at,
             reservation.reserved_at), fetch=True)
         if row is None:
@@ -467,10 +470,16 @@ def _store_transaction(connection, lock):
 
 _APPROVAL_COLUMNS = ("token_digest, scope, issued_at, expires_at, state, "
                      "changed_at, previous_hash, record_hash")
+_APPROVAL_READ_COLUMNS = (
+    "token_digest, CASE WHEN octet_length(scope) <= %s THEN scope ELSE NULL END, "
+    "issued_at, expires_at, state, changed_at, previous_hash, record_hash"
+)
 
 
 def _approval_record(row):
     digest, raw_scope, issued, expires, state, changed, previous, record_hash = row
+    if raw_scope is None:
+        _fail("stored approval scope exceeds the maximum size")
     scope = ApprovalScope(**decode_wire(raw_scope, keys=_SCOPE_KEYS, noun="approval scope"))
     record = _Record(bytes.fromhex(digest) if _digest(digest) else b"", scope,
                      issued, expires, state, changed, previous, record_hash)
@@ -495,7 +504,9 @@ def _digest(value):
 
 def _check_approvals(connection):
     records = {}
-    for row in connection.execute("SELECT " + _APPROVAL_COLUMNS + " FROM public.approval_records"):
+    for row in connection.execute(
+            "SELECT " + _APPROVAL_READ_COLUMNS + " FROM public.approval_records",
+            (_MAX_WIRE_BYTES,)):
         record = _approval_record(row)
         records.setdefault(record.token_digest.hex(), []).append(record)
     pointers = dict(connection.execute(
@@ -556,6 +567,8 @@ class PostgresPendingJobs(PendingJobs):
 
     def _waiting(self, row):
         job_id, subject, wire, trace, expires, state, ledger_subject, digest, created, ledger_expires = row
+        if wire is None:
+            _fail("stored pending wire exceeds the maximum size")
         if (state != "PENDING_APPROVAL" or subject != ledger_subject or expires != ledger_expires
                 or sha256(wire).hexdigest() != digest or trace != "trace-" + digest[:16]):
             _fail("pending job does not match its bound ledger")
@@ -577,9 +590,13 @@ class PostgresPendingJobs(PendingJobs):
         if missing:
             _fail("pending rows and pending ledger states do not match")
         rows = connection.execute(
-            "SELECT p.job_id,p.subject,p.wire,p.trace_id,p.expires_at,j.state,j.subject,"
+            "SELECT p.job_id,p.subject,"
+            "CASE WHEN octet_length(p.wire) <= %s THEN p.wire ELSE NULL END,"
+            "CASE WHEN octet_length(p.trace_id) <= %s THEN p.trace_id ELSE NULL END,"
+            "p.expires_at,j.state,j.subject,"
             "j.handoff_sha256,j.created_at,j.expires_at FROM public.pending_jobs p "
-            "JOIN public.job_ledger j ON j.job_id=p.job_id").fetchall()
+            "JOIN public.job_ledger j ON j.job_id=p.job_id",
+            (_MAX_WIRE_BYTES, _MAX_TRACE_BYTES)).fetchall()
         for row in rows:
             self._waiting(row)
 
@@ -610,10 +627,13 @@ class PostgresPendingJobs(PendingJobs):
     def peek(self, job_id):
         with _store_transaction(self._connection, self._lock) as connection:
             row = connection.execute(
-                "SELECT p.job_id,p.subject,p.wire,p.trace_id,p.expires_at,j.state,j.subject,"
+                "SELECT p.job_id,p.subject,"
+                "CASE WHEN octet_length(p.wire) <= %s THEN p.wire ELSE NULL END,"
+                "CASE WHEN octet_length(p.trace_id) <= %s THEN p.trace_id ELSE NULL END,"
+                "p.expires_at,j.state,j.subject,"
                 "j.handoff_sha256,j.created_at,j.expires_at FROM public.pending_jobs p "
                 "JOIN public.job_ledger j ON j.job_id=p.job_id WHERE p.job_id=%s",
-                (job_id,)).fetchone()
+                (_MAX_WIRE_BYTES, _MAX_TRACE_BYTES, job_id)).fetchone()
             if row is None:
                 _fail("no job is waiting for approval under this id")
             return self._waiting(row)
@@ -681,13 +701,21 @@ class PostgresApprovalStore(ApprovalStore):
         with _store_transaction(self._connection, self._lock) as connection:
             job = connection.execute(
                 "SELECT j.state,j.subject,j.handoff_sha256,j.expires_at,"
-                "p.subject,p.wire,p.expires_at "
+                "p.subject,CASE WHEN octet_length(p.wire) <= %s THEN p.wire ELSE NULL END,"
+                "p.expires_at "
                 "FROM public.job_ledger j LEFT JOIN public.pending_jobs p ON p.job_id=j.job_id "
-                "WHERE j.job_id=%s FOR UPDATE OF j", (scope.job_id,)).fetchone()
+                "WHERE j.job_id=%s FOR UPDATE OF j",
+                (_MAX_WIRE_BYTES, scope.job_id)).fetchone()
             if (job is None or job[0] != "PENDING_APPROVAL"
                     or job[1] != job[4] or job[2] != scope.handoff_sha256
                     or job[3] != scope.handoff_expires_at or job[6] != job[3]
                     or job[5] is None or sha256(job[5]).hexdigest() != job[2]):
+                _fail("approval grant needs its exact pending job")
+            handoff = _wire_object(job[5])
+            if (handoff["job_id"] != scope.job_id or handoff["user_id"] != scope.user_id
+                    or handoff["worker_agent_id"] != scope.worker_agent_id
+                    or handoff["tier"] != scope.risk_tier
+                    or handoff["policy_version"] != scope.policy_version):
                 _fail("approval grant needs its exact pending job")
             if connection.execute("SELECT 1 FROM public.approval_tokens WHERE token_digest=%s",
                                   (record.token_digest.hex(),)).fetchone():
@@ -712,17 +740,20 @@ class PostgresApprovalStore(ApprovalStore):
         with _store_transaction(self._connection, self._lock) as connection:
             if state == "CONSUMED":
                 job = connection.execute(
-                    "SELECT j.state,j.subject,j.handoff_sha256,j.expires_at,p.wire "
+                    "SELECT j.state,j.subject,j.handoff_sha256,j.expires_at,"
+                    "CASE WHEN octet_length(p.wire) <= %s THEN p.wire ELSE NULL END "
                     "FROM public.job_ledger j LEFT JOIN public.pending_jobs p ON p.job_id=j.job_id "
-                    "WHERE j.job_id=%s FOR UPDATE OF j", (scope.job_id,)).fetchone()
+                    "WHERE j.job_id=%s FOR UPDATE OF j",
+                    (_MAX_WIRE_BYTES, scope.job_id)).fetchone()
             pointer = connection.execute(
                 "SELECT current_record_hash FROM public.approval_tokens "
                 "WHERE token_digest=%s FOR UPDATE", (digest,)).fetchone()
             if pointer is None:
                 _fail("approval token is unknown")
             row = connection.execute(
-                "SELECT " + _APPROVAL_COLUMNS + " FROM public.approval_records "
-                "WHERE token_digest=%s AND record_hash=%s", (digest, pointer[0])).fetchone()
+                "SELECT " + _APPROVAL_READ_COLUMNS + " FROM public.approval_records "
+                "WHERE token_digest=%s AND record_hash=%s",
+                (_MAX_WIRE_BYTES, digest, pointer[0])).fetchone()
             record = _approval_record(row)
             if record.state != "GRANTED":
                 _fail("approval is not granted")
