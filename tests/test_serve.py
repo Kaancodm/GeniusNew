@@ -17,7 +17,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from geniusnew.database import migrate
-from postgres_support import PostgresDatabase
+
+try:
+    from .postgres_support import PostgresDatabase
+except ImportError:  # pragma: no cover - unittest discovery loads the tests directory on sys.path.
+    from postgres_support import PostgresDatabase
 
 from geniusnew.contracts import ContractError, Grant, Policy
 from geniusnew.wiring import build

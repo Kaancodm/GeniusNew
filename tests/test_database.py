@@ -11,7 +11,11 @@ import psycopg
 
 from geniusnew import database
 from geniusnew.contracts import ContractError
-from postgres_support import PostgresDatabase
+
+try:
+    from .postgres_support import PostgresDatabase
+except ImportError:  # pragma: no cover - unittest discovery loads the tests directory on sys.path.
+    from postgres_support import PostgresDatabase
 
 
 class DatabaseTest(unittest.TestCase):
