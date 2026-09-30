@@ -56,12 +56,12 @@ from .contracts import (ContractError, HandoffSigner, HandoffVerifier, Policy, v
                         validate_pending)
 from .gateway import (ADMISSION_REASON_CODE, DispatchPermit, Gateway, GatewayRejected,
                       handoff_from_permit)
-from .http_entry import HttpEntry, PrincipalRegistry
+from .http_entry import HttpEntry, HttpLimits, PrincipalRegistry
 from .isolation import IsolatedWorkerRunner
 from .keys import ServiceKeys, derive_keys
 from .orchestrator import Denied, DispatchAttempted, JobLedger, Orchestrator, WorkerEndpoint
 from .results import WorkerAuthority, handoff_digest
-from .verifier import Rejected, ResultVerifier
+from .verifier import AcceptanceLedger, Rejected, ResultVerifier
 from .workers import Worker, WorkerRunner
 
 _TRACE_PREFIX = "trace-"
@@ -218,7 +218,9 @@ def build(*, root_secret: bytes, policy: Policy,
           runner_factory: Callable[..., WorkerRunner] | None = None,
           anchor: AuditAnchor | None = None,
           anchor_state: str | None = None,
+          limits: HttpLimits | None = None,
           job_ledger: JobLedger | None = None,
+          acceptance_ledger: AcceptanceLedger | None = None,
           database_connection=None) -> Service:
     """Assemble one service. The only function that knows all the parts.
 
@@ -231,9 +233,16 @@ def build(*, root_secret: bytes, policy: Policy,
     here) or `principals` (SHA-256 digests to subjects). A server reads the
     digests from its configuration so that no plaintext key has to exist on it.
 
+    `limits` bounds the entry's rate and in-flight jobs; its `max_connections`
+    belongs to the listener, which the caller starts with `http_entry.serve`.
+
     Without `job_ledger` the orchestrator burns job ids in this process only,
     which is what the demo and most tests want. The server entry passes the
-    PostgreSQL ledger, so a restart remembers every id it burned.
+    PostgreSQL ledger, so a restart remembers every id it burned. Likewise,
+    `acceptance_ledger` defaults to process memory for explicit demo/test users;
+    the serving entry supplies PostgreSQL and checks its historical artifacts
+    before any runner is constructed. Stored artifacts require their trusted
+    policy and public keys to remain compatible; rotation is a separate gate.
     """
     if (api_keys is None) == (principals is None):
         _fail("pass exactly one of api_keys or principals")
@@ -241,6 +250,9 @@ def build(*, root_secret: bytes, policy: Policy,
         _fail("anchor must be an AuditAnchor")
     if anchor is not None and anchor_state is not None:
         _fail("anchor_state configures the default anchor; pass one or the other")
+    if limits is not None and not isinstance(limits, HttpLimits):
+        _fail("limits must be HttpLimits")
+    limits = limits or HttpLimits()
     if not isinstance(policy, Policy):
         _fail("policy is invalid")
     keys = derive_keys(root_secret)
@@ -263,6 +275,11 @@ def build(*, root_secret: bytes, policy: Policy,
                       approval_store=approvals)
     worker_authority = WorkerAuthority(result_key=keys.result_key,
                                        integrity_key=keys.integrity_key)
+    if acceptance_ledger is not None:
+        if not isinstance(acceptance_ledger, AcceptanceLedger):
+            _fail("acceptance_ledger must be an AcceptanceLedger")
+        acceptance_ledger.check(policy=policy, handoff_verifier=handoff_verifier,
+                                worker_verifier=worker_authority.verifier())
     # The production/default path is fail-closed isolated execution. Tests may
     # inject a runner_factory deliberately, but a host without the required
     # POSIX isolation primitives must fail here rather than silently fall back
@@ -302,7 +319,8 @@ def build(*, root_secret: bytes, policy: Policy,
                                 job_ledger=job_ledger)
     verifier = ResultVerifier(verifier_id=verifier_id,
                               handoff_verifier=handoff_verifier,
-                              worker_verifier=worker_authority.verifier())
+                              worker_verifier=worker_authority.verifier(),
+                              acceptance_ledger=acceptance_ledger)
 
     submit, complete = _submitter(
         orchestrator=orchestrator, verifier=verifier,
@@ -312,6 +330,8 @@ def build(*, root_secret: bytes, policy: Policy,
         registry=(PrincipalRegistry.from_api_keys(api_keys) if api_keys is not None
                   else PrincipalRegistry(principals)),
         submit=submit, complete=complete, job_ids=job_ids,
+        rate_per_minute=limits.rate_per_minute, burst=limits.burst,
+        max_in_flight=limits.max_in_flight,
     )
     return Service(
         entry=entry, orchestrator=orchestrator, gateway=gateway,

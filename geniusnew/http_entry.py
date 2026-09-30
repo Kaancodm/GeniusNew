@@ -236,6 +236,23 @@ def _bounded(value: Any, name: str, ceiling: int) -> int:
     return value
 
 
+@dataclass(frozen=True)
+class HttpLimits:
+    """The four request limits as one checked value, so a server configures them
+    in one place and cannot hand the entry and the listener different ceilings."""
+
+    rate_per_minute: int = _RATE_PER_MINUTE
+    burst: int = _BURST
+    max_in_flight: int = _MAX_IN_FLIGHT
+    max_connections: int = _MAX_CONNECTIONS
+
+    def __post_init__(self) -> None:
+        _bounded(self.rate_per_minute, "limits.rate_per_minute", _CEILING_RATE_PER_MINUTE)
+        _bounded(self.burst, "limits.burst", _CEILING_BURST)
+        _bounded(self.max_in_flight, "limits.max_in_flight", _CEILING_IN_FLIGHT)
+        _bounded(self.max_connections, "limits.max_connections", _CEILING_CONNECTIONS)
+
+
 class _Buckets:
     """One token bucket per subject. The registry bounds how many subjects exist."""
 

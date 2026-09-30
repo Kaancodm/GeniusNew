@@ -26,6 +26,7 @@ from .config import ServiceConfig, load_config, read_database_dsn
 from .contracts import ContractError
 from .http_entry import PrincipalRegistry, serve
 from .orchestrator import JobLedger
+from .verifier import AcceptanceLedger
 from .wiring import Service, build
 
 
@@ -53,14 +54,19 @@ def _refuse_discontinuous_start(service: Service) -> None:
 
 def _serve(config_path: str) -> int:
     config = load_config(config_path)
-    from .database import PostgresJobLedger, open_database
+    from .database import PostgresAcceptanceLedger, PostgresJobLedger, open_database
 
-    with open_database(config.database_dsn) as connection:
-        return _run_service(config, job_ledger=PostgresJobLedger(connection),
-                            database_connection=connection)
+    # Dedicated connections keep an acceptance transaction separate from
+    # unrelated jobs running concurrently in the request threads.
+    with open_database(config.database_dsn) as jobs, open_database(config.database_dsn) as results:
+        return _run_service(config, job_ledger=PostgresJobLedger(jobs),
+                            acceptance_ledger=PostgresAcceptanceLedger(results),
+                            database_connection=jobs)
 
 
-def _run_service(config: ServiceConfig, *, job_ledger: JobLedger, database_connection=None) -> int:
+def _run_service(config: ServiceConfig, *, job_ledger: JobLedger,
+                 acceptance_ledger: AcceptanceLedger,
+                 database_connection=None) -> int:
     if config.anchor_socket is not None:
         # Served anchor (gate C2): its lifecycle is not ours, so `service.close`
         # leaves it running and `_refuse_discontinuous_start` asks it.
@@ -68,16 +74,19 @@ def _run_service(config: ServiceConfig, *, job_ledger: JobLedger, database_conne
                               reply_public_key=config.anchor_reply_public_key)
         service = build(root_secret=config.root_secret, policy=config.policy,
                         principals=config.principals, workers=config.workers,
-                        anchor=anchor, job_ledger=job_ledger,
+                        anchor=anchor, limits=config.limits, job_ledger=job_ledger,
+                        acceptance_ledger=acceptance_ledger,
                         database_connection=database_connection)
     else:
         service = build(root_secret=config.root_secret, policy=config.policy,
                         principals=config.principals, workers=config.workers,
-                        anchor_state=config.anchor_state, job_ledger=job_ledger,
+                        anchor_state=config.anchor_state, limits=config.limits,
+                        job_ledger=job_ledger, acceptance_ledger=acceptance_ledger,
                         database_connection=database_connection)
     try:
         _refuse_discontinuous_start(service)
-        server = serve(service.entry, host=config.listen_host, port=config.listen_port)
+        server = serve(service.entry, host=config.listen_host, port=config.listen_port,
+                       max_connections=config.limits.max_connections)
     except BaseException:
         service.close()
         raise
