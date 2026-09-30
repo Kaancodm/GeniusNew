@@ -90,6 +90,23 @@ class PostgresAuditTest(unittest.TestCase):
             with self.assertRaisesRegex(ContractError, "one-to-one"):
                 PostgresAuditChain(self.connection, authority=self.authority)
 
+    def test_oversized_event_is_rejected_by_the_database_before_storage(self):
+        with self.assertRaises(psycopg.errors.CheckViolation):
+            self.connection.execute(
+                "INSERT INTO public.audit_chain (index,previous_hash,record_hash,event) "
+                "VALUES (0,%s,%s,%s)",
+                ("0" * 64, "f" * 64, b"x" * 8193))
+        self.assertEqual(self.counts(), (0, 0))
+
+    def test_owner_inserted_oversized_event_refuses_before_fetching_its_bytes(self):
+        self.owner("ALTER TABLE public.audit_chain DROP CONSTRAINT audit_chain_event_check")
+        self.owner(
+            "INSERT INTO public.audit_chain (index,previous_hash,record_hash,event) "
+            "VALUES (0,%s,%s,%s)",
+            ("0" * 64, "f" * 64, b"x" * 8193))
+        with self.assertRaisesRegex(ContractError, "event exceeds the maximum size"):
+            PostgresAuditChain(self.connection, authority=self.authority)
+
     def test_recovery_reuses_the_precrash_signature_and_proves_the_anchor_prefix(self):
         self.chain.append(self.event)
         anchor = AuditAnchor()

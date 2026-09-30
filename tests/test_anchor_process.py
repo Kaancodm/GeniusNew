@@ -171,6 +171,21 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
         with self.assertRaisesRegex(ContractError, 'anchor committed 5 records'):
             verify(shorter, resigned, authority=self.authority, anchor=restarted)
 
+    def test_two_child_anchors_cannot_write_the_same_state_file(self):
+        path = self.state_path()
+        first = AnchorProcess(verifier=self.authority.verifier(), state_path=path)
+        second = AnchorProcess(verifier=self.authority.verifier(), state_path=path)
+        self.addCleanup(first.close)
+        self.addCleanup(second.close)
+        self.assertEqual(first.committed, (0, EMPTY))
+        with self.assertRaisesRegex(ContractError, 'already in use'):
+            second.committed
+        first.commit(self.head, self.records, authority=self.authority)
+        first.close()
+        restarted = AnchorProcess(verifier=self.authority.verifier(), state_path=path)
+        self.addCleanup(restarted.close)
+        self.assertEqual(restarted.committed, (5, self.head.head_hash))
+
     def test_a_file_rolled_back_to_an_older_signed_head_is_accepted_and_this_is_the_boundary(self):
         """Held open. Every line is a genuine signed head, so cutting the file back
         to an earlier one resumes from there.

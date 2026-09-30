@@ -24,6 +24,7 @@ from .database import connection_lock
 
 _AUDIT_LOCK = 0x47454E4955534235
 _MAX_TIME = 4102444800
+_MAX_EVENT_BYTES = 8192
 
 
 def _fail(message: str) -> None:
@@ -31,6 +32,8 @@ def _fail(message: str) -> None:
 
 
 def _event(raw: bytes) -> AuditEvent:
+    if raw is None:
+        _fail("stored audit event exceeds the maximum size")
     if type(raw) is not bytes:
         _fail("stored audit event must be bytes")
     try:
@@ -96,11 +99,14 @@ class PostgresAuditChain(AuditChain):
 
     def _read(self, connection):
         rows = connection.execute(
-            'SELECT index, previous_hash, record_hash, event '
+            'SELECT index, previous_hash, record_hash, '
+            'CASE WHEN octet_length(event) <= %s THEN event ELSE NULL END '
             'FROM public.audit_chain ORDER BY index LIMIT %s',
-            (_MAX_COUNT + 1,)).fetchall()
+            (_MAX_EVENT_BYTES, _MAX_COUNT + 1,)).fetchall()
         heads = connection.execute(
-            'SELECT count, version, head_hash, signature, created_at '
+            'SELECT count, version, head_hash, '
+            'CASE WHEN octet_length(signature) = 64 THEN signature ELSE NULL END, '
+            'created_at '
             'FROM public.audit_heads ORDER BY count LIMIT %s',
             (_MAX_COUNT + 1,)).fetchall()
         return _stored_snapshot(rows, heads, verifier=self._authority.verifier())
