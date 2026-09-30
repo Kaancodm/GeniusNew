@@ -216,7 +216,8 @@ def build(*, root_secret: bytes, policy: Policy,
           runner_factory: Callable[..., WorkerRunner] | None = None,
           anchor: AuditAnchor | None = None,
           anchor_state: str | None = None,
-          job_ledger: JobLedger | None = None) -> Service:
+          job_ledger: JobLedger | None = None,
+          audit_chain_factory: Callable[[AuditAuthority], AuditChain] | None = None) -> Service:
     """Assemble one service. The only function that knows all the parts.
 
     The default anchor is an `AnchorProcess`, persisted to `anchor_state` when
@@ -231,6 +232,8 @@ def build(*, root_secret: bytes, policy: Policy,
     Without `job_ledger` the orchestrator burns job ids in this process only,
     which is what the demo and most tests want. The server entry passes the
     PostgreSQL ledger, so a restart remembers every id it burned.
+    Its audit_chain_factory loads and verifies durable audit state and reconciles
+    the already signed head with the independent anchor before constructing runners.
     """
     if (api_keys is None) == (principals is None):
         _fail("pass exactly one of api_keys or principals")
@@ -244,74 +247,91 @@ def build(*, root_secret: bytes, policy: Policy,
     if clock is not None and not callable(clock):
         _fail("clock must be callable")
     now = clock or (lambda: int(time.time()))
-
-    # The orchestrator alone signs handoffs; everything that checks one gets
-    # the public half and could not issue a handoff if it tried.
-    handoff_signer = HandoffSigner(integrity_key=keys.integrity_key)
-    handoff_verifier = handoff_signer.verifier()
-    approvals = ApprovalStore()
-    gateway = Gateway(gateway_id=gateway_id, handoff_verifier=handoff_verifier,
-                      approval_store=approvals)
-    worker_authority = WorkerAuthority(result_key=keys.result_key,
-                                       integrity_key=keys.integrity_key)
-    # The production/default path is fail-closed isolated execution. Tests may
-    # inject a runner_factory deliberately, but a host without the required
-    # POSIX isolation primitives must fail here rather than silently fall back
-    # to same-process worker execution.
-    make_runner = runner_factory or (
-        lambda worker: IsolatedWorkerRunner(worker, authority=worker_authority))
-
-    endpoints = []
-    for worker in tuple(workers):
-        runner = make_runner(worker)
-        if not isinstance(runner, WorkerRunner):
-            _fail("runner_factory must return a WorkerRunner")
-        # The grant names which agent may run a subject's jobs, so a worker is
-        # registered under the agent id its grant carries. Taking the first of
-        # several would leave the other agents' subjects unroutable, found only
-        # per request as WORKER_NOT_CONFIGURED.
-        agents = {grant.worker_agent_id for grant in policy.grants
-                  if runner.tool in grant.tools}
-        if not agents:
-            _fail(f"no grant in this policy names a worker for tool {runner.tool!r}")
-        if len(agents) > 1:
-            _fail(f"grants name more than one worker agent for tool {runner.tool!r}; "
-                  "one worker cannot be registered as several agents")
-        endpoints.append(WorkerEndpoint(agents.pop(), runner))
+    if audit_chain_factory is not None and not callable(audit_chain_factory):
+        _fail("audit_chain_factory must be callable")
 
     audit = AuditAuthority(audit_key=keys.audit_key)
-    chain = AuditChain()
-    # Construction is lazy: invalid later configuration does not start a child.
+    chain = AuditChain() if audit_chain_factory is None else audit_chain_factory(audit)
+    if not isinstance(chain, AuditChain):
+        _fail("audit_chain_factory must return an AuditChain")
+    # Persistent storage is fully verified before any runner is constructed.
     if anchor is None:
         anchor = AnchorProcess(verifier=audit.verifier(), state_path=anchor_state)
     recorder = _AnchoredAudit(audit, chain, anchor)
-    orchestrator = Orchestrator(orchestrator_id=policy.orchestrator_id,
-                                signer=handoff_signer,
-                                gateway=gateway, workers=endpoints,
-                                on_admitted=_admission_recorder(
-                                    gateway=gateway, recorder=recorder),
-                                job_ledger=job_ledger)
-    verifier = ResultVerifier(verifier_id=verifier_id,
-                              handoff_verifier=handoff_verifier,
-                              worker_verifier=worker_authority.verifier())
-    pending = PendingJobs()
+    if audit_chain_factory is not None:
+        try:
+            recorder.head()
+        except BaseException:
+            if isinstance(anchor, AnchorProcess):
+                anchor.close()
+            raise
 
-    submit, complete = _submitter(
-        orchestrator=orchestrator, verifier=verifier,
-        recorder=recorder, policy=policy,
-        handoff_verifier=handoff_verifier, now=now, pending=pending)
-    entry = HttpEntry(
-        registry=(PrincipalRegistry.from_api_keys(api_keys) if api_keys is not None
-                  else PrincipalRegistry(principals)),
-        submit=submit, complete=complete, job_ids=job_ids,
-    )
-    return Service(
-        entry=entry, orchestrator=orchestrator, gateway=gateway,
-        verifier=verifier, audit=audit, chain=chain, anchor=anchor,
-        policy=policy, keys=keys, handoff_verifier=handoff_verifier,
-        approvals=approvals, pending=pending,
-        clock=now, _recorder=recorder,
-    )
+    try:
+        # The orchestrator alone signs handoffs; everything that checks one gets
+        # the public half and could not issue a handoff if it tried.
+        handoff_signer = HandoffSigner(integrity_key=keys.integrity_key)
+        handoff_verifier = handoff_signer.verifier()
+        approvals = ApprovalStore()
+        gateway = Gateway(gateway_id=gateway_id, handoff_verifier=handoff_verifier,
+                          approval_store=approvals)
+        worker_authority = WorkerAuthority(result_key=keys.result_key,
+                                           integrity_key=keys.integrity_key)
+        # The production/default path is fail-closed isolated execution. Tests may
+        # inject a runner_factory deliberately, but a host without the required
+        # POSIX isolation primitives must fail here rather than silently fall back
+        # to same-process worker execution.
+        make_runner = runner_factory or (
+            lambda worker: IsolatedWorkerRunner(worker, authority=worker_authority))
+
+        endpoints = []
+        for worker in tuple(workers):
+            runner = make_runner(worker)
+            if not isinstance(runner, WorkerRunner):
+                _fail("runner_factory must return a WorkerRunner")
+            # The grant names which agent may run a subject's jobs, so a worker is
+            # registered under the agent id its grant carries. Taking the first of
+            # several would leave the other agents' subjects unroutable, found only
+            # per request as WORKER_NOT_CONFIGURED.
+            agents = {grant.worker_agent_id for grant in policy.grants
+                      if runner.tool in grant.tools}
+            if not agents:
+                _fail(f"no grant in this policy names a worker for tool {runner.tool!r}")
+            if len(agents) > 1:
+                _fail(f"grants name more than one worker agent for tool {runner.tool!r}; "
+                      "one worker cannot be registered as several agents")
+            endpoints.append(WorkerEndpoint(agents.pop(), runner))
+
+        orchestrator = Orchestrator(orchestrator_id=policy.orchestrator_id,
+                                    signer=handoff_signer,
+                                    gateway=gateway, workers=endpoints,
+                                    on_admitted=_admission_recorder(
+                                        gateway=gateway, recorder=recorder),
+                                    job_ledger=job_ledger)
+        verifier = ResultVerifier(verifier_id=verifier_id,
+                                  handoff_verifier=handoff_verifier,
+                                  worker_verifier=worker_authority.verifier())
+        pending = PendingJobs()
+
+        submit, complete = _submitter(
+            orchestrator=orchestrator, verifier=verifier,
+            recorder=recorder, policy=policy,
+            handoff_verifier=handoff_verifier, now=now, pending=pending)
+        entry = HttpEntry(
+            registry=(PrincipalRegistry.from_api_keys(api_keys) if api_keys is not None
+                      else PrincipalRegistry(principals)),
+            submit=submit, complete=complete, job_ids=job_ids,
+        )
+        return Service(
+            entry=entry, orchestrator=orchestrator, gateway=gateway,
+            verifier=verifier, audit=audit, chain=chain, anchor=anchor,
+            policy=policy, keys=keys, handoff_verifier=handoff_verifier,
+            approvals=approvals, pending=pending,
+            clock=now, _recorder=recorder,
+        )
+    except BaseException:
+        if isinstance(anchor, AnchorProcess):
+            anchor.close()
+        raise
 
 
 def _admission_recorder(*, gateway: Gateway,

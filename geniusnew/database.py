@@ -18,6 +18,7 @@ from hashlib import sha256
 from pathlib import Path
 import threading
 import time
+from weakref import WeakKeyDictionary
 
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
@@ -25,7 +26,8 @@ from psycopg.conninfo import conninfo_to_dict
 from .contracts import ContractError
 from .orchestrator import JobLedger, Reservation
 
-_MIGRATIONS = ((1, "0001_core_foundation.sql"),)
+_MIGRATIONS = ((1, "0001_core_foundation.sql"),
+               (4, "0004_audit_chain.sql"))
 _MIGRATION_DIR = Path(__file__).with_name("migrations")
 # Serialize competing migration processes, including the first installation.
 _MIGRATION_LOCK = 0x47454E4955534231
@@ -35,16 +37,29 @@ _MIGRATION_LOCK = 0x47454E4955534231
 _MAX_TIME = 4102444800
 _MAX_JOB_ID_BYTES = 128
 
-_CORE_TABLES = ("schema_migrations", "job_ledger", "acceptance_ledger")
+_CORE_TABLES = ("schema_migrations", "job_ledger", "acceptance_ledger",
+                "audit_chain", "audit_heads")
 # What the runtime role holds on each Core table, and nothing else
 # (docs/DATABASE.md §10). An owner or a superuser holds every one of them.
 _RUNTIME_PRIVILEGES = {
     "schema_migrations": frozenset({"SELECT"}),
     "job_ledger": frozenset({"SELECT", "INSERT", "UPDATE"}),
     "acceptance_ledger": frozenset({"SELECT", "INSERT"}),
+    "audit_chain": frozenset({"SELECT", "INSERT"}),
+    "audit_heads": frozenset({"SELECT", "INSERT"}),
 }
 _TABLE_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE",
                      "REFERENCES", "TRIGGER")
+
+
+_CONNECTION_LOCKS = WeakKeyDictionary()
+_CONNECTION_LOCKS_LOCK = threading.Lock()
+
+
+def connection_lock(connection):
+    """Serialize all users of a shared connection, including outer transactions."""
+    with _CONNECTION_LOCKS_LOCK:
+        return _CONNECTION_LOCKS.setdefault(connection, threading.RLock())
 
 
 def _fail(message: str) -> None:
@@ -103,6 +118,10 @@ def _check_tables(connection) -> None:
                        "reserved_at, updated_at, expires_at FROM public.job_ledger LIMIT 0")
     connection.execute("SELECT handoff_sha256, job_id, handoff_wire, result_sha256, "
                        "result_wire, accepted_at FROM public.acceptance_ledger LIMIT 0")
+    connection.execute("SELECT index, previous_hash, record_hash, event "
+                       "FROM public.audit_chain LIMIT 0")
+    connection.execute("SELECT count, version, head_hash, signature, created_at "
+                       "FROM public.audit_heads LIMIT 0")
 
 
 def _check_runtime_role(connection) -> None:
@@ -206,7 +225,7 @@ class PostgresJobLedger(JobLedger):
             _fail("job ledger connection must be in autocommit mode")
         self._connection = connection
         # The connection is shared by the service's request threads.
-        self._lock = threading.Lock()
+        self._lock = connection_lock(connection)
 
     def is_burned(self, job_id: str) -> bool:
         return self._execute("SELECT 1 FROM public.job_ledger WHERE job_id = %s",
@@ -251,7 +270,8 @@ def migrate(dsn: str) -> None:
     """Apply only a known missing suffix; never rewrite history or repair damage."""
     expected = migration_files()
     with _connect(dsn) as connection:
-        # B1 has one migration. Its DDL, grants and history commit together.
+        # Install the known suffix under the migration lock; DDL, grants and
+        # history commit together.
         with connection.transaction():
             connection.execute("SELECT pg_advisory_xact_lock(%s)", (_MIGRATION_LOCK,))
             exists = connection.execute(

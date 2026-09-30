@@ -19,9 +19,11 @@ import argparse
 import signal
 import sys
 import threading
-from typing import Sequence
+from typing import Callable, Sequence
 
 from .anchor_process import AnchorClient
+from .audit import AuditAuthority
+from .audit_chain import AuditChain
 from .config import ServiceConfig, load_config, read_database_dsn
 from .contracts import ContractError
 from .http_entry import PrincipalRegistry, serve
@@ -34,32 +36,32 @@ def _fail(message: str) -> None:
 
 
 def _refuse_discontinuous_start(service: Service) -> None:
-    """Refuse to start behind an anchor that remembers more than this chain holds.
+    """Check continuity again before publishing the listener.
 
-    The audit chain lives in process memory until it is persisted (gate B5 in
-    `docs/ROADMAP-V02.md`); the anchor's state file survives a restart. After a
-    restart the anchor therefore holds a head this empty chain cannot extend, and
-    every request would be refused one by one. Starting anyway would advertise a
-    service that cannot serve, and resetting the anchor is exactly the rollback
-    it exists to prevent. So the start is refused, and says why.
+    Persistent construction already verified every stored event and signed head
+    against the anchor before creating runners. This also refuses an explicitly
+    injected process-local chain behind a nonempty persistent anchor.
     """
     committed, _ = service.anchor.committed
     held = len(service.chain.records)
     if committed > held:
         _fail(f"the anchor has committed {committed} audit records but this process "
-              f"holds {held}; the audit chain is not persisted yet (gate B5), so a "
-              "restart cannot continue it")
+              f"holds {held}; the service cannot continue the anchored history")
 
 
 def _serve(config_path: str) -> int:
     config = load_config(config_path)
     from .database import PostgresJobLedger, open_database
+    from .audit_store import PostgresAuditChain
 
     with open_database(config.database_dsn) as connection:
-        return _run_service(config, job_ledger=PostgresJobLedger(connection))
+        return _run_service(config, job_ledger=PostgresJobLedger(connection),
+                            audit_chain_factory=lambda audit: PostgresAuditChain(
+                                connection, authority=audit))
 
 
-def _run_service(config: ServiceConfig, *, job_ledger: JobLedger) -> int:
+def _run_service(config: ServiceConfig, *, job_ledger: JobLedger,
+                 audit_chain_factory: Callable[[AuditAuthority], AuditChain] | None = None) -> int:
     if config.anchor_socket is not None:
         # Served anchor (gate C2): its lifecycle is not ours, so `service.close`
         # leaves it running and `_refuse_discontinuous_start` asks it.
@@ -67,11 +69,13 @@ def _run_service(config: ServiceConfig, *, job_ledger: JobLedger) -> int:
                               reply_public_key=config.anchor_reply_public_key)
         service = build(root_secret=config.root_secret, policy=config.policy,
                         principals=config.principals, workers=config.workers,
-                        anchor=anchor, job_ledger=job_ledger)
+                        anchor=anchor, job_ledger=job_ledger,
+                        audit_chain_factory=audit_chain_factory)
     else:
         service = build(root_secret=config.root_secret, policy=config.policy,
                         principals=config.principals, workers=config.workers,
-                        anchor_state=config.anchor_state, job_ledger=job_ledger)
+                        anchor_state=config.anchor_state, job_ledger=job_ledger,
+                        audit_chain_factory=audit_chain_factory)
     try:
         _refuse_discontinuous_start(service)
         server = serve(service.entry, host=config.listen_host, port=config.listen_port)

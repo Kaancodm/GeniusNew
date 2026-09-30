@@ -223,21 +223,59 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(self.post(API_KEY, {"text": "after restart"})[0], 202)
         self.stop()
 
-    def test_a_restart_after_jobs_is_refused_and_this_is_the_boundary(self):
-        """Held open until the audit chain is persisted (docs/ROADMAP-V02.md, B5).
-
-        The anchor's state file survives the restart; the chain does not. The
-        restarted process refuses to start rather than run behind an anchor it
-        cannot extend. When B5 lands, this test turns into "a restart continues
-        the chain", together with SECURITY.md.
-        """
+    def test_a_restart_after_jobs_continues_the_durable_anchored_chain(self):
         self.start()
         self.assertEqual(self.post(API_KEY, {"text": "first"})[0], 202)
         self.stop()
+        with self.db.connect() as connection:
+            first = connection.execute("SELECT count, head_hash FROM audit_heads "
+                                       "ORDER BY count DESC LIMIT 1").fetchone()
+            signed = connection.execute("SELECT signature FROM audit_heads "
+                                        "WHERE count=%s", (first[0],)).fetchone()
+        self.process.stderr.close()
+        self.stderr = b""
+        self.start()
+        self.assertEqual(self.post(API_KEY, {"text": "after restart"})[0], 202)
+        self.stop()
+        with self.db.connect() as connection:
+            last = connection.execute("SELECT count, head_hash FROM audit_heads "
+                                      "ORDER BY count DESC LIMIT 1").fetchone()
+            self.assertEqual(connection.execute(
+                "SELECT signature FROM audit_heads WHERE count=%s",
+                (first[0],)).fetchone(), signed)
+            self.assertEqual(connection.execute(
+                "SELECT record_hash FROM audit_chain WHERE index=%s",
+                (first[0] - 1,)).fetchone(), (first[1],))
+        self.assertEqual((first[0], last[0]), (4, 8))
+
+    def test_an_unsigned_sql_audit_suffix_refuses_startup_without_recovery_signing(self):
+        self.start()
+        self.assertEqual(self.post(API_KEY, {"text": "first"})[0], 202)
+        self.stop()
+        with self.db.connect() as connection:
+            previous = connection.execute(
+                "SELECT record_hash, event FROM audit_chain ORDER BY index DESC LIMIT 1"
+            ).fetchone()
+            connection.execute("INSERT INTO audit_chain VALUES (4,%s,%s,%s)",
+                               (previous[0], "f" * 64, previous[1]))
         result = run_module("serve", "--config", str(self.config))
         self.assertEqual(result.returncode, 2)
-        self.assertIn(b"refused: the anchor has committed", result.stderr)
-        self.assertIn(b"not persisted yet (gate B5)", result.stderr)
+        self.assertIn(b"records and signed heads are not one-to-one", result.stderr)
+        self.assertNotIn(b"listening on", result.stderr)
+        with self.db.connect() as connection:
+            self.assertEqual(connection.execute("SELECT count(*) FROM audit_heads").fetchone(),
+                             (4,))
+
+    def test_changed_audit_bytes_with_the_same_json_value_refuse_startup(self):
+        self.start()
+        self.assertEqual(self.post(API_KEY, {"text": "first"})[0], 202)
+        self.stop()
+        with self.db.connect() as connection:
+            event = connection.execute("SELECT event FROM audit_chain WHERE index=0").fetchone()[0]
+            connection.execute("UPDATE audit_chain SET event=%s WHERE index=0", (b" " + event,))
+        result = run_module("serve", "--config", str(self.config))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(b"not byte-exact canonical JSON", result.stderr)
         self.assertNotIn(b"listening on", result.stderr)
 
     def use_served_anchor(self, *, reply_key=None, run=True):
