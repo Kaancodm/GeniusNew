@@ -604,6 +604,9 @@ class Orchestrator:
             # the same database may have burned the id since the check above.
             if not self._ledger.reserve_admitted(
                     reservation, approval_record_hash=approval_record_hash):
+                if (self._ledger.is_full()
+                        and not self._ledger.is_burned(reservation.job_id)):
+                    _deny("JOB_LEDGER_FULL", now=now)
                 _deny("JOB_ID_REUSED", now=now)
 
     def _run(self, endpoint: WorkerEndpoint, permit: DispatchPermit, *,
