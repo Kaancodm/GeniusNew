@@ -60,7 +60,9 @@ anchor check when the anchor cannot be reached.
 from __future__ import annotations
 
 import argparse
-from contextlib import suppress
+from contextlib import contextmanager, suppress
+import errno
+import hashlib
 import json
 import os
 import re
@@ -232,6 +234,34 @@ def _load(path: str | None, verifier: AuditVerifier) -> AuditAnchor:
     return AuditAnchor.resumed(head, authority=verifier)
 
 
+@contextmanager
+def _state_lock(path: str | None):
+    """Keep one live anchor owner for each durable state history."""
+    if path is None:
+        yield
+        return
+    # A Linux abstract socket is released with the process, even if the state
+    # directory does not exist yet. A file lock beside the state would let one
+    # process start before that directory exists and a second start after it
+    # appears under a different lock inode.
+    digest = hashlib.sha256(os.fsencode(os.path.realpath(path))).hexdigest().encode("ascii")
+    address = b"\x00geniusnew-anchor-state-" + digest
+    try:
+        lease = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    except OSError:
+        _fail("anchor state lease cannot be acquired")
+    try:
+        try:
+            lease.bind(address)
+        except OSError as error:
+            if error.errno == errno.EADDRINUSE:
+                _fail("anchor state is already in use")
+            _fail("anchor state lease cannot be acquired")
+        yield
+    finally:
+        lease.close()
+
+
 def _append(path: str, head: AuditHead) -> None:
     """Durably record a head before the commit is answered."""
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
@@ -267,13 +297,19 @@ def _serve(requests: BinaryIO, replies: BinaryIO, state_path: str | None = None)
     except ContractError:
         return 1
     try:
-        anchor = _load(state_path, verifier)
+        with _state_lock(state_path):
+            return _serve_locked(requests, replies, state_path, verifier)
     except ContractError as refusal:
         # Answered, not just exited: the writer should learn why it has no
         # anchor, and starting at zero instead would be the silent reset.
         replies.write(_frame(_refusal(refusal), _MAX_REPLY_BYTES))
         replies.flush()
         return 1
+
+
+def _serve_locked(requests: BinaryIO, replies: BinaryIO, state_path: str | None,
+                  verifier: AuditVerifier) -> int:
+    anchor = _load(state_path, verifier)
     replies.write(_frame(_committed(anchor.committed), _MAX_REPLY_BYTES))
     replies.flush()
     while (data := _read_frame(requests)) is not None:
@@ -444,6 +480,13 @@ def _run_server(*, socket_path: str, state_path: str, key_path: str,
     """Serve one anchor on a socket until stopped. Refuses before binding."""
     socket_path = _absolute(socket_path, "socket path")
     state_path = _absolute(state_path, "state path")
+    with _state_lock(state_path):
+        return _run_server_locked(socket_path=socket_path, state_path=state_path,
+                                  key_path=key_path, audit_public_key=audit_public_key)
+
+
+def _run_server_locked(*, socket_path: str, state_path: str, key_path: str,
+                       audit_public_key: str) -> int:
     key = _reply_key(_absolute(key_path, "key path"))
     verifier = _verifier_from({"kind": "init", "public_key": audit_public_key})
     anchor = _load(state_path, verifier)

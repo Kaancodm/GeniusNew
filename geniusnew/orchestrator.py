@@ -599,6 +599,8 @@ class Orchestrator:
             # reserves. The local ledger's own lock also enforces the bound
             # when several orchestrators share it.
             if self._ledger.is_full():
+                if self._ledger.is_burned(reservation.job_id):
+                    _deny("JOB_ID_REUSED", now=now)
                 _deny("JOB_LEDGER_FULL", now=now)
             # Decides the race this lock cannot see: another orchestrator on
             # the same database may have burned the id since the check above.

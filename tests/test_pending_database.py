@@ -90,7 +90,8 @@ class DurablePendingTest(ApprovalFixture, unittest.TestCase):
             "SELECT state FROM approval_records").fetchall(), [("GRANTED",)])
 
     def test_database_trigger_rejects_a_consumption_at_token_expiry(self):
-        _, approvals = self.stores()
+        pending, approvals = self.stores()
+        self.add(pending)
         scope = self.scope()
         grant = approvals.grant(scope, now=101, ttl_seconds=60)
         digest = hashlib.sha256(grant.token).hexdigest()
@@ -108,6 +109,75 @@ class DurablePendingTest(ApprovalFixture, unittest.TestCase):
                     (digest, record_hash, canonical(scope.to_dict()), grant.issued_at,
                      grant.expires_at, "CONSUMED", grant.expires_at,
                      grant.record_hash))
+
+    def test_forged_consumed_tip_without_reservation_refuses_recovery(self):
+        pending, approvals = self.stores()
+        self.add(pending)
+        scope = self.scope()
+        grant = approvals.grant(scope, now=101, ttl_seconds=60)
+        digest = hashlib.sha256(grant.token).hexdigest()
+        record_hash = _record_hash(
+            token_digest=bytes.fromhex(digest), scope=scope,
+            issued_at=grant.issued_at, expires_at=grant.expires_at,
+            state="CONSUMED", changed_at=102,
+            previous_hash=grant.record_hash)
+        with self.db.connect() as owner:
+            owner.execute(
+                "INSERT INTO public.approval_records "
+                "(token_digest,record_hash,scope,issued_at,expires_at,state,"
+                "changed_at,previous_hash) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                (digest, record_hash, canonical(scope.to_dict()), grant.issued_at,
+                 grant.expires_at, "CONSUMED", 102, grant.record_hash))
+            owner.execute("UPDATE public.approval_tokens SET current_record_hash=%s "
+                          "WHERE token_digest=%s", (record_hash, digest))
+        with self.assertRaisesRegex(ContractError, "consumed approval.*reserved job"):
+            database.PostgresApprovalStore(self.connection)
+
+    def test_two_consumed_receipts_for_one_job_refuse_recovery(self):
+        pending, approvals = self.stores()
+        self.add(pending)
+        scope = self.scope()
+        first = approvals.grant(scope, now=101, ttl_seconds=60)
+        second = approvals.grant(scope, now=101, ttl_seconds=60)
+        approvals.consume(first.token, scope, now=102, subject="subject-demo")
+        digest = hashlib.sha256(second.token).hexdigest()
+        record_hash = _record_hash(
+            token_digest=bytes.fromhex(digest), scope=scope,
+            issued_at=second.issued_at, expires_at=second.expires_at,
+            state="CONSUMED", changed_at=102,
+            previous_hash=second.record_hash)
+        with self.db.connect() as owner:
+            owner.execute(
+                "INSERT INTO public.approval_records "
+                "(token_digest,record_hash,scope,issued_at,expires_at,state,"
+                "changed_at,previous_hash) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                (digest, record_hash, canonical(scope.to_dict()), second.issued_at,
+                 second.expires_at, "CONSUMED", 102, second.record_hash))
+            owner.execute("UPDATE public.approval_tokens SET current_record_hash=%s "
+                          "WHERE token_digest=%s", (record_hash, digest))
+        with self.assertRaisesRegex(ContractError, "consumed approval.*reserved job"):
+            database.PostgresApprovalStore(self.connection)
+
+    def test_consumed_receipt_without_its_job_refuses_recovery(self):
+        pending, approvals = self.stores()
+        self.add(pending)
+        scope = self.scope()
+        grant = approvals.grant(scope, now=101, ttl_seconds=60)
+        approvals.consume(grant.token, scope, now=102, subject="subject-demo")
+        with self.db.connect() as owner, owner.transaction():
+            owner.execute("SET LOCAL session_replication_role = replica")
+            owner.execute("DELETE FROM public.job_ledger WHERE job_id='job-demo'")
+        with self.assertRaisesRegex(ContractError, "consumed approval.*reserved job"):
+            database.PostgresApprovalStore(self.connection)
+
+    def test_grant_rechecks_that_its_job_is_still_pending(self):
+        pending, approvals = self.stores()
+        self.add(pending)
+        pending.refuse("job-demo", "subject-demo", now=101)
+        with self.assertRaisesRegex(ContractError, "pending job"):
+            approvals.grant(self.scope(), now=102, ttl_seconds=30)
+        self.assertEqual(self.connection.execute(
+            "SELECT count(*) FROM public.approval_records").fetchone(), (0,))
 
     def test_wrong_token_and_wrong_scope_leave_both_rows_untouched(self):
         pending, approvals = self.stores()
@@ -132,7 +202,8 @@ class DurablePendingTest(ApprovalFixture, unittest.TestCase):
         self.assertEqual(self.rows(), [("PENDING_APPROVAL", None)])
 
     def test_approval_transition_rejects_a_boolean_time_before_sql(self):
-        _, approvals = self.stores()
+        pending, approvals = self.stores()
+        self.add(pending)
         grant = approvals.grant(self.scope(), now=101, ttl_seconds=60)
         with self.assertRaisesRegex(ContractError, "approval time is invalid"):
             approvals.revoke(grant.token, self.scope(), now=True)
@@ -140,6 +211,8 @@ class DurablePendingTest(ApprovalFixture, unittest.TestCase):
             "SELECT count(*) FROM approval_records").fetchone(), (1,))
 
     def test_a_duplicate_generated_token_is_a_collision(self):
+        pending, _ = self.stores()
+        self.add(pending)
         approvals = database.PostgresApprovalStore(
             self.connection, token_source=lambda: b"approval-collision-test-token-00")
         approvals.grant(self.scope(), now=101, ttl_seconds=60)

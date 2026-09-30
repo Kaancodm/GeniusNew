@@ -5,7 +5,7 @@ create table public.audit_chain (
     index bigint primary key check (index >= 0),
     previous_hash char(64) not null,
     record_hash char(64) not null unique,
-    event bytea not null
+    event bytea not null check (octet_length(event) <= 8192)
 );
 
 create table public.audit_heads (
