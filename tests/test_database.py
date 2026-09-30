@@ -5,6 +5,7 @@ from hashlib import sha256
 from pathlib import Path
 import tempfile
 import unittest
+import uuid
 from unittest.mock import patch
 
 import psycopg
@@ -173,6 +174,77 @@ class StartCheckTest(unittest.TestCase):
     def test_a_superuser_is_refused_as_the_runtime(self):
         self.refused("must not be privileged", dsn=self.db.owner_dsn)
 
+    def test_a_runtime_that_can_disable_triggers_is_refused(self):
+        for privilege in ("SET", "ALTER SYSTEM"):
+            with self.subTest(privilege=privilege):
+                self.owner(f"GRANT {privilege} ON PARAMETER session_replication_role TO genius_core")
+                try:
+                    self.refused("must not disable triggers")
+                finally:
+                    self.owner(f"REVOKE {privilege} ON PARAMETER session_replication_role FROM genius_core")
+
+    def test_trigger_bypass_through_a_non_inherited_role_is_refused(self):
+        role = "geniusnew_test_parameter_" + uuid.uuid4().hex
+        self.owner(f"CREATE ROLE {role}",
+                   f"GRANT SET ON PARAMETER session_replication_role TO {role}",
+                   f"GRANT {role} TO genius_core WITH INHERIT FALSE, SET TRUE")
+        try:
+            self.refused("must not disable triggers")
+        finally:
+            self.owner(f"REVOKE {role} FROM genius_core",
+                       f"REVOKE SET ON PARAMETER session_replication_role FROM {role}",
+                       f"DROP ROLE {role}")
+
+    def test_excess_table_or_schema_rights_through_a_non_inherited_role_are_refused(self):
+        role = "geniusnew_test_access_" + uuid.uuid4().hex
+        self.owner(f"CREATE ROLE {role}",
+                   f"GRANT {role} TO genius_core WITH INHERIT FALSE, SET TRUE")
+        try:
+            for grant, revoke, reason in (
+                    (f"GRANT DELETE ON job_ledger TO {role}",
+                     f"REVOKE DELETE ON job_ledger FROM {role}", "documented table privileges"),
+                    (f"GRANT CREATE ON SCHEMA public TO {role}",
+                     f"REVOKE CREATE ON SCHEMA public FROM {role}", "must not create objects")):
+                with self.subTest(grant=grant):
+                    self.owner(grant)
+                    try:
+                        self.refused(reason)
+                    finally:
+                        self.owner(revoke)
+        finally:
+            self.owner(f"REVOKE {role} FROM genius_core", f"DROP ROLE {role}")
+
+    def test_a_runtime_with_server_file_or_program_access_is_refused(self):
+        for role in ("pg_read_server_files", "pg_write_server_files",
+                     "pg_execute_server_program"):
+            with self.subTest(role=role):
+                self.owner(f"GRANT {role} TO genius_core")
+                try:
+                    self.refused("must not be privileged")
+                finally:
+                    self.owner(f"REVOKE {role} FROM genius_core")
+
+    def test_a_runtime_that_can_set_a_privileged_role_is_refused(self):
+        role = "geniusnew_test_privileged_" + uuid.uuid4().hex
+        self.owner(f"CREATE ROLE {role} CREATEROLE",
+                   f"GRANT {role} TO genius_core WITH INHERIT FALSE, SET TRUE")
+        try:
+            self.refused("must not be privileged")
+        finally:
+            self.owner(f"REVOKE {role} FROM genius_core", f"DROP ROLE {role}")
+
+    def test_membership_with_only_documented_rights_starts(self):
+        role = "geniusnew_test_reader_" + uuid.uuid4().hex
+        self.owner(f"CREATE ROLE {role}",
+                   f"GRANT SELECT ON job_ledger TO {role}",
+                   f"GRANT {role} TO genius_core")
+        try:
+            with database.open_database(self.db.runtime_dsn):
+                pass
+        finally:
+            self.owner(f"REVOKE {role} FROM genius_core",
+                       f"REVOKE SELECT ON job_ledger FROM {role}", f"DROP ROLE {role}")
+
     def test_a_runtime_that_owns_a_core_table_is_refused(self):
         # Owner privileges are revoked, so only the ownership itself is left.
         self.owner("ALTER TABLE job_ledger OWNER TO genius_core",
@@ -181,7 +253,7 @@ class StartCheckTest(unittest.TestCase):
         self.refused("must not own the Core tables")
 
     def test_each_privilege_beyond_or_short_of_the_documented_set_is_refused(self):
-        for grant, revoke in (
+        changes = [
                 ("GRANT DELETE ON job_ledger TO genius_core",
                  "REVOKE DELETE ON job_ledger FROM genius_core"),
                 ("GRANT TRIGGER ON job_ledger TO genius_core",
@@ -191,7 +263,12 @@ class StartCheckTest(unittest.TestCase):
                 ("GRANT INSERT ON schema_migrations TO genius_core",
                  "REVOKE INSERT ON schema_migrations FROM genius_core"),
                 ("REVOKE UPDATE ON job_ledger FROM genius_core",
-                 "GRANT UPDATE ON job_ledger TO genius_core")):
+                 "GRANT UPDATE ON job_ledger TO genius_core")]
+        with self.db.connect() as connection:
+            if connection.info.server_version >= 170000:
+                changes.append(("GRANT MAINTAIN ON job_ledger TO genius_core",
+                                "REVOKE MAINTAIN ON job_ledger FROM genius_core"))
+        for grant, revoke in changes:
             with self.subTest(grant=grant):
                 self.owner(grant)
                 self.refused("exactly the documented table privileges")

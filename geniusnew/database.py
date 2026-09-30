@@ -108,10 +108,21 @@ def _check_tables(connection) -> None:
 def _check_runtime_role(connection) -> None:
     """Refuse a runtime role that could undo what the database enforces."""
     privileged = connection.execute(
-        "SELECT rolsuper OR rolbypassrls OR rolcreaterole OR rolcreatedb OR rolreplication "
-        "FROM pg_catalog.pg_roles WHERE rolname = current_user").fetchone()
-    if privileged is None or privileged[0]:
+        "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_roles "
+        "WHERE (rolsuper OR rolbypassrls OR rolcreaterole OR rolcreatedb OR rolreplication "
+        "OR rolname IN ('pg_read_server_files', 'pg_write_server_files', "
+        "'pg_execute_server_program')) "
+        "AND pg_catalog.pg_has_role(current_user, oid, 'MEMBER'))").fetchone()[0]
+    if privileged:
         _fail("database runtime role must not be privileged")
+    # These grants bypass the triggers without any privileged role flag.
+    # Include memberships that need SET ROLE rather than inheriting rights.
+    if connection.execute(
+            "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_roles "
+            "WHERE pg_catalog.pg_has_role(current_user, oid, 'MEMBER') "
+            "AND pg_catalog.has_parameter_privilege("
+            "oid, 'session_replication_role', 'SET, ALTER SYSTEM'))").fetchone()[0]:
+        _fail("database runtime role must not disable triggers")
     # Membership counts: a member of the owning role can alter the table and
     # disable its triggers even after the owner revoked its own privileges.
     owned = connection.execute(
@@ -122,16 +133,23 @@ def _check_runtime_role(connection) -> None:
         (list(_CORE_TABLES),)).fetchone()[0]
     if owned:
         _fail("database runtime role must not own the Core tables")
+    table_privileges = _TABLE_PRIVILEGES
+    if connection.info.server_version >= 170000:
+        table_privileges += ("MAINTAIN",)
     for table, expected in _RUNTIME_PRIVILEGES.items():
         held = frozenset(
-            privilege for privilege in _TABLE_PRIVILEGES
+            privilege for privilege in table_privileges
             if connection.execute(
-                "SELECT pg_catalog.has_table_privilege(current_user, %s, %s)",
+                "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_roles "
+                "WHERE pg_catalog.pg_has_role(current_user, oid, 'MEMBER') "
+                "AND pg_catalog.has_table_privilege(oid, %s, %s))",
                 ("public." + table, privilege)).fetchone()[0])
         if held != expected:
             _fail("database runtime role must hold exactly the documented table privileges")
     if connection.execute(
-            "SELECT pg_catalog.has_schema_privilege(current_user, 'public', 'CREATE')"
+            "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_roles "
+            "WHERE pg_catalog.pg_has_role(current_user, oid, 'MEMBER') "
+            "AND pg_catalog.has_schema_privilege(oid, 'public', 'CREATE'))"
     ).fetchone()[0]:
         _fail("database runtime role must not create objects in the Core schema")
 
