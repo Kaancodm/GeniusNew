@@ -18,6 +18,8 @@ class _StoredRows:
     def execute(self, query):
         if "FROM public.approval_records" in query:
             return iter(self.rows)
+        if "FROM public.job_ledger" in query:
+            return SimpleNamespace(fetchall=lambda: [])
         return SimpleNamespace(fetchall=lambda: [self.pointer])
 
 

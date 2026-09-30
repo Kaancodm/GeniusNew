@@ -406,6 +406,15 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         self.assertEqual(decision.reason_code, 'JOB_LEDGER_FULL')
         self.assertEqual(ledger.job_ids(), frozenset({'job-first'}))
 
+    def test_full_ledger_reports_reused_id_before_capacity(self):
+        ledger = ProcessLocalJobLedger()
+        orchestrator = self.orchestrator_for(job_ledger=ledger)
+        with mock.patch.object(orchestrator_module, '_MAX_JOBS', 1):
+            self.assertTrue(ledger.reserve(reservation(job_id='job-first')))
+            decision = self.denied(orchestrator._reserve,
+                                   reservation(job_id='job-first'), now=110)
+        self.assertEqual(decision.reason_code, 'JOB_ID_REUSED')
+
     def test_two_orchestrators_report_capacity_race_as_ledger_full(self):
         gate = threading.Barrier(2)
 
