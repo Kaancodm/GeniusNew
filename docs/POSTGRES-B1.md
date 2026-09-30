@@ -91,6 +91,15 @@ reicht er ausschließlich einen gespeicherten gültigen Kopf nach. Ein
 unsignierter SQL-Suffix oder ein Anker-Vorlauf verweigert den Start. Die
 Ledger↔Audit-Transaktionen und der bidirektionale Abgleich folgen erst mit B6.
 
+Ein Kind-Anker mit `anchor_state` belegt seine Zustandsdatei während seiner
+Laufzeit exklusiv; eine zweite Instanz mit demselben Pfad verweigert den Start.
+Diese Sperre nutzt den abstrakten Unix-Socket-Namensraum und gilt nur innerhalb
+desselben Linux-Netzwerk-Namespace ([Linux `network_namespaces(7)`](https://man7.org/linux/man-pages/man7/network_namespaces.7.html)).
+Mehrere Core-Instanzen, insbesondere in
+getrennten Netzwerk-Namespaces, müssen einen einzigen separat betriebenen
+Ankerdienst über `anchor_socket` nutzen und dürfen die Zustandsdatei nicht
+zwischen Kind-Ankern teilen.
+
 ## Konfiguration und Migration
 
 `service.database_dsn_file` in der TOML benennt eine absolute Datei außerhalb des
