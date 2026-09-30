@@ -306,6 +306,20 @@ class StartCheckTest(unittest.TestCase):
         with database.open_database(self.db.runtime_dsn):
             pass
 
+    def test_a_completed_job_without_acceptance_is_refused(self):
+        self.owner("INSERT INTO job_ledger VALUES ('job','subject',repeat('a',64), "
+                   "'COMPLETED',100,100,120,160)")
+        self.refused("acceptance ledger and completed jobs do not match")
+
+    def test_an_acceptance_without_its_completed_bound_job_is_refused(self):
+        self.owner("INSERT INTO job_ledger VALUES ('job','subject',repeat('a',64), "
+                   "'EXECUTION_COMMITTED',100,100,110,160)",
+                   "INSERT INTO acceptance_ledger VALUES (repeat('a',64),'job', "
+                   "'handoff'::bytea,repeat('b',64),'result'::bytea,120)",
+                   "ALTER TABLE job_ledger DISABLE TRIGGER job_transition",
+                   "UPDATE job_ledger SET state='EXECUTION_COMMITTED'")
+        self.refused("acceptance ledger and completed jobs do not match")
+
     def test_the_bounds_are_the_orchestrator_s_and_the_audit_contract_s(self):
         from geniusnew import audit, orchestrator
         self.assertEqual(database._MAX_TIME, audit._MAX_OCCURRED_AT)

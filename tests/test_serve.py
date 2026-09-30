@@ -202,7 +202,16 @@ class ServeTest(unittest.TestCase):
             row = connection.execute(
                 "SELECT state, subject FROM job_ledger WHERE job_id = %s",
                 (body["job_id"],)).fetchone()
-        self.assertEqual(row, ("EXECUTION_COMMITTED", "subject-serve"))
+        self.assertEqual(row, ("COMPLETED", "subject-serve"))
+        with self.db.connect(runtime=True) as connection:
+            acceptance = connection.execute(
+                "SELECT a.handoff_sha256, a.handoff_wire, a.result_sha256, a.result_wire "
+                "FROM acceptance_ledger a JOIN job_ledger j "
+                "ON j.job_id=a.job_id AND j.handoff_sha256=a.handoff_sha256 "
+                "WHERE a.job_id=%s AND j.state='COMPLETED'", (body["job_id"],)).fetchone()
+        self.assertIsNotNone(acceptance)
+        self.assertEqual(acceptance[0], hashlib.sha256(acceptance[1]).hexdigest())
+        self.assertEqual(acceptance[2], hashlib.sha256(acceptance[3]).hexdigest())
 
     def test_a_job_runs_end_to_end_and_sigterm_stops_the_service(self):
         self.start()
@@ -230,7 +239,10 @@ class ServeTest(unittest.TestCase):
         from geniusnew.config import load_config
         from geniusnew.orchestrator import ProcessLocalJobLedger
 
+        from geniusnew.verifier import ProcessLocalAcceptanceLedger
+
         ledger = ProcessLocalJobLedger()
+        acceptance_ledger = ProcessLocalAcceptanceLedger()
         text = self.config.read_text().replace("max_connections = 64", "max_connections = 3")
         self.config.write_text(text.replace("max_in_flight = 8", "max_in_flight = 2"))
         config = load_config(str(self.config))
@@ -239,10 +251,11 @@ class ServeTest(unittest.TestCase):
             build_service.return_value.anchor.committed = (0, None)
             build_service.return_value.chain.records = ()
             with self.assertRaisesRegex(RuntimeError, "stop here"):
-                _run_service(config, job_ledger=ledger)
+                _run_service(config, job_ledger=ledger, acceptance_ledger=acceptance_ledger)
         self.assertEqual(build_service.call_args.kwargs["limits"], config.limits)
-        # Both reach the one build call: neither may silently fall back to a default.
+        # Both ledgers must reach the build call without falling back to process memory.
         self.assertIs(build_service.call_args.kwargs["job_ledger"], ledger)
+        self.assertIs(build_service.call_args.kwargs["acceptance_ledger"], acceptance_ledger)
         self.assertEqual(config.limits.max_in_flight, 2)
         self.assertEqual(listener.call_args.kwargs["max_connections"], 3)
         build_service.return_value.close.assert_called_once_with()
