@@ -1,5 +1,6 @@
 """B5 must recover before runners and keep the previously stored signature."""
 
+from dataclasses import replace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -87,3 +88,12 @@ class PersistentAuditWiringTest(Fixture, unittest.TestCase):
                     build(**options, audit_chain_factory=lambda audit: chain,
                           runner_factory=runner)
             runner.assert_not_called()
+
+    def test_the_listener_guard_also_refuses_an_explicit_process_local_chain_behind_the_anchor(self):
+        from geniusnew.__main__ import _refuse_discontinuous_start
+
+        chain, authority = self.persisted()
+        anchor = AuditAnchor.resumed(chain.saved_head, authority=authority.verifier())
+        service = replace(self.service, anchor=anchor)
+        with self.assertRaisesRegex(ContractError, "cannot continue the anchored history"):
+            _refuse_discontinuous_start(service)

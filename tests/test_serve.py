@@ -179,7 +179,7 @@ class ServeTest(unittest.TestCase):
 
     def test_newer_migration_is_refused_before_listener_and_anchor(self):
         with self.db.connect() as connection:
-            connection.execute("INSERT INTO schema_migrations VALUES (2, repeat('a',64), 1)")
+            connection.execute("INSERT INTO schema_migrations VALUES (9999, repeat('a',64), 1)")
         self.assert_database_start_refused("unknown or out-of-order database migration")
 
     def test_migrate_command_uses_its_separate_private_dsn_file(self):
@@ -333,12 +333,18 @@ class ServeTest(unittest.TestCase):
         self.assert_job_persisted(body)
         # Stopping the service does not stop an anchor it did not start.
         self.assertIsNone(self.anchor_process.poll())
-        result = run_module("serve", "--config", str(self.config))
-        # The chain is not persisted yet (gate B5): a new history behind the
-        # surviving anchor is refused instead of begun silently.
-        self.assertEqual(result.returncode, 2)
-        self.assertIn(b"refused: the anchor has committed", result.stderr)
-        self.assertNotIn(b"listening on", result.stderr)
+        self.process.stderr.close()
+        self.stderr = b""
+        self.start()
+        status, body = self.post(API_KEY, {"text": "after restart"})
+        self.assertEqual(status, 202, body)
+        self.assertEqual(body["status"], "SUCCEEDED")
+        self.stop()
+        self.assert_job_persisted(body)
+        self.assertIsNone(self.anchor_process.poll())
+        with self.db.connect() as connection:
+            self.assertEqual(connection.execute(
+                "SELECT max(count) FROM audit_heads").fetchone(), (8,))
 
     def test_a_served_anchor_that_is_not_running_refuses_the_start(self):
         self.use_served_anchor(run=False)
