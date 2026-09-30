@@ -197,12 +197,20 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout + result.stderr, b"")
 
+    def assert_job_persisted(self, body):
+        with self.db.connect(runtime=True) as connection:
+            row = connection.execute(
+                "SELECT state, subject FROM job_ledger WHERE job_id = %s",
+                (body["job_id"],)).fetchone()
+        self.assertEqual(row, ("EXECUTION_COMMITTED", "subject-serve"))
+
     def test_a_job_runs_end_to_end_and_sigterm_stops_the_service(self):
         self.start()
         status, body = self.post(API_KEY, {"text": PAYLOAD_CANARY})
         self.assertEqual(status, 202, body)
         self.assertEqual(body["status"], "SUCCEEDED")
         self.stop()
+        self.assert_job_persisted(body)
         self.assertIn(b"stopping", self.stderr)
         for canary in (ROOT_SECRET, API_KEY, PAYLOAD_CANARY.encode()):
             self.assertNotIn(canary, self.stderr)
@@ -220,7 +228,9 @@ class ServeTest(unittest.TestCase):
     def test_the_configured_limits_reach_the_service_and_the_listener(self):
         from geniusnew.__main__ import _run_service
         from geniusnew.config import load_config
+        from geniusnew.orchestrator import ProcessLocalJobLedger
 
+        ledger = ProcessLocalJobLedger()
         text = self.config.read_text().replace("max_connections = 64", "max_connections = 3")
         self.config.write_text(text.replace("max_in_flight = 8", "max_in_flight = 2"))
         config = load_config(str(self.config))
@@ -229,8 +239,10 @@ class ServeTest(unittest.TestCase):
             build_service.return_value.anchor.committed = (0, None)
             build_service.return_value.chain.records = ()
             with self.assertRaisesRegex(RuntimeError, "stop here"):
-                _run_service(config)
+                _run_service(config, job_ledger=ledger)
         self.assertEqual(build_service.call_args.kwargs["limits"], config.limits)
+        # Both reach the one build call: neither may silently fall back to a default.
+        self.assertIs(build_service.call_args.kwargs["job_ledger"], ledger)
         self.assertEqual(config.limits.max_in_flight, 2)
         self.assertEqual(listener.call_args.kwargs["max_connections"], 3)
         build_service.return_value.close.assert_called_once_with()
@@ -315,8 +327,11 @@ class ServeTest(unittest.TestCase):
     def test_a_job_runs_behind_a_served_anchor_that_outlives_the_service(self):
         self.use_served_anchor()
         self.start()
-        self.assertEqual(self.post(API_KEY, {"text": "first"})[0], 202)
+        status, body = self.post(API_KEY, {"text": "first"})
+        self.assertEqual(status, 202, body)
+        self.assertEqual(body["status"], "SUCCEEDED")
         self.stop()
+        self.assert_job_persisted(body)
         # Stopping the service does not stop an anchor it did not start.
         self.assertIsNone(self.anchor_process.poll())
         result = run_module("serve", "--config", str(self.config))

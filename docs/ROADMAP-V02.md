@@ -62,7 +62,7 @@ anpassen.
 | --- | --- | --- | --- |
 | B0 | `docs/DATABASE.md` gemergt, inklusive der Review-Befunde aus #56 (Vereinigungsmenge dort) | Doku; Claude-Security-Review, Freigabe durch Kaan | erledigt: #70 gemergt (Claude DB Review APPROVED an `dc0e825`, Freigabe Kaan 29.09.2026) |
 | B1 | `0001_core_foundation`: PostgreSQL-Dienst in der CI, `psycopg` hash-gepinnt, Migrationen mit Checksum, Start verweigert bei fehlender DB oder falscher Migration | Start-Refusal-Tests gegen echtes PostgreSQL | erledigt: #78 (Codex) gemergt `706e76d`, Claude DB Review APPROVED an `99ef6e3`; Auflagen für B2 im Review auf #78 |
-| B2 | Job-Ledger persistent: Tests A–C aus Konflikt 4, Runtime ohne DELETE, nur Vorwärtsübergänge | Ledger-Grenztest in `test_orchestrator.py` umgekehrt | offen |
+| B2 | Job-Ledger persistent: Tests A–C aus Konflikt 4, Runtime ohne DELETE, nur Vorwärtsübergänge | Ledger-Grenztest in `test_orchestrator.py` umgekehrt | erledigt: #90 (Codex, auf Claudes Übergabe #83) gemergt (`9a797b1`), Claude DB Review APPROVED an `ec64894`; Runtime-Rechteprüfung E1/E2 beim Start |
 | B3 | Annahme-Ledger persistent, Annahme nur aus `EXECUTION_COMMITTED` | Ledger-Grenztest in `test_verifier.py` umgekehrt | offen |
 | B4 | Wartende Jobs und Approval-Speicher persistent, append-only, verzweigungsfrei | Neustart verliert keinen wartenden Job; verbrauchter Token bleibt verbraucht | offen |
 | B5 | Audit-Kette persistent; signierter Kopf in derselben Transaktion; Neustart verankert nur bereits signierte Köpfe nach | Per SQL angehängtes Event → Start verweigert | offen |

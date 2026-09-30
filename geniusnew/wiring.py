@@ -59,7 +59,7 @@ from .gateway import (ADMISSION_REASON_CODE, DispatchPermit, Gateway, GatewayRej
 from .http_entry import HttpEntry, HttpLimits, PrincipalRegistry
 from .isolation import IsolatedWorkerRunner
 from .keys import ServiceKeys, derive_keys
-from .orchestrator import Denied, DispatchAttempted, Orchestrator, WorkerEndpoint
+from .orchestrator import Denied, DispatchAttempted, JobLedger, Orchestrator, WorkerEndpoint
 from .results import WorkerAuthority, handoff_digest
 from .verifier import Rejected, ResultVerifier
 from .workers import Worker, WorkerRunner
@@ -216,7 +216,8 @@ def build(*, root_secret: bytes, policy: Policy,
           runner_factory: Callable[..., WorkerRunner] | None = None,
           anchor: AuditAnchor | None = None,
           anchor_state: str | None = None,
-          limits: HttpLimits | None = None) -> Service:
+          limits: HttpLimits | None = None,
+          job_ledger: JobLedger | None = None) -> Service:
     """Assemble one service. The only function that knows all the parts.
 
     The default anchor is an `AnchorProcess`, persisted to `anchor_state` when
@@ -230,6 +231,10 @@ def build(*, root_secret: bytes, policy: Policy,
 
     `limits` bounds the entry's rate and in-flight jobs; its `max_connections`
     belongs to the listener, which the caller starts with `http_entry.serve`.
+
+    Without `job_ledger` the orchestrator burns job ids in this process only,
+    which is what the demo and most tests want. The server entry passes the
+    PostgreSQL ledger, so a restart remembers every id it burned.
     """
     if (api_keys is None) == (principals is None):
         _fail("pass exactly one of api_keys or principals")
@@ -291,7 +296,8 @@ def build(*, root_secret: bytes, policy: Policy,
                                 signer=handoff_signer,
                                 gateway=gateway, workers=endpoints,
                                 on_admitted=_admission_recorder(
-                                    gateway=gateway, recorder=recorder))
+                                    gateway=gateway, recorder=recorder),
+                                job_ledger=job_ledger)
     verifier = ResultVerifier(verifier_id=verifier_id,
                               handoff_verifier=handoff_verifier,
                               worker_verifier=worker_authority.verifier())
