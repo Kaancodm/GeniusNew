@@ -579,37 +579,25 @@ class Orchestrator:
             _fail(f"job_id must be at most {_MAX_JOB_ID_BYTES} bytes")
         return job_id
 
-    def _available(self, job_id: str, *, now: int, subject: str | None = None,
+    def _available(self, job_id: str, *, now: int, subject: str,
                    handoff_sha256: str | None = None) -> None:
         """Refuse an unavailable dispatch before anything is spent."""
         with self._lock:
-            if subject is None:
-                self._check_available(job_id, now=now)
-            else:
-                if not self._ledger.dispatch_available(
-                        job_id, subject=subject, handoff_sha256=handoff_sha256):
-                    _deny("JOB_ID_REUSED", now=now)
-                if self._ledger.is_full():
-                    _deny("JOB_LEDGER_FULL", now=now)
+            if not self._ledger.dispatch_available(
+                    job_id, subject=subject, handoff_sha256=handoff_sha256):
+                _deny("JOB_ID_REUSED", now=now)
+            if self._ledger.is_full():
+                _deny("JOB_LEDGER_FULL", now=now)
 
     def _reserve(self, reservation: Reservation, *, now: int,
                  approval_record_hash: str | None = None) -> None:
         """Burn one job id, or confirm the gateway's durable reservation."""
         with self._lock:
-            if approval_record_hash is None:
-                self._check_available(reservation.job_id, now=now)
             # Decides the race this lock cannot see: another orchestrator on
             # the same database may have burned the id since the check above.
             if not self._ledger.reserve_admitted(
                     reservation, approval_record_hash=approval_record_hash):
                 _deny("JOB_ID_REUSED", now=now)
-
-    def _check_available(self, job_id: str, *, now: int) -> None:
-        """Whether this id could be burned right now. The caller holds the lock."""
-        if self._ledger.is_burned(job_id):
-            _deny("JOB_ID_REUSED", now=now)
-        if self._ledger.is_full():
-            _deny("JOB_LEDGER_FULL", now=now)
 
     def _run(self, endpoint: WorkerEndpoint, permit: DispatchPermit, *,
              now: int) -> bytes:
