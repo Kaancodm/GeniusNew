@@ -72,16 +72,17 @@ def _run_service(config: ServiceConfig, *, job_ledger: JobLedger,
                               reply_public_key=config.anchor_reply_public_key)
         service = build(root_secret=config.root_secret, policy=config.policy,
                         principals=config.principals, workers=config.workers,
-                        anchor=anchor, job_ledger=job_ledger,
+                        anchor=anchor, limits=config.limits, job_ledger=job_ledger,
                         acceptance_ledger=acceptance_ledger)
     else:
         service = build(root_secret=config.root_secret, policy=config.policy,
                         principals=config.principals, workers=config.workers,
-                        anchor_state=config.anchor_state, job_ledger=job_ledger,
-                        acceptance_ledger=acceptance_ledger)
+                        anchor_state=config.anchor_state, limits=config.limits,
+                        job_ledger=job_ledger, acceptance_ledger=acceptance_ledger)
     try:
         _refuse_discontinuous_start(service)
-        server = serve(service.entry, host=config.listen_host, port=config.listen_port)
+        server = serve(service.entry, host=config.listen_host, port=config.listen_port,
+                       max_connections=config.limits.max_connections)
     except BaseException:
         service.close()
         raise

@@ -56,7 +56,7 @@ from .contracts import (ContractError, HandoffSigner, HandoffVerifier, Policy, v
                         validate_pending)
 from .gateway import (ADMISSION_REASON_CODE, DispatchPermit, Gateway, GatewayRejected,
                       handoff_from_permit)
-from .http_entry import HttpEntry, PrincipalRegistry
+from .http_entry import HttpEntry, HttpLimits, PrincipalRegistry
 from .isolation import IsolatedWorkerRunner
 from .keys import ServiceKeys, derive_keys
 from .orchestrator import Denied, DispatchAttempted, JobLedger, Orchestrator, WorkerEndpoint
@@ -216,6 +216,7 @@ def build(*, root_secret: bytes, policy: Policy,
           runner_factory: Callable[..., WorkerRunner] | None = None,
           anchor: AuditAnchor | None = None,
           anchor_state: str | None = None,
+          limits: HttpLimits | None = None,
           job_ledger: JobLedger | None = None,
           acceptance_ledger: AcceptanceLedger | None = None) -> Service:
     """Assemble one service. The only function that knows all the parts.
@@ -228,6 +229,9 @@ def build(*, root_secret: bytes, policy: Policy,
     Callers name principals by exactly one of `api_keys` (plaintext keys, hashed
     here) or `principals` (SHA-256 digests to subjects). A server reads the
     digests from its configuration so that no plaintext key has to exist on it.
+
+    `limits` bounds the entry's rate and in-flight jobs; its `max_connections`
+    belongs to the listener, which the caller starts with `http_entry.serve`.
 
     Without `job_ledger` the orchestrator burns job ids in this process only,
     which is what the demo and most tests want. The server entry passes the
@@ -243,6 +247,9 @@ def build(*, root_secret: bytes, policy: Policy,
         _fail("anchor must be an AuditAnchor")
     if anchor is not None and anchor_state is not None:
         _fail("anchor_state configures the default anchor; pass one or the other")
+    if limits is not None and not isinstance(limits, HttpLimits):
+        _fail("limits must be HttpLimits")
+    limits = limits or HttpLimits()
     if not isinstance(policy, Policy):
         _fail("policy is invalid")
     keys = derive_keys(root_secret)
@@ -315,6 +322,8 @@ def build(*, root_secret: bytes, policy: Policy,
         registry=(PrincipalRegistry.from_api_keys(api_keys) if api_keys is not None
                   else PrincipalRegistry(principals)),
         submit=submit, complete=complete, job_ids=job_ids,
+        rate_per_minute=limits.rate_per_minute, burst=limits.burst,
+        max_in_flight=limits.max_in_flight,
     )
     return Service(
         entry=entry, orchestrator=orchestrator, gateway=gateway,
