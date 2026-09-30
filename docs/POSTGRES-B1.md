@@ -1,9 +1,11 @@
 # PostgreSQL-Fundament (Gate B1)
 
-B1 installiert ausschließlich das Schema für `schema_migrations`, `job_ledger` und
-`acceptance_ledger`. Job- und Ergebnisverarbeitung verwenden weiterhin ihre
-prozesslokalen Ledger. Neustartsicherheit, gespeicherte Wire-Prüfungen und
-Audit-Reconciliation folgen in B2–B6; die Grenzen in `SECURITY.md` gelten unverändert.
+B1 installiert das Schema für `schema_migrations`, `job_ledger` und
+`acceptance_ledger`. B2 bindet den Job-Ledger des HTTP-Dienstes an PostgreSQL:
+Eine neue Instanz kann eine bereits persistierte Job-ID nicht erneut dispatchen.
+Der Annahme-Ledger der Ergebnisprüfung bleibt bis B3 prozesslokal. Die Audit-Kette
+ist noch nicht persistiert; nach verarbeiteten Jobs verweigert der Dienst einen
+Neustart (B5). Die verbleibenden Grenzen stehen in `SECURITY.md`.
 
 ## Voraussetzungen und Rollen
 
@@ -29,6 +31,33 @@ Betriebsaufgaben; der Migrationscode legt keine Login-Rollen oder Passwörter an
 
 Die Tests prüfen diese Rechte und Trigger mit SQL über eine echte Runtime-Verbindung.
 B1 nimmt keine Änderungen an einem Server oder Deployment vor.
+
+## B2: persistenter Job-Ledger und Runtime-Startprüfung
+
+`serve` übergibt den `PostgresJobLedger` sowohl beim eigenen als auch beim separat
+betriebenen Anker. Reservierung und Ausführungs-Commit verwenden die Runtime-DSN;
+Jobs verbleiben bis B3 in `EXECUTION_COMMITTED`. Die Demo und Aufrufer von `build`
+ohne DB-Ledger verwenden weiterhin den prozesslokalen Ledger. Persistierte Job-IDs
+werden nicht freigegeben oder nach TTL gelöscht. Eine abgerissene DB-Verbindung
+verweigert weitere Jobs bis zum Dienstneustart; die B5-Neustartgrenze bleibt bestehen.
+
+Vor Anker und Listener verweigert der Dienst eine Runtime-Rolle mit privilegierten
+Rollenflags, Tabellenbesitz, überschüssigen Tabellen-/Schema-Rechten oder Zugriff
+auf Server-Dateien/-Programme. Das gilt auch für Rechte über erreichbare Rollen.
+`SET` oder `ALTER SYSTEM` auf `session_replication_role` sind verboten, weil sie die
+Trigger umgehen; unter PostgreSQL 17 wird zusätzlich `MAINTAIN` geprüft. Bestehende
+Ledger-Zeilen müssen die formalen Digest-, Zeit- und State-Vorgaben erfüllen.
+Verbindlich sind die Runtime-Rechte in `docs/DATABASE.md`, Abschnitt 10.
+
+Die Startprüfung benötigt mindestens **PostgreSQL 15**: Dort wurden die Parameter-
+Rechte und `has_parameter_privilege` eingeführt ([Versionshinweis](https://www.postgresql.org/about/press/presskit15/),
+[Funktion](https://www.postgresql.org/docs/15/functions-info.html)). Ein älterer
+Server wird fail closed mit `database connection or operation failed` abgelehnt.
+Die Tests benötigen **PostgreSQL 16 oder neuer**, da sie Mitgliedschaften mit
+`GRANT ... WITH INHERIT FALSE, SET TRUE` erzeugen
+([PostgreSQL 16 GRANT](https://www.postgresql.org/docs/16/sql-grant.html)).
+Die erfolgreiche Suite wurde für PostgreSQL 16 und 17 belegt; PostgreSQL 15 ist
+hiermit kein getesteter Support-Nachweis.
 
 ## Konfiguration und Migration
 
@@ -63,8 +92,9 @@ gültige Migrationszeitwerte und vorhandene Foundation-Tabellen/-Spalten. Diese
 Prüfung läuft vor Ankerstart und HTTP-Listener. Es gibt keinen automatischen
 Migrationslauf beim Dienststart. libpq-Fehlertexte und DSNs werden nicht ausgegeben.
 
-B1 prüft die Erreichbarkeit beim Start und hält die Verbindung bis zum Dienstende.
-Es koppelt die laufende Job-Verarbeitung noch nicht an Datenbanktransaktionen.
+Der Dienst prüft die Erreichbarkeit beim Start und hält die Verbindung bis zum
+Dienstende. Seit B2 nutzt die laufende Job-Verarbeitung diese Verbindung für
+persistente Reservierungen und Ausführungs-Commits.
 
 ## Lokale Tests und CI
 
