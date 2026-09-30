@@ -157,7 +157,8 @@ class ApprovalStore:
         self._records: dict[bytes, _Record] = {}
         self._lock = RLock()
 
-    def grant(self, scope: ApprovalScope, *, now: int, ttl_seconds: int) -> ApprovalGrant:
+    def _new_grant(self, scope: ApprovalScope, *, now: int,
+                   ttl_seconds: int) -> tuple[bytes, _Record]:
         if not isinstance(scope, ApprovalScope):
             _fail("scope is invalid")
         if scope.origin is not _PROVENANCE:
@@ -178,13 +179,18 @@ class ApprovalStore:
             state=_GRANTED, changed_at=now, previous_hash=None,
         )
         record = _Record(digest, scope, now, expires_at, _GRANTED, now, None, record_hash)
-        with self._lock:
-            if digest in self._records:
-                _fail("approval token collision")
-            self._records[digest] = record
-        return ApprovalGrant(token, scope, now, expires_at, record_hash)
+        return token, record
 
-    def consume(self, token: bytes, scope: ApprovalScope, *, now: int) -> ApprovalReceipt:
+    def grant(self, scope: ApprovalScope, *, now: int, ttl_seconds: int) -> ApprovalGrant:
+        token, record = self._new_grant(scope, now=now, ttl_seconds=ttl_seconds)
+        with self._lock:
+            if record.token_digest in self._records:
+                _fail("approval token collision")
+            self._records[record.token_digest] = record
+        return ApprovalGrant(token, scope, record.issued_at, record.expires_at, record.record_hash)
+
+    def consume(self, token: bytes, scope: ApprovalScope, *, now: int,
+                subject: str | None = None) -> ApprovalReceipt:
         return self._transition(token, scope, now=now, new_state=_CONSUMED, require_unexpired=True)
 
     def revoke(self, token: bytes, scope: ApprovalScope, *, now: int) -> ApprovalReceipt:

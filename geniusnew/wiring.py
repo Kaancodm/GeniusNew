@@ -185,6 +185,8 @@ class Service:
         """
         waiting = self.pending.peek(job_id)
         now = self.clock()
+        if getattr(self.pending, "durable", False) and now >= waiting.handoff.expires_at:
+            self.pending.refuse(job_id, waiting.subject, now=now)
         scope = create_scope(waiting.wire, subject=waiting.subject, job_id=job_id,
                              policy=self.policy, verifier=self.handoff_verifier,
                              now=now)
@@ -216,7 +218,8 @@ def build(*, root_secret: bytes, policy: Policy,
           runner_factory: Callable[..., WorkerRunner] | None = None,
           anchor: AuditAnchor | None = None,
           anchor_state: str | None = None,
-          job_ledger: JobLedger | None = None) -> Service:
+          job_ledger: JobLedger | None = None,
+          database_connection=None) -> Service:
     """Assemble one service. The only function that knows all the parts.
 
     The default anchor is an `AnchorProcess`, persisted to `anchor_state` when
@@ -249,7 +252,13 @@ def build(*, root_secret: bytes, policy: Policy,
     # the public half and could not issue a handoff if it tried.
     handoff_signer = HandoffSigner(integrity_key=keys.integrity_key)
     handoff_verifier = handoff_signer.verifier()
-    approvals = ApprovalStore()
+    if database_connection is None:
+        approvals = ApprovalStore()
+        pending = PendingJobs()
+    else:
+        from .database import PostgresApprovalStore, PostgresPendingJobs
+        approvals = PostgresApprovalStore(database_connection)
+        pending = PostgresPendingJobs(database_connection, policy=policy, verifier=handoff_verifier)
     gateway = Gateway(gateway_id=gateway_id, handoff_verifier=handoff_verifier,
                       approval_store=approvals)
     worker_authority = WorkerAuthority(result_key=keys.result_key,
@@ -294,7 +303,6 @@ def build(*, root_secret: bytes, policy: Policy,
     verifier = ResultVerifier(verifier_id=verifier_id,
                               handoff_verifier=handoff_verifier,
                               worker_verifier=worker_authority.verifier())
-    pending = PendingJobs()
 
     submit, complete = _submitter(
         orchestrator=orchestrator, verifier=verifier,
@@ -378,13 +386,21 @@ def _submitter(*, orchestrator: Orchestrator,
             return run(subject=subject, job_id=job_id, wire=waiting.wire,
                        handoff=waiting.handoff, trace_id=waiting.trace_id,
                        approval_token=approval_token)
+        except Denied as refusal:
+            if (getattr(pending, "durable", False)
+                    and refusal.decision.reason_code != "JOB_ID_REUSED"):
+                pending.refuse(job_id, subject, now=now())
+            raise
         except GatewayRejected:
             # Refused before anything ran — a wrong token, or one for another
             # job. The job's id is not burned and its own approval is not
             # spent, so it stays waiting for the right one. If anchoring the
             # refusal failed instead, this handler is not reached and the
             # pending entry remains consumed conservatively.
-            pending.restore(job_id, waiting)
+            if getattr(pending, "durable", False) and now() >= waiting.handoff.expires_at:
+                pending.refuse(job_id, subject, now=now())
+            else:
+                pending.restore(job_id, waiting)
             raise
 
     def issue_job(*, subject: str, job_id: str, payload: Mapping[str, str]):

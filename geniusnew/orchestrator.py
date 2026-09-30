@@ -71,6 +71,7 @@ another instance's refusal as one's own is the same error in the other direction
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import re
 from abc import ABC, abstractmethod
@@ -250,6 +251,16 @@ class JobLedger(ABC):
     @abstractmethod
     def is_burned(self, job_id: str) -> bool:
         """Whether the id was ever reserved, in any state."""
+
+    def dispatch_available(self, job_id: str, *, subject: str,
+                           handoff_sha256: str | None) -> bool:
+        """Whether this exact dispatch may reach the gateway."""
+        return not self.is_burned(job_id)
+
+    def reserve_admitted(self, reservation: Reservation, *,
+                         approval_record_hash: str | None) -> bool:
+        """Reserve once, or confirm the reservation made by durable consume."""
+        return self.reserve(reservation)
 
     def is_full(self) -> bool:
         """Whether this ledger would refuse any new reservation."""
@@ -467,7 +478,8 @@ class Orchestrator:
         # spends an approval on a job that then does no work at all. The atomic
         # reservation below stays the authority; this only refuses early what it
         # would refuse anyway.
-        self._available(job_id, now=now)
+        digest = hashlib.sha256(wire).hexdigest() if type(wire) is bytes else None
+        self._available(job_id, now=now, subject=subject, handoff_sha256=digest)
 
         # The gateway revalidates these bytes independently and mints the only
         # capability the worker boundary accepts. Its refusals are its own and
@@ -496,7 +508,7 @@ class Orchestrator:
                                   handoff_sha256=handoff_digest(permit.handoff),
                                   expires_at=permit.handoff.expires_at,
                                   reserved_at=now)
-        self._reserve(reservation, now=now)
+        self._reserve(reservation, now=now, approval_record_hash=permit.approval_record_hash)
         # Made before the runner is called, not after it returns: the decision
         # to dispatch is what this component decided, and it stands whether or
         # not the execution then succeeded.
@@ -567,18 +579,29 @@ class Orchestrator:
             _fail(f"job_id must be at most {_MAX_JOB_ID_BYTES} bytes")
         return job_id
 
-    def _available(self, job_id: str, *, now: int) -> None:
-        """Refuse an id that is already unavailable, before anything is spent."""
+    def _available(self, job_id: str, *, now: int, subject: str | None = None,
+                   handoff_sha256: str | None = None) -> None:
+        """Refuse an unavailable dispatch before anything is spent."""
         with self._lock:
-            self._check_available(job_id, now=now)
+            if subject is None:
+                self._check_available(job_id, now=now)
+            else:
+                if not self._ledger.dispatch_available(
+                        job_id, subject=subject, handoff_sha256=handoff_sha256):
+                    _deny("JOB_ID_REUSED", now=now)
+                if self._ledger.is_full():
+                    _deny("JOB_LEDGER_FULL", now=now)
 
-    def _reserve(self, reservation: Reservation, *, now: int) -> None:
-        """Burn one job id, atomically, and keep it burned."""
+    def _reserve(self, reservation: Reservation, *, now: int,
+                 approval_record_hash: str | None = None) -> None:
+        """Burn one job id, or confirm the gateway's durable reservation."""
         with self._lock:
-            self._check_available(reservation.job_id, now=now)
+            if approval_record_hash is None:
+                self._check_available(reservation.job_id, now=now)
             # Decides the race this lock cannot see: another orchestrator on
             # the same database may have burned the id since the check above.
-            if not self._ledger.reserve(reservation):
+            if not self._ledger.reserve_admitted(
+                    reservation, approval_record_hash=approval_record_hash):
                 _deny("JOB_ID_REUSED", now=now)
 
     def _check_available(self, job_id: str, *, now: int) -> None:

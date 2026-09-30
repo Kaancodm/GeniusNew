@@ -1,9 +1,9 @@
-"""Gates B1 and B2: an exact schema history, and the job ledger on top of it.
+"""PostgreSQL schema history, job ledger, pending jobs and approval histories.
 
 Serving never installs or repairs a schema. Only the explicit migration command
 uses the migration owner's credentials; runtime gets SELECT on the history.
-Since B2 the runtime burns job ids in `job_ledger` (`PostgresJobLedger`); the
-acceptance ledger stays unused until B3.
+Pending wires retain their exact signed bytes. Approval consumption, pointer
+advance, pending removal and job reservation share one database transaction.
 
 The start check refuses a runtime role that could undo what the database is
 there to enforce. Triggers that forbid deleting or rewinding a job are worth
@@ -18,14 +18,22 @@ from hashlib import sha256
 from pathlib import Path
 import threading
 import time
+from weakref import WeakKeyDictionary
 
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
-from .contracts import ContractError
+from .approvals import (ApprovalGrant, ApprovalReceipt, ApprovalScope, ApprovalStore,
+                        _Record, _record_hash, _scope_matches)
+from .contracts import (ContractError, HandoffVerifier, Policy, canonical, decode_wire,
+                        validate_pending)
 from .orchestrator import JobLedger, Reservation
+from .wiring import PendingJobs, _Waiting, _MAX_PENDING
 
-_MIGRATIONS = ((1, "0001_core_foundation.sql"),)
+_SCOPE_KEYS = frozenset({"handoff_sha256", "handoff_expires_at", "job_id", "user_id",
+                         "worker_agent_id", "risk_tier", "policy_version", "action"})
+_MIGRATIONS = ((1, "0001_core_foundation.sql"), (2, "0002_pending_jobs.sql"),
+               (3, "0003_approval_store.sql"))
 _MIGRATION_DIR = Path(__file__).with_name("migrations")
 # Serialize competing migration processes, including the first installation.
 _MIGRATION_LOCK = 0x47454E4955534231
@@ -35,13 +43,17 @@ _MIGRATION_LOCK = 0x47454E4955534231
 _MAX_TIME = 4102444800
 _MAX_JOB_ID_BYTES = 128
 
-_CORE_TABLES = ("schema_migrations", "job_ledger", "acceptance_ledger")
+_CORE_TABLES = ("schema_migrations", "job_ledger", "acceptance_ledger", "pending_jobs",
+                "approval_records", "approval_tokens")
 # What the runtime role holds on each Core table, and nothing else
 # (docs/DATABASE.md §10). An owner or a superuser holds every one of them.
 _RUNTIME_PRIVILEGES = {
     "schema_migrations": frozenset({"SELECT"}),
     "job_ledger": frozenset({"SELECT", "INSERT", "UPDATE"}),
     "acceptance_ledger": frozenset({"SELECT", "INSERT"}),
+    "pending_jobs": frozenset({"SELECT", "INSERT", "DELETE"}),
+    "approval_records": frozenset({"SELECT", "INSERT"}),
+    "approval_tokens": frozenset({"SELECT", "INSERT", "UPDATE"}),
 }
 _TABLE_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE",
                      "REFERENCES", "TRIGGER")
@@ -103,6 +115,10 @@ def _check_tables(connection) -> None:
                        "reserved_at, updated_at, expires_at FROM public.job_ledger LIMIT 0")
     connection.execute("SELECT handoff_sha256, job_id, handoff_wire, result_sha256, "
                        "result_wire, accepted_at FROM public.acceptance_ledger LIMIT 0")
+    connection.execute("SELECT job_id, subject, wire, trace_id, expires_at "
+                       "FROM public.pending_jobs LIMIT 0")
+    connection.execute("SELECT " + _APPROVAL_COLUMNS + " FROM public.approval_records LIMIT 0")
+    connection.execute("SELECT token_digest, current_record_hash FROM public.approval_tokens LIMIT 0")
 
 
 def _check_runtime_role(connection) -> None:
@@ -184,6 +200,7 @@ def open_database(dsn: str):
             _check_tables(connection)
             _check_runtime_role(connection)
             _check_job_ledger(connection)
+            _check_approvals(connection)
         yield connection
 
 
@@ -206,11 +223,37 @@ class PostgresJobLedger(JobLedger):
             _fail("job ledger connection must be in autocommit mode")
         self._connection = connection
         # The connection is shared by the service's request threads.
-        self._lock = threading.Lock()
+        self._lock = connection_lock(connection)
 
     def is_burned(self, job_id: str) -> bool:
         return self._execute("SELECT 1 FROM public.job_ledger WHERE job_id = %s",
                              (job_id,), fetch=True) is not None
+
+    def dispatch_available(self, job_id: str, *, subject: str, handoff_sha256: str | None) -> bool:
+        row = self._execute("SELECT state,subject,handoff_sha256 FROM public.job_ledger "
+                            "WHERE job_id=%s", (job_id,), fetch=True)
+        return row is None or row == ("PENDING_APPROVAL", subject, handoff_sha256)
+
+    def reserve_admitted(self, reservation: Reservation, *, approval_record_hash: str | None) -> bool:
+        if approval_record_hash is None:
+            return self.reserve(reservation)
+        row = self._execute(
+            "SELECT r.scope,r.changed_at FROM public.job_ledger j "
+            "JOIN public.approval_records r ON r.record_hash=%s "
+            "JOIN public.approval_tokens t ON t.token_digest=r.token_digest "
+            "AND t.current_record_hash=r.record_hash "
+            "WHERE j.job_id=%s AND j.subject=%s AND j.handoff_sha256=%s "
+            "AND j.expires_at=%s AND j.state='RESERVED' AND j.reserved_at=%s "
+            "AND r.state='CONSUMED'", (approval_record_hash, reservation.job_id,
+            reservation.subject, reservation.handoff_sha256, reservation.expires_at,
+            reservation.reserved_at), fetch=True)
+        if row is None:
+            return False
+        scope = ApprovalScope(**decode_wire(row[0], keys=_SCOPE_KEYS, noun="approval scope"))
+        return (scope.job_id == reservation.job_id
+                and scope.handoff_sha256 == reservation.handoff_sha256
+                and scope.handoff_expires_at == reservation.expires_at
+                and row[1] == reservation.reserved_at)
 
     def reserve(self, reservation: Reservation) -> bool:
         if not isinstance(reservation, Reservation):
@@ -251,7 +294,8 @@ def migrate(dsn: str) -> None:
     """Apply only a known missing suffix; never rewrite history or repair damage."""
     expected = migration_files()
     with _connect(dsn) as connection:
-        # B1 has one migration. Its DDL, grants and history commit together.
+        # Only the known missing suffix is installed. DDL, grants and history
+        # stay atomic, including a failed first installation.
         with connection.transaction():
             connection.execute("SELECT pg_advisory_xact_lock(%s)", (_MIGRATION_LOCK,))
             exists = connection.execute(
@@ -275,3 +319,280 @@ def migrate(dsn: str) -> None:
                     "VALUES (%s, %s, %s)", (version, digest, int(time.time())))
             _check_history(_history(connection), expected, complete=True)
             _check_tables(connection)
+
+
+# One session can be shared by several adapters. Its transaction belongs to one
+# request at a time, including all statements issued by the other adapters.
+_CONNECTION_LOCKS = WeakKeyDictionary()
+_CONNECTION_LOCKS_LOCK = threading.Lock()
+
+
+def connection_lock(connection):
+    with _CONNECTION_LOCKS_LOCK:
+        return _CONNECTION_LOCKS.setdefault(connection, threading.RLock())
+
+
+def _store_connection(connection):
+    if not isinstance(connection, psycopg.Connection) or not connection.autocommit:
+        _fail("durable store needs an autocommit psycopg connection")
+    return connection, connection_lock(connection)
+
+
+@contextmanager
+def _store_transaction(connection, lock):
+    try:
+        with lock, connection.transaction():
+            yield connection
+    except psycopg.Error:
+        raise ContractError("durable store is unavailable") from None
+
+
+_APPROVAL_COLUMNS = ("token_digest, scope, issued_at, expires_at, state, "
+                     "changed_at, previous_hash, record_hash")
+
+
+def _approval_record(row):
+    digest, raw_scope, issued, expires, state, changed, previous, record_hash = row
+    scope = ApprovalScope(**decode_wire(raw_scope, keys=_SCOPE_KEYS, noun="approval scope"))
+    record = _Record(bytes.fromhex(digest) if _digest(digest) else b"", scope,
+                     issued, expires, state, changed, previous, record_hash)
+    expected = _record_hash(token_digest=record.token_digest, scope=scope,
+                            issued_at=issued, expires_at=expires, state=state,
+                            changed_at=changed, previous_hash=previous)
+    if (not _digest(digest) or not _digest(record_hash)
+            or (previous is not None and not _digest(previous))
+            or any(type(value) is not int for value in (issued, expires, changed))
+            or not 1 <= issued < expires <= scope.handoff_expires_at <= _MAX_TIME
+            or not issued <= changed <= _MAX_TIME
+            or state not in ("GRANTED", "CONSUMED", "REVOKED")
+            or expected != record_hash):
+        _fail("approval record is invalid")
+    return record
+
+
+def _digest(value):
+    return type(value) is str and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
+def _check_approvals(connection):
+    records = {}
+    for row in connection.execute("SELECT " + _APPROVAL_COLUMNS + " FROM public.approval_records"):
+        record = _approval_record(row)
+        records.setdefault(record.token_digest.hex(), []).append(record)
+    pointers = dict(connection.execute(
+        "SELECT token_digest, current_record_hash FROM public.approval_tokens").fetchall())
+    if set(records) != set(pointers):
+        _fail("approval records and pointers do not match")
+    for digest, history in records.items():
+        roots = [record for record in history if record.previous_hash is None]
+        if len(roots) != 1 or roots[0].state != "GRANTED" or roots[0].changed_at != roots[0].issued_at:
+            _fail("approval history must have one granted root")
+        root = roots[0]
+        successors = [record for record in history if record.previous_hash is not None]
+        if (len(successors) > 1 or (successors and (
+                successors[0].previous_hash != root.record_hash
+                or successors[0].state not in ("CONSUMED", "REVOKED")
+                or successors[0].scope != root.scope
+                or successors[0].issued_at != root.issued_at
+                or successors[0].expires_at != root.expires_at
+                or successors[0].changed_at < root.changed_at))):
+            _fail("approval history is not an immutable one-way chain")
+        tip = successors[0] if successors else root
+        if pointers[digest] != tip.record_hash:
+            _fail("approval pointer must name the only history tip")
+
+
+class PostgresPendingJobs(PendingJobs):
+    """Gate B4: canonical signed wires, never an in-memory recovery fallback."""
+
+    durable = True
+
+    def __init__(self, connection, *, policy, verifier):
+        self._connection, self._lock = _store_connection(connection)
+        if not isinstance(policy, Policy) or type(verifier) is not HandoffVerifier:
+            _fail("pending store needs trusted policy and a public handoff verifier")
+        self._policy, self._verifier = policy, verifier
+        with _store_transaction(self._connection, self._lock) as connection:
+            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            self._check(connection)
+
+    def _waiting(self, row):
+        job_id, subject, wire, trace, expires, state, ledger_subject, digest, created, ledger_expires = row
+        if (state != "PENDING_APPROVAL" or subject != ledger_subject or expires != ledger_expires
+                or sha256(wire).hexdigest() != digest or trace != "trace-" + digest[:16]):
+            _fail("pending job does not match its bound ledger")
+        # Check the historical issuance, including its signature and exact bytes;
+        # current expiry is handled by the atomic refusal path, never by replay.
+        handoff = validate_pending(wire, subject=subject, job_id=job_id,
+                                   policy=self._policy, verifier=self._verifier, now=created)
+        if handoff.issued_at != created or handoff.to_bytes() != wire or handoff.expires_at != expires:
+            _fail("pending wire does not bind its issuance")
+        return _Waiting(subject, wire, handoff, trace)
+
+    def _check(self, connection):
+        missing = connection.execute(
+            "SELECT 1 FROM public.job_ledger j FULL JOIN public.pending_jobs p "
+            "ON p.job_id=j.job_id WHERE "
+            "(j.state='PENDING_APPROVAL' AND p.job_id IS NULL) "
+            "OR (p.job_id IS NOT NULL AND j.state IS DISTINCT FROM 'PENDING_APPROVAL') LIMIT 1"
+        ).fetchone()
+        if missing:
+            _fail("pending rows and pending ledger states do not match")
+        rows = connection.execute(
+            "SELECT p.job_id,p.subject,p.wire,p.trace_id,p.expires_at,j.state,j.subject,"
+            "j.handoff_sha256,j.created_at,j.expires_at FROM public.pending_jobs p "
+            "JOIN public.job_ledger j ON j.job_id=p.job_id").fetchall()
+        for row in rows:
+            self._waiting(row)
+
+    def add(self, job_id, waiting, *, now):
+        if not isinstance(waiting, _Waiting):
+            _fail("pending store accepts only a waiting signed handoff")
+        handoff = validate_pending(waiting.wire, subject=waiting.subject, job_id=job_id,
+                                   policy=self._policy, verifier=self._verifier, now=now)
+        digest = sha256(waiting.wire).hexdigest()
+        if waiting.handoff != handoff or waiting.trace_id != "trace-" + digest[:16]:
+            _fail("pending waiting metadata does not match the signed wire")
+        with _store_transaction(self._connection, self._lock) as connection:
+            # Serializes admission against the global queue bound across replicas.
+            connection.execute("SELECT pg_advisory_xact_lock(513812742)")
+            self._expire(connection, now=now)
+            if connection.execute("SELECT count(*) FROM public.pending_jobs").fetchone()[0] >= _MAX_PENDING:
+                _fail("too many jobs are waiting for approval")
+            inserted = connection.execute(
+                "INSERT INTO public.job_ledger (job_id,subject,handoff_sha256,state,"
+                "created_at,reserved_at,updated_at,expires_at) "
+                "VALUES (%s,%s,%s,'PENDING_APPROVAL',%s,NULL,%s,%s) ON CONFLICT DO NOTHING",
+                (job_id, waiting.subject, digest, handoff.issued_at, now, handoff.expires_at)).rowcount
+            if inserted != 1:
+                _fail("a job with this id is already burned")
+            connection.execute("INSERT INTO public.pending_jobs VALUES (%s,%s,%s,%s,%s)",
+                               (job_id, waiting.subject, waiting.wire, waiting.trace_id, handoff.expires_at))
+
+    def peek(self, job_id):
+        with _store_transaction(self._connection, self._lock) as connection:
+            row = connection.execute(
+                "SELECT p.job_id,p.subject,p.wire,p.trace_id,p.expires_at,j.state,j.subject,"
+                "j.handoff_sha256,j.created_at,j.expires_at FROM public.pending_jobs p "
+                "JOIN public.job_ledger j ON j.job_id=p.job_id WHERE p.job_id=%s",
+                (job_id,)).fetchone()
+            if row is None:
+                _fail("no job is waiting for approval under this id")
+            return self._waiting(row)
+
+    def take(self, job_id, subject):
+        # Reading does not remove authorization evidence. The gateway consumes
+        # it atomically with the token and reservation once all checks succeeded.
+        waiting = self.peek(job_id)
+        if waiting.subject != subject:
+            _fail("no job of this subject is waiting for approval under this id")
+        return waiting
+
+    def restore(self, job_id, waiting):
+        # Wrong tokens cannot have changed durable pending state in the first place.
+        return None
+
+    def refuse(self, job_id, subject, *, now):
+        with _store_transaction(self._connection, self._lock) as connection:
+            row = connection.execute(
+                "SELECT state,subject FROM public.job_ledger WHERE job_id=%s FOR UPDATE",
+                (job_id,)).fetchone()
+            if row != ("PENDING_APPROVAL", subject):
+                _fail("only this subject's pending job may be refused")
+            connection.execute("DELETE FROM public.pending_jobs WHERE job_id=%s", (job_id,))
+            connection.execute("UPDATE public.job_ledger SET state='REFUSED',updated_at=%s "
+                               "WHERE job_id=%s", (now, job_id))
+
+    def _expire(self, connection, *, now):
+        rows = connection.execute(
+            "SELECT j.job_id FROM public.job_ledger j JOIN public.pending_jobs p "
+            "ON p.job_id=j.job_id WHERE j.state='PENDING_APPROVAL' AND p.expires_at<=%s "
+            "ORDER BY j.job_id FOR UPDATE OF j", (now,)).fetchall()
+        for (job_id,) in rows:
+            connection.execute("DELETE FROM public.pending_jobs WHERE job_id=%s", (job_id,))
+            connection.execute("UPDATE public.job_ledger SET state='REFUSED',updated_at=%s "
+                               "WHERE job_id=%s", (now, job_id))
+
+
+class PostgresApprovalStore(ApprovalStore):
+    """Append-only grant records; consume also resolves its exact pending job."""
+
+    def __init__(self, connection, *, token_source=None):
+        super().__init__(token_source=token_source)
+        self._connection, self._lock = _store_connection(connection)
+        with _store_transaction(self._connection, self._lock) as connection:
+            connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            _check_approvals(connection)
+
+    def _insert(self, connection, record):
+        connection.execute(
+            "INSERT INTO public.approval_records (" + _APPROVAL_COLUMNS + ") "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            (record.token_digest.hex(), canonical(record.scope.to_dict()), record.issued_at,
+             record.expires_at, record.state, record.changed_at, record.previous_hash, record.record_hash))
+
+    def grant(self, scope, *, now, ttl_seconds):
+        token, record = self._new_grant(scope, now=now, ttl_seconds=ttl_seconds)
+        _approval_record((record.token_digest.hex(), canonical(scope.to_dict()), record.issued_at,
+                          record.expires_at, record.state, record.changed_at, None, record.record_hash))
+        with _store_transaction(self._connection, self._lock) as connection:
+            if connection.execute("SELECT 1 FROM public.approval_tokens WHERE token_digest=%s",
+                                  (record.token_digest.hex(),)).fetchone():
+                _fail("approval token collision")
+            self._insert(connection, record)
+            connection.execute("INSERT INTO public.approval_tokens VALUES (%s,%s)",
+                               (record.token_digest.hex(), record.record_hash))
+        return ApprovalGrant(token, scope, record.issued_at, record.expires_at, record.record_hash)
+
+    def consume(self, token, scope, *, now, subject):
+        return self._change(token, scope, now=now, state="CONSUMED", subject=subject)
+
+    def revoke(self, token, scope, *, now):
+        return self._change(token, scope, now=now, state="REVOKED")
+
+    def _change(self, token, scope, *, now, state, subject=None):
+        if type(token) is not bytes or len(token) < 32 or not isinstance(scope, ApprovalScope):
+            _fail("approval token or scope is invalid")
+        if type(now) is not int or not 1 <= now <= _MAX_TIME:
+            _fail("approval time is invalid")
+        digest = sha256(token).hexdigest()
+        with _store_transaction(self._connection, self._lock) as connection:
+            if state == "CONSUMED":
+                job = connection.execute(
+                    "SELECT j.state,j.subject,j.handoff_sha256,j.expires_at,p.wire "
+                    "FROM public.job_ledger j LEFT JOIN public.pending_jobs p ON p.job_id=j.job_id "
+                    "WHERE j.job_id=%s FOR UPDATE OF j", (scope.job_id,)).fetchone()
+            pointer = connection.execute(
+                "SELECT current_record_hash FROM public.approval_tokens "
+                "WHERE token_digest=%s FOR UPDATE", (digest,)).fetchone()
+            if pointer is None:
+                _fail("approval token is unknown")
+            row = connection.execute(
+                "SELECT " + _APPROVAL_COLUMNS + " FROM public.approval_records "
+                "WHERE token_digest=%s AND record_hash=%s", (digest, pointer[0])).fetchone()
+            record = _approval_record(row)
+            if record.state != "GRANTED":
+                _fail("approval is not granted")
+            if not _scope_matches(record.scope, scope):
+                _fail("approval scope does not match")
+            if now < record.issued_at or (state == "CONSUMED" and now >= record.expires_at):
+                _fail("approval is not currently valid")
+            if state == "CONSUMED" and (
+                    job is None or job[:4] != ("PENDING_APPROVAL", subject,
+                                              scope.handoff_sha256, scope.handoff_expires_at)
+                    or job[4] is None or sha256(job[4]).hexdigest() != scope.handoff_sha256):
+                _fail("approval does not bind this subject's pending job")
+            record_hash = _record_hash(token_digest=record.token_digest, scope=record.scope,
+                                       issued_at=record.issued_at, expires_at=record.expires_at,
+                                       state=state, changed_at=now, previous_hash=record.record_hash)
+            updated = _Record(record.token_digest, record.scope, record.issued_at, record.expires_at,
+                              state, now, record.record_hash, record_hash)
+            self._insert(connection, updated)
+            connection.execute("UPDATE public.approval_tokens SET current_record_hash=%s "
+                               "WHERE token_digest=%s", (record_hash, digest))
+            if state == "CONSUMED":
+                connection.execute("DELETE FROM public.pending_jobs WHERE job_id=%s", (scope.job_id,))
+                connection.execute("UPDATE public.job_ledger SET state='RESERVED',"
+                                   "reserved_at=%s,updated_at=%s WHERE job_id=%s",
+                                   (now, now, scope.job_id))
+        return ApprovalReceipt(updated.scope, state, now, record_hash)
