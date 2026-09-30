@@ -1143,6 +1143,15 @@ class PersistentLedgerTest(Fixture, unittest.TestCase):
         with self.assertRaisesRegex(ContractError, 'autocommit mode'):
             PostgresJobLedger(connection)
 
+    def test_a_ledger_does_not_reserve_inside_an_outer_transaction(self):
+        connection = self.db.connect(runtime=True)
+        self.addCleanup(connection.close)
+        ledger = PostgresJobLedger(connection)
+        with connection.transaction(force_rollback=True):
+            with self.assertRaisesRegex(ContractError, 'existing transaction'):
+                ledger.reserve(reservation())
+        self.assertEqual(self.rows(), [])
+
     def test_the_ledger_refuses_anything_but_a_reservation(self):
         ledger = self.ledger()
         with self.assertRaisesRegex(ContractError, 'reserves only a Reservation'):

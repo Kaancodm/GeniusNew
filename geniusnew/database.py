@@ -299,6 +299,10 @@ class PostgresJobLedger(JobLedger):
     def _execute(self, query: str, parameters: tuple, *, fetch: bool = False):
         try:
             with self._lock:
+                if self._connection.info.transaction_status not in (
+                        psycopg.pq.TransactionStatus.IDLE,
+                        psycopg.pq.TransactionStatus.UNKNOWN):
+                    _fail("job ledger cannot join an existing transaction")
                 cursor = self._connection.execute(query, parameters)
                 return cursor.fetchone() if fetch else cursor.rowcount
         except psycopg.Error:
@@ -450,8 +454,13 @@ def _store_connection(connection):
 @contextmanager
 def _store_transaction(connection, lock):
     try:
-        with lock, connection.transaction():
-            yield connection
+        with lock:
+            if connection.info.transaction_status not in (
+                    psycopg.pq.TransactionStatus.IDLE,
+                    psycopg.pq.TransactionStatus.UNKNOWN):
+                _fail("durable store cannot join an existing transaction")
+            with connection.transaction():
+                yield connection
     except psycopg.Error:
         raise ContractError("durable store is unavailable") from None
 
@@ -473,6 +482,7 @@ def _approval_record(row):
             or any(type(value) is not int for value in (issued, expires, changed))
             or not 1 <= issued < expires <= scope.handoff_expires_at <= _MAX_TIME
             or not issued <= changed <= _MAX_TIME
+            or (state == "CONSUMED" and changed >= expires)
             or state not in ("GRANTED", "CONSUMED", "REVOKED")
             or expected != record_hash):
         _fail("approval record is invalid")

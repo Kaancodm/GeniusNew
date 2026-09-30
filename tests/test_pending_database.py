@@ -9,11 +9,14 @@ from unittest.mock import patch
 import psycopg
 
 from geniusnew import database
-from geniusnew.approvals import ApprovalScope, ApprovalStore
-from geniusnew.contracts import ContractError, validate_pending
-from geniusnew.wiring import _Waiting
+from geniusnew.approvals import ApprovalScope, ApprovalStore, _record_hash
+from geniusnew.audit_chain import AuditAnchor
+from geniusnew.contracts import ContractError, canonical, validate_pending
+from geniusnew.wiring import _Waiting, build
+from geniusnew.workers import DeterministicSummarizer
 from postgres_support import PostgresDatabase
 from test_approvals import ApprovalFixture
+from test_end_to_end import API_KEY, ROOT_SECRET
 
 
 class DurablePendingTest(ApprovalFixture, unittest.TestCase):
@@ -63,6 +66,48 @@ class DurablePendingTest(ApprovalFixture, unittest.TestCase):
         self.assertEqual(self.connection.execute(
             "SELECT state FROM approval_records ORDER BY changed_at").fetchall(),
             [("GRANTED",), ("CONSUMED",)])
+
+    def test_durable_wiring_requires_the_same_job_ledger_connection(self):
+        with self.db.connect(runtime=True) as other_connection:
+            for ledger in (None, database.PostgresJobLedger(other_connection)):
+                with self.subTest(ledger=ledger), self.assertRaisesRegex(
+                        ContractError, "job ledger.*same connection"):
+                    build(root_secret=ROOT_SECRET, policy=self.policy,
+                          api_keys={API_KEY: "subject-demo"},
+                          workers=(DeterministicSummarizer(),), anchor=AuditAnchor(),
+                          database_connection=self.connection, job_ledger=ledger)
+
+    def test_consume_refuses_an_outer_uncommitted_transaction(self):
+        pending, approvals = self.stores()
+        self.add(pending)
+        grant = approvals.grant(self.scope(), now=101, ttl_seconds=60)
+        with self.connection.transaction(force_rollback=True):
+            with self.assertRaisesRegex(ContractError, "existing transaction"):
+                approvals.consume(grant.token, self.scope(), now=102,
+                                  subject="subject-demo")
+        self.assertEqual(self.rows(), [("PENDING_APPROVAL", None)])
+        self.assertEqual(self.connection.execute(
+            "SELECT state FROM approval_records").fetchall(), [("GRANTED",)])
+
+    def test_database_trigger_rejects_a_consumption_at_token_expiry(self):
+        _, approvals = self.stores()
+        scope = self.scope()
+        grant = approvals.grant(scope, now=101, ttl_seconds=60)
+        digest = hashlib.sha256(grant.token).hexdigest()
+        record_hash = _record_hash(
+            token_digest=bytes.fromhex(digest), scope=scope,
+            issued_at=grant.issued_at, expires_at=grant.expires_at,
+            state="CONSUMED", changed_at=grant.expires_at,
+            previous_hash=grant.record_hash)
+        with self.db.connect() as owner:
+            with self.assertRaises(psycopg.errors.CheckViolation):
+                owner.execute(
+                    "INSERT INTO approval_records "
+                    "(token_digest,record_hash,scope,issued_at,expires_at,state,"
+                    "changed_at,previous_hash) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                    (digest, record_hash, canonical(scope.to_dict()), grant.issued_at,
+                     grant.expires_at, "CONSUMED", grant.expires_at,
+                     grant.record_hash))
 
     def test_wrong_token_and_wrong_scope_leave_both_rows_untouched(self):
         pending, approvals = self.stores()

@@ -268,7 +268,10 @@ def build(*, root_secret: bytes, policy: Policy,
         approvals = ApprovalStore()
         pending = PendingJobs()
     else:
-        from .database import PostgresApprovalStore, PostgresPendingJobs
+        from .database import PostgresApprovalStore, PostgresJobLedger, PostgresPendingJobs
+        if (type(job_ledger) is not PostgresJobLedger
+                or job_ledger._connection is not database_connection):
+            _fail("durable pending storage needs a job ledger on the same connection")
         approvals = PostgresApprovalStore(database_connection)
         pending = PostgresPendingJobs(database_connection, policy=policy, verifier=handoff_verifier)
     gateway = Gateway(gateway_id=gateway_id, handoff_verifier=handoff_verifier,
