@@ -3,9 +3,10 @@
 B1 installiert das Schema für `schema_migrations`, `job_ledger` und
 `acceptance_ledger`. B2 bindet den Job-Ledger des HTTP-Dienstes an PostgreSQL:
 Eine neue Instanz kann eine bereits persistierte Job-ID nicht erneut dispatchen.
-Der Annahme-Ledger der Ergebnisprüfung bleibt bis B3 prozesslokal. Die Audit-Kette
-ist noch nicht persistiert; nach verarbeiteten Jobs verweigert der Dienst einen
-Neustart (B5). Die verbleibenden Grenzen stehen in `SECURITY.md`.
+B3 bindet auch den Annahme-Ledger an PostgreSQL: Eine angenommene Antwort bleibt
+nach Neustart verbraucht; die gebundene Job-Zeile wechselt atomar zu `COMPLETED`.
+Die Audit-Kette ist noch nicht persistiert; nach verarbeiteten Jobs verweigert
+der Dienst einen Neustart (B5). Die verbleibenden Grenzen stehen in `SECURITY.md`.
 
 ## Voraussetzungen und Rollen
 
@@ -35,9 +36,9 @@ B1 nimmt keine Änderungen an einem Server oder Deployment vor.
 ## B2: persistenter Job-Ledger und Runtime-Startprüfung
 
 `serve` übergibt den `PostgresJobLedger` sowohl beim eigenen als auch beim separat
-betriebenen Anker. Reservierung und Ausführungs-Commit verwenden die Runtime-DSN;
-Jobs verbleiben bis B3 in `EXECUTION_COMMITTED`. Die Demo und Aufrufer von `build`
-ohne DB-Ledger verwenden weiterhin den prozesslokalen Ledger. Persistierte Job-IDs
+betriebenen Anker. Reservierung und Ausführungs-Commit verwenden die Runtime-DSN.
+Die Demo und Aufrufer von `build` ohne DB-Ledger verwenden weiterhin den
+prozesslokalen Ledger. Persistierte Job-IDs
 werden nicht freigegeben oder nach TTL gelöscht. Eine abgerissene DB-Verbindung
 verweigert weitere Jobs bis zum Dienstneustart; die B5-Neustartgrenze bleibt bestehen.
 
@@ -58,6 +59,20 @@ Die Tests benötigen **PostgreSQL 16 oder neuer**, da sie Mitgliedschaften mit
 ([PostgreSQL 16 GRANT](https://www.postgresql.org/docs/16/sql-grant.html)).
 Die erfolgreiche Suite wurde für PostgreSQL 16 und 17 belegt; PostgreSQL 15 ist
 hiermit kein getesteter Support-Nachweis.
+
+## B3: persistenter Annahme-Ledger
+
+`serve` verwendet eine zweite Runtime-Verbindung für den `PostgresAcceptanceLedger`.
+Nach vollständiger Prüfung von Handoff und Worker-Ergebnis schreibt eine Transaktion
+die Annahme und setzt genau den zugehörigen Job von `EXECUTION_COMMITTED` auf
+`COMPLETED`. Ein wiederholtes Ergebnis bleibt nach Neustart oder in einer zweiten
+Instanz abgelehnt. Ein Datenbankfehler verweigert die Annahme ohne Ersatzspeicher.
+
+Vor dem Listener werden die persistierten Annahmen und `COMPLETED`-Jobs in beide
+Richtungen verglichen und die gespeicherten Wires mit den öffentlichen Schlüsseln
+geprüft. Beschädigte oder nicht mehr zur aktuellen Policy passende Daten verweigern
+den Start. Ein Neustart nach verarbeitetem Job scheitert weiterhin an der noch nicht
+persistierten Audit-Kette (B5); B3 allein hebt diese Grenze nicht auf.
 
 ## Konfiguration und Migration
 
