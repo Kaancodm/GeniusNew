@@ -10,6 +10,7 @@ from unittest import mock
 
 from geniusnew.config import DEMO_ROOT_SECRET, load_config, parse_config, read_root_secret, read_database_dsn
 from geniusnew.contracts import ContractError
+from geniusnew.http_entry import HttpLimits
 
 EXAMPLE = Path(__file__).resolve().parent.parent / "docs" / "examples" / "geniusnew.toml"
 
@@ -47,6 +48,8 @@ class Files:
                 "root_secret_file": self.secret_path,
                 "anchor_state": self.anchor_path,
                 "database_dsn_file": self.dsn_path,
+                "limits": {"rate_per_minute": 30, "burst": 5,
+                           "max_in_flight": 4, "max_connections": 32},
             },
             "policy": {
                 "version": "policy-v1",
@@ -103,6 +106,8 @@ class ValidConfigurationTest(Files, unittest.TestCase):
         self.assertEqual(config.listen_host, "127.0.0.1")
         # The placeholder is not a digest, so the example cannot start a service.
         self.assertIn("REPLACE_WITH_SHA256_OF_THE_API_KEY", config.principals)
+        # The example documents the defaults the proxy template is sized for.
+        self.assertEqual(config.limits, HttpLimits())
 
 
 class StructureTest(Files, unittest.TestCase):
@@ -299,6 +304,43 @@ class DatabaseConfigTest(Files, unittest.TestCase):
             read_database_dsn(str(self.root))
         with self.assertRaisesRegex(ContractError, "absolute path"):
             read_database_dsn("relative")
+
+
+class LimitsConfigTest(Files, unittest.TestCase):
+
+    def refused(self, limits, message):
+        data = self.data()
+        data["service"]["limits"] = limits
+        with self.assertRaisesRegex(ContractError, message):
+            parse_config(data)
+
+    def test_the_configured_limits_are_used_not_the_defaults(self):
+        self.assertEqual(parse_config(self.data()).limits,
+                         HttpLimits(rate_per_minute=30, burst=5,
+                                    max_in_flight=4, max_connections=32))
+
+    def test_missing_limits_are_refused_rather_than_defaulted(self):
+        data = self.data()
+        del data["service"]["limits"]
+        with self.assertRaisesRegex(ContractError, "service is missing keys: limits"):
+            parse_config(data)
+
+    def test_limits_must_be_a_table_with_exactly_the_four_keys(self):
+        valid = self.data()["service"]["limits"]
+        self.refused([1, 2, 3, 4], "service.limits must be a table")
+        self.refused({key: value for key, value in valid.items() if key != "burst"},
+                     "service.limits is missing keys: burst")
+        self.refused({**valid, "max_body_bytes": 1024},
+                     "service.limits has unknown keys: max_body_bytes")
+
+    def test_each_limit_is_bounded(self):
+        valid = self.data()["service"]["limits"]
+        for key, ceiling in (("rate_per_minute", 6000), ("burst", 1000),
+                             ("max_in_flight", 256), ("max_connections", 4096)):
+            for value in (0, ceiling + 1, True, "8", 8.0):
+                with self.subTest(key=key, value=value):
+                    self.refused({**valid, key: value},
+                                 f"limits.{key} must be an integer between 1 and {ceiling}")
 
 
 class AnchorStateTest(Files, unittest.TestCase):

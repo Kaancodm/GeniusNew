@@ -54,6 +54,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from .contracts import ContractError, Grant, Policy
+from .http_entry import HttpLimits
 from .workers import DeterministicSummarizer, Worker
 
 # Published in scripts/demo.py. Refused here so it cannot become a real key.
@@ -65,10 +66,11 @@ _MAX_CONFIG_BYTES = 1024 * 1024
 
 _TOP_KEYS = frozenset({"service", "policy", "principals"})
 _SERVICE_KEYS = frozenset({"listen_host", "listen_port", "root_secret_file",
-                           "database_dsn_file"})
+                           "database_dsn_file", "limits"})
 # One anchor mode is required, and exactly one (see `_anchor`): a child of the
 # service persisted at `anchor_state`, or a separate service at `anchor_socket`.
 _ANCHOR_KEYS = frozenset({"anchor_state", "anchor_socket", "anchor_reply_public_key"})
+_LIMIT_KEYS = frozenset({"rate_per_minute", "burst", "max_in_flight", "max_connections"})
 _POLICY_KEYS = frozenset({"version", "orchestrator_id", "handoff_ttl_seconds",
                           "allowed_tools", "allowed_sandbox_profiles", "grants"})
 _GRANT_KEYS = frozenset({"subject", "user_id", "worker_agent_id", "tier", "tools",
@@ -96,6 +98,7 @@ class ServiceConfig:
     anchor_socket: str | None
     anchor_reply_public_key: bytes | None
     database_dsn: str
+    limits: HttpLimits
     policy: Policy
     principals: Mapping[str, str]
     workers: tuple[Worker, ...]
@@ -278,6 +281,12 @@ def _workers(policy: Policy) -> tuple[Worker, ...]:
     return tuple(BUILTIN_WORKERS[tool]() for tool in policy.allowed_tools)
 
 
+def _limits(value: Any) -> HttpLimits:
+    # Required rather than defaulted: the proxy template has to match these
+    # numbers, so they are written down where the operator can see both.
+    return HttpLimits(**_table(value, "service.limits", _LIMIT_KEYS))
+
+
 def parse_config(data: Mapping[str, Any]) -> ServiceConfig:
     """Check a parsed configuration and read the secret it names."""
     top = _table(data, "configuration", _TOP_KEYS)
@@ -293,6 +302,7 @@ def parse_config(data: Mapping[str, Any]) -> ServiceConfig:
         anchor_socket=anchor_socket,
         anchor_reply_public_key=anchor_reply_public_key,
         database_dsn=read_database_dsn(service["database_dsn_file"]),
+        limits=_limits(service["limits"]),
         policy=policy,
         principals=_principals(top["principals"], policy),
         workers=_workers(policy),

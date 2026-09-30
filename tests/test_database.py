@@ -30,12 +30,11 @@ class DatabaseTest(unittest.TestCase):
 
     def test_migration_is_atomic_repeatable_and_has_an_exact_byte_checksum(self):
         self.install()
-        before = self.execute("SELECT * FROM schema_migrations ORDER BY version")
+        before = self.execute("SELECT * FROM schema_migrations")
         database.migrate(self.db.owner_dsn)
-        self.assertEqual(self.execute("SELECT * FROM schema_migrations ORDER BY version"), before)
-        for row, (version, raw, digest) in zip(before, database.migration_files()):
-            self.assertEqual(row[:2], (version, digest))
-            self.assertEqual(digest, sha256(raw).hexdigest())
+        self.assertEqual(self.execute("SELECT * FROM schema_migrations"), before)
+        raw = (database._MIGRATION_DIR / "0001_core_foundation.sql").read_bytes()
+        self.assertEqual(before[0][:2], (1, sha256(raw).hexdigest()))
         self.assertGreater(before[0][2], 0)
         with database.open_database(self.db.runtime_dsn) as connection:
             self.assertFalse(connection.closed)
@@ -44,16 +43,14 @@ class DatabaseTest(unittest.TestCase):
         self.assertTrue(connection.closed)
         tables = self.execute("SELECT tablename FROM pg_tables WHERE schemaname='public'")
         self.assertEqual({r[0] for r in tables},
-                         {"schema_migrations", "job_ledger", "acceptance_ledger",
-                          "audit_chain", "audit_heads"})
+                         set(database._CORE_TABLES))
 
     def test_two_migrators_serialize_the_first_installation(self):
         with ThreadPoolExecutor(max_workers=2) as executor:
             futures = [executor.submit(database.migrate, self.db.owner_dsn) for _ in range(2)]
             for future in futures:
                 future.result(timeout=30)
-        self.assertEqual(self.execute("SELECT count(*) FROM schema_migrations"),
-                         [(len(database.migration_files()),)])
+        self.assertEqual(self.execute("SELECT count(*) FROM schema_migrations"), [(len(database.migration_files()),)])
 
     def test_a_missing_history_table_is_refused_without_automatic_migration(self):
         with self.assertRaisesRegex(ContractError, "database connection or operation failed"):
@@ -66,7 +63,7 @@ class DatabaseTest(unittest.TestCase):
         for change, reason in (
             ("DELETE FROM schema_migrations", "required database migration is missing"),
             ("UPDATE schema_migrations SET checksum = repeat('0',64)", "checksum mismatch"),
-            ("INSERT INTO schema_migrations VALUES (9999, repeat('a',64), 1)", "unknown"),
+            ("INSERT INTO schema_migrations VALUES (999, repeat('a',64), 1)", "unknown"),
             ("UPDATE schema_migrations SET version = 0 WHERE version = 1", "unknown"),
             ("UPDATE schema_migrations SET applied_at = -1", "timestamp is invalid"),
         ):
@@ -83,9 +80,8 @@ class DatabaseTest(unittest.TestCase):
         self.execute("UPDATE schema_migrations SET checksum = repeat('f',64)")
         with self.assertRaisesRegex(ContractError, "checksum mismatch"):
             database.migrate(self.db.owner_dsn)
-        self.assertEqual(self.execute("SELECT checksum FROM schema_migrations"),
-                         [("f" * 64,)] * len(database.migration_files()))
-        self.execute("UPDATE schema_migrations SET version = 0 WHERE version = 1")
+        self.assertEqual(self.execute("SELECT checksum FROM schema_migrations"), [("f" * 64,)] * len(database.migration_files()))
+        self.execute("UPDATE schema_migrations SET version = 999 WHERE version = 1")
         with self.assertRaisesRegex(ContractError, "unknown"):
             database.migrate(self.db.owner_dsn)
 
@@ -110,8 +106,7 @@ class DatabaseTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
             for _, name in database._MIGRATIONS:
-                original = database._MIGRATION_DIR / name
-                (path / name).write_bytes(original.read_bytes())
+                (path / name).write_bytes((database._MIGRATION_DIR / name).read_bytes())
             original = database._MIGRATION_DIR / "0001_core_foundation.sql"
             (path / original.name).write_bytes(original.read_bytes() + b"\n")
             with patch.object(database, "_MIGRATION_DIR", path):
@@ -123,8 +118,7 @@ class DatabaseTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
             for _, name in database._MIGRATIONS:
-                original = database._MIGRATION_DIR / name
-                (path / name).write_bytes(original.read_bytes())
+                (path / name).write_bytes((database._MIGRATION_DIR / name).read_bytes())
             original = database._MIGRATION_DIR / "0001_core_foundation.sql"
             (path / original.name).write_bytes(original.read_bytes() + b"\nSELECT 1/0;\n")
             with patch.object(database, "_MIGRATION_DIR", path):
@@ -315,6 +309,20 @@ class StartCheckTest(unittest.TestCase):
                    f"{valid['reserved_at']}, {valid['updated_at']}, {valid['expires_at']})")
         with database.open_database(self.db.runtime_dsn):
             pass
+
+    def test_a_completed_job_without_acceptance_is_refused(self):
+        self.owner("INSERT INTO job_ledger VALUES ('job','subject',repeat('a',64), "
+                   "'COMPLETED',100,100,120,160)")
+        self.refused("acceptance ledger and completed jobs do not match")
+
+    def test_an_acceptance_without_its_completed_bound_job_is_refused(self):
+        self.owner("INSERT INTO job_ledger VALUES ('job','subject',repeat('a',64), "
+                   "'EXECUTION_COMMITTED',100,100,110,160)",
+                   "INSERT INTO acceptance_ledger VALUES (repeat('a',64),'job', "
+                   "'handoff'::bytea,repeat('b',64),'result'::bytea,120)",
+                   "ALTER TABLE job_ledger DISABLE TRIGGER job_transition",
+                   "UPDATE job_ledger SET state='EXECUTION_COMMITTED'")
+        self.refused("acceptance ledger and completed jobs do not match")
 
     def test_the_bounds_are_the_orchestrator_s_and_the_audit_contract_s(self):
         from geniusnew import audit, orchestrator

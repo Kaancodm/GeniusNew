@@ -56,12 +56,12 @@ from .contracts import (ContractError, HandoffSigner, HandoffVerifier, Policy, v
                         validate_pending)
 from .gateway import (ADMISSION_REASON_CODE, DispatchPermit, Gateway, GatewayRejected,
                       handoff_from_permit)
-from .http_entry import HttpEntry, PrincipalRegistry
+from .http_entry import HttpEntry, HttpLimits, PrincipalRegistry
 from .isolation import IsolatedWorkerRunner
 from .keys import ServiceKeys, derive_keys
 from .orchestrator import Denied, DispatchAttempted, JobLedger, Orchestrator, WorkerEndpoint
 from .results import WorkerAuthority, handoff_digest
-from .verifier import Rejected, ResultVerifier
+from .verifier import AcceptanceLedger, Rejected, ResultVerifier
 from .workers import Worker, WorkerRunner
 
 _TRACE_PREFIX = "trace-"
@@ -185,6 +185,8 @@ class Service:
         """
         waiting = self.pending.peek(job_id)
         now = self.clock()
+        if getattr(self.pending, "durable", False) and now >= waiting.handoff.expires_at:
+            self.pending.refuse(job_id, waiting.subject, now=now)
         scope = create_scope(waiting.wire, subject=waiting.subject, job_id=job_id,
                              policy=self.policy, verifier=self.handoff_verifier,
                              now=now)
@@ -216,7 +218,10 @@ def build(*, root_secret: bytes, policy: Policy,
           runner_factory: Callable[..., WorkerRunner] | None = None,
           anchor: AuditAnchor | None = None,
           anchor_state: str | None = None,
+          limits: HttpLimits | None = None,
           job_ledger: JobLedger | None = None,
+          acceptance_ledger: AcceptanceLedger | None = None,
+          database_connection=None,
           audit_chain_factory: Callable[[AuditAuthority], AuditChain] | None = None) -> Service:
     """Assemble one service. The only function that knows all the parts.
 
@@ -229,11 +234,18 @@ def build(*, root_secret: bytes, policy: Policy,
     here) or `principals` (SHA-256 digests to subjects). A server reads the
     digests from its configuration so that no plaintext key has to exist on it.
 
+    `limits` bounds the entry's rate and in-flight jobs; its `max_connections`
+    belongs to the listener, which the caller starts with `http_entry.serve`.
+
     Without `job_ledger` the orchestrator burns job ids in this process only,
     which is what the demo and most tests want. The server entry passes the
-    PostgreSQL ledger, so a restart remembers every id it burned.
-    Its audit_chain_factory loads and verifies durable audit state and reconciles
-    the already signed head with the independent anchor before constructing runners.
+    PostgreSQL ledger, so a restart remembers every id it burned. Likewise,
+    `acceptance_ledger` defaults to process memory for explicit demo/test users;
+    the serving entry supplies PostgreSQL and checks its historical artifacts
+    before any runner is constructed. Stored artifacts require their trusted
+    policy and public keys to remain compatible; rotation is a separate gate.
+    `audit_chain_factory` loads and verifies the durable chain and reconciles
+    its already signed head with the independent anchor before runners exist.
     """
     if (api_keys is None) == (principals is None):
         _fail("pass exactly one of api_keys or principals")
@@ -241,6 +253,9 @@ def build(*, root_secret: bytes, policy: Policy,
         _fail("anchor must be an AuditAnchor")
     if anchor is not None and anchor_state is not None:
         _fail("anchor_state configures the default anchor; pass one or the other")
+    if limits is not None and not isinstance(limits, HttpLimits):
+        _fail("limits must be HttpLimits")
+    limits = limits or HttpLimits()
     if not isinstance(policy, Policy):
         _fail("policy is invalid")
     keys = derive_keys(root_secret)
@@ -254,7 +269,6 @@ def build(*, root_secret: bytes, policy: Policy,
     chain = AuditChain() if audit_chain_factory is None else audit_chain_factory(audit)
     if not isinstance(chain, AuditChain):
         _fail("audit_chain_factory must return an AuditChain")
-    # Persistent storage is fully verified before any runner is constructed.
     if anchor is None:
         anchor = AnchorProcess(verifier=audit.verifier(), state_path=anchor_state)
     recorder = _AnchoredAudit(audit, chain, anchor)
@@ -271,11 +285,22 @@ def build(*, root_secret: bytes, policy: Policy,
         # the public half and could not issue a handoff if it tried.
         handoff_signer = HandoffSigner(integrity_key=keys.integrity_key)
         handoff_verifier = handoff_signer.verifier()
-        approvals = ApprovalStore()
+        if database_connection is None:
+            approvals = ApprovalStore()
+            pending = PendingJobs()
+        else:
+            from .database import PostgresApprovalStore, PostgresPendingJobs
+            approvals = PostgresApprovalStore(database_connection)
+            pending = PostgresPendingJobs(database_connection, policy=policy, verifier=handoff_verifier)
         gateway = Gateway(gateway_id=gateway_id, handoff_verifier=handoff_verifier,
                           approval_store=approvals)
         worker_authority = WorkerAuthority(result_key=keys.result_key,
                                            integrity_key=keys.integrity_key)
+        if acceptance_ledger is not None:
+            if not isinstance(acceptance_ledger, AcceptanceLedger):
+                _fail("acceptance_ledger must be an AcceptanceLedger")
+            acceptance_ledger.check(policy=policy, handoff_verifier=handoff_verifier,
+                                    worker_verifier=worker_authority.verifier())
         # The production/default path is fail-closed isolated execution. Tests may
         # inject a runner_factory deliberately, but a host without the required
         # POSIX isolation primitives must fail here rather than silently fall back
@@ -309,8 +334,8 @@ def build(*, root_secret: bytes, policy: Policy,
                                     job_ledger=job_ledger)
         verifier = ResultVerifier(verifier_id=verifier_id,
                                   handoff_verifier=handoff_verifier,
-                                  worker_verifier=worker_authority.verifier())
-        pending = PendingJobs()
+                                  worker_verifier=worker_authority.verifier(),
+                                  acceptance_ledger=acceptance_ledger)
 
         submit, complete = _submitter(
             orchestrator=orchestrator, verifier=verifier,
@@ -320,6 +345,8 @@ def build(*, root_secret: bytes, policy: Policy,
             registry=(PrincipalRegistry.from_api_keys(api_keys) if api_keys is not None
                       else PrincipalRegistry(principals)),
             submit=submit, complete=complete, job_ids=job_ids,
+            rate_per_minute=limits.rate_per_minute, burst=limits.burst,
+            max_in_flight=limits.max_in_flight,
         )
         return Service(
             entry=entry, orchestrator=orchestrator, gateway=gateway,
@@ -398,13 +425,21 @@ def _submitter(*, orchestrator: Orchestrator,
             return run(subject=subject, job_id=job_id, wire=waiting.wire,
                        handoff=waiting.handoff, trace_id=waiting.trace_id,
                        approval_token=approval_token)
+        except Denied as refusal:
+            if (getattr(pending, "durable", False)
+                    and refusal.decision.reason_code != "JOB_ID_REUSED"):
+                pending.refuse(job_id, subject, now=now())
+            raise
         except GatewayRejected:
             # Refused before anything ran — a wrong token, or one for another
             # job. The job's id is not burned and its own approval is not
             # spent, so it stays waiting for the right one. If anchoring the
             # refusal failed instead, this handler is not reached and the
             # pending entry remains consumed conservatively.
-            pending.restore(job_id, waiting)
+            if getattr(pending, "durable", False) and now() >= waiting.handoff.expires_at:
+                pending.refuse(job_id, subject, now=now())
+            else:
+                pending.restore(job_id, waiting)
             raise
 
     def issue_job(*, subject: str, job_id: str, payload: Mapping[str, str]):
