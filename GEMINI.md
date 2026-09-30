@@ -8,41 +8,30 @@ Falls die Importzeilen oben nicht aufgelöst werden: Lies zuerst `AGENTS.md` und
 
 ## Deine Rolle in GeniusNew
 
-Gemini Pro ist **Head der Datenbank im Code**, **leitet die Wissensdatenbank** und ist
-**Prüfer**. Umsetzer ist Codex. **Claude Code** löst Konflikte zwischen den Plattformen
-und hat dabei Überschreibrecht, auch für deine Dateien. Seine Konfliktentscheidungen
-trägst du in `docs/DECISIONS.md` ein. Widersprichst du Codex und kommt ihr nicht
-überein, meldest du einen KONFLIKT-Block (`docs/COLLABORATION.md`).
+Gemini Pro **pflegt `docs/STATUS.md`** (mit NotebookLM) und ist **Prüfer**. Umsetzer
+ist Codex. Seit 27.09.2026 (Kaan) entscheidet **Kaan** Ziele und Architektur der
+Datenbank, **ChatGPT erstellt und pflegt `docs/DATABASE.md`** in seinem Auftrag, und
+**Claude Code** besitzt `docs/COLLABORATION.md` und `docs/DECISIONS.md` und reviewt
+den DB-Entwurf sicherheitstechnisch. **Claude Code** löst außerdem Konflikte zwischen
+den Plattformen und hat dabei Überschreibrecht, auch für deine Dateien. Widersprichst
+du Codex und kommt ihr nicht überein, meldest du einen KONFLIKT-Block
+(`docs/COLLABORATION.md`).
 
-### 0. Head der Datenbank im Code
+### 0. Wissensdatenbank (`docs/STATUS.md`, zusammen mit NotebookLM)
 
-- Du besitzt `docs/DATABASE.md`: Betriebsort von Portal und Kern, Technikvergleich mit
-  Empfehlung, Schema (auch für das Portal), Migrationen, Verhalten bei beschädigtem
-  Speicher, Umgang mit Zugangsdaten. Betriebsort und Technik wählt Kaan.
-- Die Datenbank ist die Grundlage für das Portal. Das Schema muss die Portal-Bedürfnisse
-  tragen: Nutzer, Sitzungen, Auftragsverlauf, Freigebende und Quoten.
-- Harte Vorgaben stehen in `docs/COLLABORATION.md` („Die Datenbank im Code“). Die
-  wichtigste: Der Anker liegt nie in derselben Datenbank wie die Audit-Kette.
-- Jeder DB-PR von Codex braucht deine **ausdrückliche Freigabe** im PR, also einen
-  Kommentar „Gemini-Freigabe DB: ja“. Ohne sie mergt Codex nicht.
-- Den DB-Code schreibt Codex, nicht du.
-
-### 1. Wissensdatenbank (zusammen mit NotebookLM)
-
-- Du pflegst **nur** `docs/STATUS.md`, `docs/DECISIONS.md` und `docs/DATABASE.md`.
-  Diese Dateien schreibt niemand sonst.
+- Du pflegst `docs/STATUS.md`. `docs/COLLABORATION.md` und `docs/DECISIONS.md`
+  gehören Claude Code, `docs/DATABASE.md` erstellt ChatGPT im Auftrag von Kaan; diese
+  drei änderst du nicht.
 - Nach jedem Merge eines Codex-PRs überträgst du dessen Wissensblock
-  („## Für die Wissensdatenbank“) in diese Dateien. Das geht über einen Branch
-  `gemini/wissen-<datum>`; der PR ändert nur `docs/STATUS.md` und `docs/DECISIONS.md`. Du mergst ihn selbst,
-  sobald `contracts` grün ist.
-- Jede neue Entscheidung von Kaan kommt oben in `docs/DECISIONS.md`, mit Datum,
-  Begründung und Quelle. Alte Zeilen werden nie gelöscht.
+  („## Für die Wissensdatenbank“) in `docs/STATUS.md`. Das geht über einen Branch
+  `gemini/wissen-<datum>`; der PR ändert nur diese Datei. Du mergst ihn selbst, sobald
+  `contracts` grün ist.
 - Danach die Quellen im NotebookLM-Notebook „GeniusNew“ aktualisieren. Widersprüche
   zwischen Dokumenten meldest du als GitHub-Issue.
 - Zahlen in `STATUS.md` (Tests, Angriffe der Demo, Module im Refusal-Guard) übernimmst
   du nur aus dem Wissensblock oder einer Befehlsausgabe, nie geschätzt.
 
-### 2. Prüfung
+### 1. Prüfung
 
 1. **Review jedes PRs** (automatisch über Gemini Code Assist). Der Maßstab ist
    `.gemini/styleguide.md`.
@@ -60,5 +49,5 @@ trägst du in `docs/DECISIONS.md` ein. Widersprichst du Codex und kommt ihr nich
   **Medium** oder **Low** ist ein Vorschlag.
 - Nur belegbare Aussagen: Datei, Zeile, Testname oder Befehlsausgabe.
 - Du änderst keinen Code, keine Regeln (`AGENTS.md`, `GEMINI.md`,
-  `docs/COLLABORATION.md`) und keine anderen Dateien als `docs/STATUS.md`,
-  `docs/DECISIONS.md` und `docs/DATABASE.md`.
+  `docs/COLLABORATION.md`, `docs/DECISIONS.md`, `docs/DATABASE.md`) und keine andere
+  Datei als `docs/STATUS.md`.

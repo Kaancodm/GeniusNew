@@ -6,10 +6,14 @@ key stays in the parent process: only a description of the worker plus its
 payload crosses an exec boundary, and the parent validates and signs whatever
 comes back.
 
-This is deliberately a v0.1 process sandbox, not a microVM. The boundary uses a
-fresh Python interpreter, POSIX resource limits and Python's audit-hook
-mechanism. It does not claim to contain hostile native code or raw syscalls; the
-stronger OS boundary belongs after v0.1.
+This is deliberately a process sandbox, not a microVM. The boundary uses a
+fresh Python interpreter, POSIX resource limits, Python's audit-hook mechanism
+and two kernel-enforced layers. A seccomp filter kills the child the moment it
+tries to start another process or program. A Landlock ruleset (gate A2,
+`docs/ISOLATION-A2.md`) lets it touch only its job directory, read only the
+Python runtime, `geniusnew/` and its own module's directory, and neither bind
+nor connect TCP sockets. The hook only sees what Python reports; the kernel
+layers also see what native code and `_posixsubprocess` do.
 """
 
 from __future__ import annotations
@@ -18,11 +22,14 @@ from dataclasses import asdict, dataclass
 import json
 import os
 import select
+import signal
+import struct
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import time
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from .contracts import ContractError, canonical
 from .results import WorkerAuthority
@@ -67,6 +74,43 @@ _FORBIDDEN_PROCESS_EVENTS = frozenset({
     "resource.prlimit",
 })
 _FORBIDDEN_READ_ROOTS = ("/proc", "/sys", "/dev")
+
+# The verified x86_64 audit arch, process/program syscalls, and clone variants.
+# Other architectures fail closed until the same raw-syscall suite runs on
+# native CI for them.
+_FILTER_ARCHES = {
+    "x86_64": {"arch": 0xC000003E, "kill": (57, 58, 59, 322),
+               "clone": 56, "clone3": 435},
+}
+_X32_SYSCALL_BIT = 0x40000000
+_CLONE_THREAD = 0x00010000
+_ENOSYS = 38
+_SECCOMP_RET_KILL_PROCESS = 0x80000000
+_SECCOMP_RET_ERRNO = 0x00050000
+_SECCOMP_RET_ALLOW = 0x7FFF0000
+_BPF_LD_W_ABS = 0x20
+_BPF_JEQ_K = 0x15
+_BPF_JGE_K = 0x35
+_BPF_JSET_K = 0x45
+_BPF_RET_K = 0x06
+_SIGSYS = getattr(signal, "SIGSYS", None)  # absent on Windows
+_PR_SET_SECCOMP = 22
+_PR_SET_NO_NEW_PRIVS = 38
+_SECCOMP_MODE_FILTER = 2
+
+# Landlock (gate A2). ABI 4 (Linux 6.7) is the minimum because it is the first
+# that restricts TCP as well as files; the syscall numbers are the generic ones
+# and the same on every architecture the seccomp table accepts.
+_LANDLOCK_MIN_ABI = 4
+_LANDLOCK_SCOPE_ABI = 6
+_SYS_LANDLOCK_CREATE_RULESET = 444
+_SYS_LANDLOCK_ADD_RULE = 445
+_SYS_LANDLOCK_RESTRICT_SELF = 446
+_LANDLOCK_CREATE_RULESET_VERSION = 1
+_LANDLOCK_RULE_PATH_BENEATH = 1
+_LANDLOCK_READ = (1 << 2) | (1 << 3)          # READ_FILE | READ_DIR
+_LANDLOCK_NET_TCP = (1 << 0) | (1 << 1)       # BIND_TCP | CONNECT_TCP
+_LANDLOCK_SCOPES = (1 << 0) | (1 << 1)        # abstract unix sockets, signals
 
 
 def _fail(message: str) -> None:
@@ -136,21 +180,27 @@ def _open_is_write(mode: Any, flags: Any) -> bool:
     return isinstance(flags, int) and bool(flags & _WRITE_FLAGS)
 
 
-def _sensitive_read(value: Any) -> bool:
+def _read_denied(value: Any, allowed: tuple[str, ...]) -> bool:
     if isinstance(value, int):
         return False
     try:
         target = os.path.realpath(os.path.abspath(os.fsdecode(os.fspath(value))))
     except TypeError:
         return True
-    return any(
-        target == root or target.startswith(root + os.sep)
-        for root in _FORBIDDEN_READ_ROOTS
-    )
+    if any(target == root or target.startswith(root + os.sep)
+           for root in _FORBIDDEN_READ_ROOTS):
+        return True
+    return not any(target == root or target.startswith(root + os.sep) for root in allowed)
 
 
-def _audit_hook(root: str, state: dict[str, bool]):
-    """Return the child-side audit hook."""
+def _audit_hook(root: str, state: dict[str, bool], read_paths: tuple[str, ...] = ()):
+    """Return the child-side audit hook.
+
+    Reads are checked against the same allowlist Landlock enforces, so a read
+    Python reports is recorded as an isolation violation instead of surfacing as
+    an ordinary `PermissionError` inside the worker.
+    """
+    readable = (root,) + tuple(read_paths)
 
     def deny() -> None:
         state["violated"] = True
@@ -174,10 +224,9 @@ def _audit_hook(root: str, state: dict[str, bool]):
                 # writes are accepted only under the empty per-job sandbox.
                 if args[1] is None or not _path_is_inside(root, args[0]):
                     deny()
-            elif _sensitive_read(args[0]):
-                # The child gets a minimal environment and no inherited parent
-                # descriptors. Blocking proc/sys/dev reads closes the obvious
-                # path back into the parent's environment, memory and FDs.
+            elif _read_denied(args[0], readable):
+                # proc/sys/dev lead back into the parent's environment, memory
+                # and FDs; anything off the allowlist may hold service secrets.
                 deny()
 
     return hook
@@ -194,6 +243,198 @@ def _set_resource_limits(limits: IsolationLimits) -> None:
     resource.setrlimit(resource.RLIMIT_FSIZE, (limits.max_file_bytes, limits.max_file_bytes))
     resource.setrlimit(resource.RLIMIT_NOFILE, (limits.max_open_files, limits.max_open_files))
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+
+
+def _process_filter_supported() -> bool:
+    # A 32-bit interpreter on a 64-bit kernel would present another audit arch
+    # and be killed on its first syscall; refuse it here rather than there.
+    return (sys.platform.startswith("linux")
+            and struct.calcsize("P") == 8
+            and os.uname().machine in _FILTER_ARCHES)
+
+
+def _bpf(code: int, jt: int, jf: int, k: int) -> bytes:
+    return struct.pack("HBBI", code, jt, jf, k)
+
+
+def _process_filter(machine: str) -> bytes:
+    """Return a classic-BPF seccomp program for `machine`.
+
+    Kill on: a foreign audit arch (a syscall ABI the table does not describe),
+    x32 syscall numbers, fork, vfork, execve, execveat, and clone without
+    CLONE_THREAD. Threads stay allowed because the interpreter may start them
+    and they share the filter. clone3 passes its flags in memory the filter
+    cannot read, so it gets ENOSYS and libc falls back to clone, which it can.
+    """
+    spec = _FILTER_ARCHES.get(machine)
+    if spec is None:
+        _fail("no seccomp process filter for this architecture")
+    kill = _bpf(_BPF_RET_K, 0, 0, _SECCOMP_RET_KILL_PROCESS)
+    program = [
+        _bpf(_BPF_LD_W_ABS, 0, 0, 4),                   # seccomp_data.arch
+        _bpf(_BPF_JEQ_K, 1, 0, spec["arch"]),
+        kill,
+        _bpf(_BPF_LD_W_ABS, 0, 0, 0),                   # seccomp_data.nr
+        _bpf(_BPF_JGE_K, 0, 1, _X32_SYSCALL_BIT),
+        kill,
+    ]
+    for number in spec["kill"]:
+        program += [_bpf(_BPF_JEQ_K, 0, 1, number), kill]
+    program += [
+        _bpf(_BPF_JEQ_K, 0, 1, spec["clone3"]),
+        _bpf(_BPF_RET_K, 0, 0, _SECCOMP_RET_ERRNO | _ENOSYS),
+        _bpf(_BPF_JEQ_K, 0, 3, spec["clone"]),
+        _bpf(_BPF_LD_W_ABS, 0, 0, 16),                  # low word of args[0]
+        _bpf(_BPF_JSET_K, 1, 0, _CLONE_THREAD),
+        kill,
+        _bpf(_BPF_RET_K, 0, 0, _SECCOMP_RET_ALLOW),
+    ]
+    return b"".join(program)
+
+
+def _install_process_filter(prctl: Callable[..., int] | None = None) -> None:
+    """Make the kernel kill this process if it tries to start another one.
+
+    Called in the child before the audit hook, which refuses ctypes. A filter
+    cannot be removed once installed, so worker code cannot undo it either.
+    `prctl` is injectable so a test can drive the refusals without filtering
+    the test runner itself.
+    """
+    import ctypes
+
+    class _SockFprog(ctypes.Structure):
+        _fields_ = [("len", ctypes.c_ushort), ("filter", ctypes.c_void_p)]
+
+    program = _process_filter(os.uname().machine)
+    if prctl is None:
+        prctl = ctypes.CDLL(None, use_errno=True).prctl
+        prctl.argtypes = (ctypes.c_int,) + (ctypes.c_ulong,) * 4
+        prctl.restype = ctypes.c_int
+    buffer = ctypes.create_string_buffer(program, len(program))
+    fprog = _SockFprog(len(program) // 8, ctypes.addressof(buffer))
+    if prctl(_PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
+        _fail("could not set no_new_privs for the worker")
+    if prctl(_PR_SET_SECCOMP, _SECCOMP_MODE_FILTER, ctypes.addressof(fprog), 0, 0) != 0:
+        _fail("could not install the worker's seccomp filter")
+
+
+def _libc() -> Any:
+    import ctypes
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.syscall.restype = ctypes.c_long
+    return libc
+
+
+def _landlock_abi(syscall: Callable[..., int] | None = None) -> int:
+    """Return the running kernel's Landlock ABI version, 0 if it has none.
+
+    Without an explicit `syscall` this is the value probed when the module was
+    imported: in the worker child that import happens before the audit hook,
+    which refuses the ctypes a fresh probe would need.
+    """
+    if not sys.platform.startswith("linux"):
+        return 0
+    if syscall is None:
+        return _KERNEL_LANDLOCK_ABI
+    abi = syscall(_SYS_LANDLOCK_CREATE_RULESET, None, 0, _LANDLOCK_CREATE_RULESET_VERSION)
+    return abi if abi > 0 else 0
+
+
+def _probe_landlock_abi() -> int:
+    try:
+        return _landlock_abi(_libc().syscall)
+    except (OSError, AttributeError):
+        return 0
+
+
+_KERNEL_LANDLOCK_ABI = _probe_landlock_abi()
+
+
+def _landlock_fs_rights(abi: int) -> int:
+    # ABI 1 knows 13 filesystem rights; ABI 2 (REFER), 3 (TRUNCATE) and
+    # 5 (IOCTL_DEV) add one each. Handling every right the kernel knows is
+    # what makes everything outside the rules forbidden.
+    count = 13 + (abi >= 2) + (abi >= 3) + (abi >= 5)
+    return (1 << count) - 1
+
+
+def _install_filesystem_rules(root: str, read_paths: tuple[str, ...],
+                              syscall: Callable[..., int] | None = None,
+                              prctl: Callable[..., int] | None = None) -> None:
+    """Confine this process to `root` and read-only `read_paths`, without TCP.
+
+    Called in the child before the seccomp filter and the audit hook, which
+    refuses ctypes. A Landlock domain cannot be left and is inherited by any
+    process the child might still manage to start. `syscall` and `prctl` are
+    injectable so a test can drive every refusal without confining itself.
+    """
+    import ctypes
+
+    class _RulesetAttr(ctypes.Structure):
+        _fields_ = [("handled_access_fs", ctypes.c_uint64),
+                    ("handled_access_net", ctypes.c_uint64),
+                    ("scoped", ctypes.c_uint64)]
+
+    class _PathBeneath(ctypes.Structure):
+        _pack_ = 1
+        _fields_ = [("allowed_access", ctypes.c_uint64),
+                    ("parent_fd", ctypes.c_int32)]
+
+    if syscall is None or prctl is None:
+        libc = _libc()
+        syscall = syscall or libc.syscall
+        prctl = prctl or libc.prctl
+    abi = _landlock_abi(syscall)  # asked afresh: this is the kernel that enforces
+    if abi < _LANDLOCK_MIN_ABI:
+        _fail("the worker needs Landlock ABI 4")
+    everything = _landlock_fs_rights(abi)
+    scopes = _LANDLOCK_SCOPES if abi >= _LANDLOCK_SCOPE_ABI else 0
+    attr = _RulesetAttr(everything, _LANDLOCK_NET_TCP, scopes)
+    ruleset = syscall(_SYS_LANDLOCK_CREATE_RULESET, ctypes.byref(attr), ctypes.sizeof(attr), 0)
+    if ruleset < 0:
+        _fail("could not create the worker's Landlock ruleset")
+    try:
+        rules = [(root, everything)] + [(path, _LANDLOCK_READ) for path in read_paths]
+        for index, (path, access) in enumerate(rules):
+            try:
+                fd = os.open(path, os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
+            except FileNotFoundError:
+                if index == 0:
+                    raise
+                continue  # a runtime path that does not exist grants nothing
+            try:
+                rule = _PathBeneath(access, fd)
+                if syscall(_SYS_LANDLOCK_ADD_RULE, ruleset, _LANDLOCK_RULE_PATH_BENEATH,
+                           ctypes.byref(rule), 0) != 0:
+                    _fail("could not add a Landlock rule for the worker")
+            finally:
+                os.close(fd)
+        if prctl(_PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0:
+            _fail("could not set no_new_privs for the worker")
+        if syscall(_SYS_LANDLOCK_RESTRICT_SELF, ruleset, 0) != 0:
+            _fail("could not restrict the worker with Landlock")
+    finally:
+        os.close(ruleset)
+
+
+def _read_paths(worker: Worker) -> tuple[str, ...]:
+    """Directories a worker may read: the runtime, this package, its module.
+
+    Everything else on the host, the root secret and anchor state included,
+    stays unreadable. A worker module placed next to secrets would expose them;
+    `docs/ISOLATION-A2.md` names that limit.
+    """
+    module = sys.modules.get(type.__getattribute__(type(worker), "__module__"))
+    module_file = getattr(module, "__file__", None)
+    if not isinstance(module_file, str) or not module_file:
+        _fail("isolated worker module must be a file")
+    installed = sysconfig.get_paths()
+    candidates = [installed[key] for key in ("stdlib", "platstdlib", "purelib", "platlib")
+                  if key in installed]
+    candidates.append(os.path.dirname(os.path.abspath(__file__)))
+    candidates.append(os.path.dirname(os.path.abspath(module_file)))
+    return tuple(sorted({os.path.realpath(path) for path in candidates}))
 
 
 def _worker_spec(worker: Worker) -> dict[str, Any]:
@@ -236,6 +477,7 @@ def _request(worker: Worker, payload: Mapping[str, str],
         "worker": _worker_spec(worker),
         "payload": dict(payload),
         "limits": asdict(limits),
+        "read_paths": list(_read_paths(worker)),
     }
     data = canonical(value)
     if len(data) > _MAX_CHILD_REQUEST_BYTES:
@@ -295,6 +537,9 @@ def _read_process(process: subprocess.Popen[bytes],
 
 
 def _decode_child_message(data: bytes, status: int) -> Any:
+    # Only the seccomp filter sends SIGSYS: the child tried to start a process.
+    if _SIGSYS is not None and status == -_SIGSYS:
+        raise _WorkerIsolationViolation()
     if status < 0:
         raise _WorkerResourceExhausted()
     if status != 0:
@@ -368,6 +613,10 @@ class IsolatedWorkerRunner(WorkerRunner):
                  limits: IsolationLimits | None = None) -> None:
         if not _resource_supported():
             _fail("process isolation requires POSIX resource limits")
+        if not _process_filter_supported():
+            _fail("process isolation requires a Linux seccomp process filter")
+        if _landlock_abi() < _LANDLOCK_MIN_ABI:
+            _fail("process isolation requires Landlock ABI 4 (Linux 6.7)")
         if limits is None:
             limits = IsolationLimits()
         if not isinstance(limits, IsolationLimits):
@@ -376,6 +625,7 @@ class IsolatedWorkerRunner(WorkerRunner):
         # Capture only JSON data needed to reconstruct the worker; do not pass
         # this runner or its signing authority across the exec boundary.
         _worker_spec(worker)
+        _read_paths(worker)
         self._limits = limits
 
     @property
