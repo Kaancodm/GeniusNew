@@ -395,6 +395,16 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         self.assertEqual(decision.reason_code, 'JOB_LEDGER_FULL')
         self.assertEqual(len(runner.calls), 1)
 
+    def test_reservation_rechecks_capacity_after_an_earlier_preflight(self):
+        ledger = ProcessLocalJobLedger()
+        orchestrator = self.orchestrator_for(job_ledger=ledger)
+        with mock.patch.object(orchestrator_module, '_MAX_JOBS', 1):
+            self.assertTrue(ledger.reserve(reservation(job_id='job-first')))
+            decision = self.denied(orchestrator._reserve,
+                                   reservation(job_id='job-second'), now=110)
+        self.assertEqual(decision.reason_code, 'JOB_LEDGER_FULL')
+        self.assertEqual(ledger.job_ids(), frozenset({'job-first'}))
+
     def test_an_oversized_job_id_is_refused_before_the_ledger_stores_it(self):
         for call in (lambda: self.wire(job_id='j' * 129),
                      lambda: self.submit(job_id='j' * 129),
@@ -891,6 +901,26 @@ class JobLedgerContractTest(Fixture, unittest.TestCase):
         with self.assertRaisesRegex(ContractError, 'only a reserved job'):
             ledger.commit_execution(reservation(), now=111)
         self.assertTrue(ledger.is_burned('job-demo'))
+
+    def test_shared_process_local_ledger_cannot_overfill_concurrently(self):
+        ledger = ProcessLocalJobLedger()
+        barrier = threading.Barrier(3)
+        outcomes = []
+
+        def reserve_job(job_id):
+            barrier.wait()
+            outcomes.append(ledger.reserve(reservation(job_id=job_id)))
+
+        with mock.patch.object(orchestrator_module, '_MAX_JOBS', 1):
+            threads = [threading.Thread(target=reserve_job, args=(job_id,))
+                       for job_id in ('job-first', 'job-second')]
+            for thread in threads:
+                thread.start()
+            barrier.wait()
+            for thread in threads:
+                thread.join(5)
+        self.assertEqual(outcomes.count(True), 1)
+        self.assertEqual(len(ledger.job_ids()), 1)
 
     def test_the_ledger_is_part_of_the_orchestrator_s_configuration(self):
         for ledger in (object(), set(), ProcessLocalJobLedger):

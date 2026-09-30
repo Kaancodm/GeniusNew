@@ -303,6 +303,8 @@ class ProcessLocalJobLedger(JobLedger):
         with self._lock:
             if reservation.job_id in self._states:
                 return False
+            if len(self._states) >= _MAX_JOBS:
+                return False
             self._states[reservation.job_id] = "RESERVED"
             return True
 
@@ -593,6 +595,11 @@ class Orchestrator:
                  approval_record_hash: str | None = None) -> None:
         """Burn one job id, or confirm the gateway's durable reservation."""
         with self._lock:
+            # Another dispatch can pass the earlier preflight before this one
+            # reserves. The local ledger's own lock also enforces the bound
+            # when several orchestrators share it.
+            if self._ledger.is_full():
+                _deny("JOB_LEDGER_FULL", now=now)
             # Decides the race this lock cannot see: another orchestrator on
             # the same database may have burned the id since the check above.
             if not self._ledger.reserve_admitted(
