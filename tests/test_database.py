@@ -67,7 +67,7 @@ class DatabaseTest(unittest.TestCase):
             ("DELETE FROM schema_migrations", "required database migration is missing"),
             ("UPDATE schema_migrations SET checksum = repeat('0',64)", "checksum mismatch"),
             ("INSERT INTO schema_migrations VALUES (9999, repeat('a',64), 1)", "unknown"),
-            ("UPDATE schema_migrations SET version = 0", "unknown"),
+            ("UPDATE schema_migrations SET version = 0 WHERE version = 1", "unknown"),
             ("UPDATE schema_migrations SET applied_at = -1", "timestamp is invalid"),
         ):
             with self.subTest(change=change), self.db.connect() as owner:
