@@ -254,6 +254,14 @@ class HostCheckTest(unittest.TestCase):
 
 
 class AgentControlTest(unittest.TestCase):
+    @patch("tools.control_deck.checks._which", return_value="/x/hermes")
+    @patch("tools.control_deck.checks._run")
+    def test_hermes_installation_probe_never_invokes_the_writing_launcher(self, run, which):
+        result = checks.tool_status("hermes")
+        self.assertEqual(result["status"], "green")
+        self.assertIn("ungeprüft", result["detail"])
+        run.assert_not_called()
+
     @patch("tools.control_deck.actions.subprocess.run")
     def test_agent_start_is_not_an_http_action(self, run):
         for name in ("grok_build", "hermes", "start_agent", "grok; id"):

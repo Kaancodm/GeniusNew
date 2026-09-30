@@ -141,6 +141,9 @@ def tool_status(name: str) -> dict[str, str]:
     if not exe:
         return _simple("red", "missing")
 
+    if name == "hermes":
+        return _simple("green", "CLI installiert · Modellzugriff ungeprüft")
+
     if name == "claude":
         code, out = _run([exe, "auth", "status"], cwd=Path.home())
         try:

@@ -7,13 +7,12 @@ import json
 import subprocess
 from pathlib import Path
 
-from .checks import DEFAULT_REPO, _which, agent_socket
+from .checks import DEFAULT_REPO, _which, agent_socket, agent_session, tool_status
 
 _MAX_OUTPUT = 24_000
 
 _ACTIONS: dict[str, tuple[list[str], float]] = {
     "grok_build_status": ([str(Path.home() / ".local/bin/grok"), "--version"], 8.0),
-    "hermes_status": ([str(Path.home() / ".local/bin/hermes"), "--version"], 10.0),
     "git_status": (["git", "status", "--short", "--branch"], 5.0),
     "tests": (
         ["python3", "-m", "unittest", "discover", "-s", "tests", "-q"],
@@ -26,12 +25,18 @@ _ACTIONS: dict[str, tuple[list[str], float]] = {
     ),
 }
 def allowed_actions() -> tuple[str, ...]:
-    return tuple(_ACTIONS)
+    return (*_ACTIONS, "hermes_status")
 
 
 def run_action(name: str, repo: Path = DEFAULT_REPO) -> dict[str, object]:
-    if name not in _ACTIONS:
+    if name not in allowed_actions():
         raise ValueError("action is not allowlisted")
+    if name == "hermes_status":
+        installed = tool_status("hermes")
+        session = agent_session("hermes")
+        ok = installed["status"] == "green"
+        return {"action": name, "ok": ok, "exit_code": 0 if ok else 1,
+                "output": installed["detail"] + "\n" + session["detail"]}
     argv, timeout = _ACTIONS[name]
     env = {
         **os.environ,

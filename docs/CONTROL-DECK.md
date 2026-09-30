@@ -70,7 +70,7 @@ Der Status muss aus Repository, Diensten und tatsächlichen Nachweisen folgen.
 
 ## Grok und Hermes
 
-Der eigene Agentenbereich lädt über /api/agents ausschließlich lokale Versions-
+Der eigene Agentenbereich lädt über /api/agents ausschließlich lokale Installations-
 und Terminalstatusdaten. Es entstehen keine Modellaufträge durch Seitenaufrufe.
 Installiert, Terminal geöffnet, angemeldet und erfolgreicher Modellauftrag sind
 unterschiedliche Zustände; eine offene Terminal-Sitzung beweist keinen Modellzugriff.
@@ -81,6 +81,8 @@ unterschiedliche Zustände; eine offene Terminal-Sitzung beweist keinen Modellzu
 - Grok Build: fest vorgegebener Terminalstart, eigenes tmux-Socket, eigene Arbeitsmappe,
   explizites Custom-Sandbox-Profil (fail closed), Projektdateien nur lesbar,
   Shell/Schreiben/MCP/Web/Subagenten für diese Sitzung gesperrt.
+- Hermes-Status liest nur Programmpfad und tmux-Zustand; der Paket-Launcher wird
+  nicht ausgeführt, da bereits seine Versionsabfrage eine Installationssperre schreibt.
 - Hermes: fest vorgegebener Terminalstart mit bestehendem Modellanbieter und bestehender
   Werkzeugkonfiguration, maximal acht Turns und 120 Sekunden pro Auftrag.
   Hermes hat kein eigenes Modellkontingent; ein Codex-Anbieter verbraucht Codex-Kontingent.
