@@ -1,9 +1,9 @@
-"""Gates B1 and B2: an exact schema history, and the job ledger on top of it.
+"""Gates B1–B3: an exact schema history and persistent job/acceptance ledgers.
 
 Serving never installs or repairs a schema. Only the explicit migration command
 uses the migration owner's credentials; runtime gets SELECT on the history.
-Since B2 the runtime burns job ids in `job_ledger` (`PostgresJobLedger`); the
-acceptance ledger stays unused until B3.
+The runtime burns job ids and accepts signed results in the database; the
+acceptance trigger completes the bound committed job atomically.
 
 The start check refuses a runtime role that could undo what the database is
 there to enforce. Triggers that forbid deleting or rewinding a job are worth
@@ -18,12 +18,15 @@ from hashlib import sha256
 from pathlib import Path
 import threading
 import time
+from weakref import WeakKeyDictionary
 
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
-from .contracts import ContractError
+from .contracts import ContractError, HandoffVerifier, Policy, validate, validate_pending
 from .orchestrator import JobLedger, Reservation
+from .results import WorkerVerifier, accept as accept_result
+from .verifier import AcceptanceLedger
 
 _MIGRATIONS = ((1, "0001_core_foundation.sql"),)
 _MIGRATION_DIR = Path(__file__).with_name("migrations")
@@ -34,6 +37,15 @@ _MIGRATION_LOCK = 0x47454E4955534231
 # `audit.py` use it; a test pins the three together.
 _MAX_TIME = 4102444800
 _MAX_JOB_ID_BYTES = 128
+
+_CONNECTION_LOCKS = WeakKeyDictionary()
+_CONNECTION_LOCKS_LOCK = threading.Lock()
+
+
+def connection_lock(connection):
+    """Share transaction exclusion among every store using this connection."""
+    with _CONNECTION_LOCKS_LOCK:
+        return _CONNECTION_LOCKS.setdefault(connection, threading.RLock())
 
 _CORE_TABLES = ("schema_migrations", "job_ledger", "acceptance_ledger")
 # What the runtime role holds on each Core table, and nothing else
@@ -173,6 +185,18 @@ def _check_job_ledger(connection) -> None:
         _fail("job ledger holds a formally invalid row")
 
 
+def _check_acceptance_bindings(connection) -> None:
+    """The durable state must agree in both directions, in one snapshot."""
+    mismatch = connection.execute(
+        "SELECT EXISTS (SELECT 1 FROM public.acceptance_ledger a "
+        "FULL JOIN public.job_ledger j ON j.job_id = a.job_id "
+        "AND j.handoff_sha256 = a.handoff_sha256 "
+        "WHERE (a.job_id IS NOT NULL AND j.state IS DISTINCT FROM 'COMPLETED') "
+        "OR (j.state = 'COMPLETED' AND a.job_id IS NULL))").fetchone()[0]
+    if mismatch:
+        _fail("acceptance ledger and completed jobs do not match")
+
+
 @contextmanager
 def open_database(dsn: str):
     """Validate the installed foundation before any listener or worker exists."""
@@ -184,6 +208,7 @@ def open_database(dsn: str):
             _check_tables(connection)
             _check_runtime_role(connection)
             _check_job_ledger(connection)
+            _check_acceptance_bindings(connection)
         yield connection
 
 
@@ -206,7 +231,7 @@ class PostgresJobLedger(JobLedger):
             _fail("job ledger connection must be in autocommit mode")
         self._connection = connection
         # The connection is shared by the service's request threads.
-        self._lock = threading.Lock()
+        self._lock = connection_lock(connection)
 
     def is_burned(self, job_id: str) -> bool:
         return self._execute("SELECT 1 FROM public.job_ledger WHERE job_id = %s",
@@ -245,6 +270,99 @@ class PostgresJobLedger(JobLedger):
         except psycopg.Error:
             # The same reason as `_connect`: driver errors carry server text.
             raise ContractError("job ledger is unavailable") from None
+
+
+class PostgresAcceptanceLedger(AcceptanceLedger):
+    """Gate B3: once across restarts/replicas, with the database's state trigger.
+
+    Use a dedicated autocommit connection: its short transaction must not
+    include another ledger's mutations or any worker execution.
+    """
+
+    def __init__(self, connection) -> None:
+        if not isinstance(connection, psycopg.Connection):
+            _fail("acceptance ledger needs a psycopg connection")
+        if not connection.autocommit:
+            _fail("acceptance ledger connection must be in autocommit mode")
+        self._connection = connection
+        self._lock = connection_lock(connection)
+
+    def reserve(self, *, job_id: str, handoff_wire: bytes, result_wire: bytes,
+                now: int) -> bool:
+        digest = sha256(handoff_wire).hexdigest()
+        try:
+            with self._lock:
+                # UNKNOWN belongs to a closed connection; let its first SQL
+                # operation fail through the sanitized driver-error path.
+                if self._connection.info.transaction_status not in (
+                        psycopg.pq.TransactionStatus.IDLE, psycopg.pq.TransactionStatus.UNKNOWN):
+                    _fail("acceptance ledger cannot join an existing transaction")
+                with self._connection.transaction():
+                    # Serialize replays on the job before inspecting acceptance;
+                    # otherwise a racing INSERT meets the BEFORE trigger first.
+                    self._connection.execute(
+                        "SELECT 1 FROM public.job_ledger "
+                        "WHERE job_id = %s AND handoff_sha256 = %s FOR UPDATE",
+                        (job_id, digest)).fetchone()
+                    existing = self._connection.execute(
+                        "SELECT 1 FROM public.acceptance_ledger WHERE handoff_sha256 = %s",
+                        (digest,)).fetchone()
+                    if existing is not None:
+                        return False
+                    # BEFORE INSERT requires EXECUTION_COMMITTED; AFTER INSERT
+                    # completes exactly this job. Failure rolls both back.
+                    self._connection.execute(
+                        "INSERT INTO public.acceptance_ledger "
+                        "(handoff_sha256, job_id, handoff_wire, result_sha256, result_wire, accepted_at) "
+                        "VALUES (%s, %s, %s, %s, %s, %s)",
+                        (digest, job_id, handoff_wire, sha256(result_wire).hexdigest(), result_wire, now))
+                    completed = self._connection.execute(
+                        "SELECT state, updated_at FROM public.job_ledger "
+                        "WHERE job_id = %s AND handoff_sha256 = %s", (job_id, digest)).fetchone()
+                    if completed != ("COMPLETED", now):
+                        _fail("acceptance did not complete the bound job")
+            return True
+        except psycopg.Error:
+            raise ContractError("acceptance ledger is unavailable") from None
+
+    def check(self, *, policy: Policy, handoff_verifier: HandoffVerifier,
+              worker_verifier: WorkerVerifier) -> None:
+        # A private authority here would collapse the independent verifier.
+        if not isinstance(policy, Policy):
+            _fail("acceptance start check needs a Policy")
+        if type(handoff_verifier) is not HandoffVerifier:
+            _fail("acceptance start check needs a HandoffVerifier")
+        if type(worker_verifier) is not WorkerVerifier:
+            _fail("acceptance start check needs a WorkerVerifier")
+        try:
+            with self._lock, self._connection.transaction():
+                self._connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                _check_job_ledger(self._connection)
+                _check_acceptance_bindings(self._connection)
+                rows = self._connection.execute(
+                    "SELECT a.job_id, a.handoff_sha256, a.handoff_wire, a.result_sha256, "
+                    "a.result_wire, a.accepted_at, j.subject, j.expires_at, j.reserved_at, j.updated_at "
+                    "FROM public.acceptance_ledger a JOIN public.job_ledger j "
+                    "ON j.job_id = a.job_id AND j.handoff_sha256 = a.handoff_sha256")
+                for job_id, digest, wire, result_digest, result_wire, accepted_at, subject, expires, reserved, updated in rows:
+                    if (type(accepted_at) is not int or not 1 <= accepted_at <= _MAX_TIME
+                            or not reserved <= accepted_at < expires or updated != accepted_at):
+                        _fail("acceptance ledger holds an invalid acceptance time")
+                    if (sha256(wire).hexdigest() != digest
+                            or sha256(result_wire).hexdigest() != result_digest):
+                        _fail("acceptance ledger wire digest mismatch")
+                    # Reconstruct from the stored bytes at the original time,
+                    # not today's clock: historical expiration is not damage.
+                    pending = policy.grant_for(subject).requires_approval
+                    revalidate = validate_pending if pending else validate
+                    handoff = revalidate(wire, subject=subject, job_id=job_id,
+                                         policy=policy, verifier=handoff_verifier, now=accepted_at)
+                    if handoff.expires_at != expires:
+                        _fail("acceptance handoff does not match the job expiration")
+                    accept_result(result_wire, handoff=handoff,
+                                  verifier=worker_verifier, now=accepted_at)
+        except psycopg.Error:
+            raise ContractError("acceptance ledger is unavailable") from None
 
 
 def migrate(dsn: str) -> None:

@@ -195,7 +195,16 @@ class ServeTest(unittest.TestCase):
             row = connection.execute(
                 "SELECT state, subject FROM job_ledger WHERE job_id = %s",
                 (body["job_id"],)).fetchone()
-        self.assertEqual(row, ("EXECUTION_COMMITTED", "subject-serve"))
+        self.assertEqual(row, ("COMPLETED", "subject-serve"))
+        with self.db.connect(runtime=True) as connection:
+            acceptance = connection.execute(
+                "SELECT a.handoff_sha256, a.handoff_wire, a.result_sha256, a.result_wire "
+                "FROM acceptance_ledger a JOIN job_ledger j "
+                "ON j.job_id=a.job_id AND j.handoff_sha256=a.handoff_sha256 "
+                "WHERE a.job_id=%s AND j.state='COMPLETED'", (body["job_id"],)).fetchone()
+        self.assertIsNotNone(acceptance)
+        self.assertEqual(acceptance[0], hashlib.sha256(acceptance[1]).hexdigest())
+        self.assertEqual(acceptance[2], hashlib.sha256(acceptance[3]).hexdigest())
 
     def test_a_job_runs_end_to_end_and_sigterm_stops_the_service(self):
         self.start()

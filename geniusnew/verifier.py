@@ -48,6 +48,7 @@ be reading UNKNOWN as PASS.
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 import hashlib
 import re
 from dataclasses import dataclass
@@ -154,11 +155,45 @@ class Acceptance:
         return self.result.succeeded
 
 
+class AcceptanceLedger(ABC):
+    """Remember only fully verified artifacts; reserve atomically across callers."""
+
+    @abstractmethod
+    def reserve(self, *, job_id: str, handoff_wire: bytes, result_wire: bytes,
+                now: int) -> bool:
+        """Persist the pair, or return False when this handoff was already taken."""
+
+    def check(self, *, policy: Policy, handoff_verifier: HandoffVerifier,
+              worker_verifier: WorkerVerifier) -> None:
+        """Validate durable state before the service creates runners or a listener."""
+
+
+class ProcessLocalAcceptanceLedger(AcceptanceLedger):
+    """Explicit demo/test storage. The serving entry always uses PostgreSQL."""
+
+    def __init__(self) -> None:
+        self._accepted: set[str] = set()
+        self._lock = Lock()
+
+    def reserve(self, *, job_id: str, handoff_wire: bytes, result_wire: bytes,
+                now: int) -> bool:
+        digest = hashlib.sha256(handoff_wire).hexdigest()
+        with self._lock:
+            if digest in self._accepted:
+                return False
+            if len(self._accepted) >= _MAX_ACCEPTED:
+                raise Rejected("the acceptance ledger is full",
+                               reason_code="ACCEPTANCE_LEDGER_FULL", occurred_at=now)
+            self._accepted.add(digest)
+        return True
+
+
 class ResultVerifier:
     """Takes results for jobs it did not request and did not run."""
 
     def __init__(self, *, verifier_id: str, handoff_verifier: HandoffVerifier,
-                 worker_verifier: WorkerVerifier) -> None:
+                 worker_verifier: WorkerVerifier,
+                 acceptance_ledger: AcceptanceLedger | None = None) -> None:
         if type(verifier_id) is not str or not _VERIFIER_ID.match(verifier_id):
             _fail("verifier_id must be a lowercase identifier of at most 63 characters")
         # Exactly the public half: this checks handoffs, it never issues one.
@@ -171,8 +206,10 @@ class ResultVerifier:
         self._worker_verifier = worker_verifier
         self._verifier_id = verifier_id
         self._handoff_verifier = handoff_verifier
-        self._accepted: set[str] = set()
-        self._lock = Lock()
+        if acceptance_ledger is not None and not isinstance(acceptance_ledger, AcceptanceLedger):
+            _fail("acceptance_ledger must be an AcceptanceLedger")
+        self._ledger = (ProcessLocalAcceptanceLedger() if acceptance_ledger is None
+                        else acceptance_ledger)
 
     @property
     def verifier_id(self) -> str:
@@ -208,7 +245,11 @@ class ResultVerifier:
         # Burned only now, with a fully validated result in hand. Reserving
         # earlier would let a forged result spend the job's one acceptance and
         # lock out the genuine one.
-        self._reserve(digest, now=now)
+        if not self._ledger.reserve(job_id=handoff.job_id,
+                                    handoff_wire=handoff.to_bytes(),
+                                    result_wire=result.to_bytes(), now=now):
+            raise Rejected("this handoff already has an accepted result",
+                           reason_code="RESULT_ALREADY_ACCEPTED", occurred_at=now)
         return Acceptance(
             job_id=handoff.job_id,
             worker_agent_id=handoff.worker_agent_id,
@@ -262,14 +303,3 @@ class ResultVerifier:
         except ContractError as refusal:
             raise Rejected(str(refusal), reason_code="RESULT_NOT_VALID",
                            occurred_at=now) from None
-
-    def _reserve(self, digest: str, *, now: int) -> None:
-        """One admitted handoff, one accepted result. Atomically."""
-        with self._lock:
-            if digest in self._accepted:
-                raise Rejected("this handoff already has an accepted result",
-                               reason_code="RESULT_ALREADY_ACCEPTED", occurred_at=now)
-            if len(self._accepted) >= _MAX_ACCEPTED:
-                raise Rejected("the acceptance ledger is full",
-                               reason_code="ACCEPTANCE_LEDGER_FULL", occurred_at=now)
-            self._accepted.add(digest)

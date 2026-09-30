@@ -61,7 +61,7 @@ from .isolation import IsolatedWorkerRunner
 from .keys import ServiceKeys, derive_keys
 from .orchestrator import Denied, DispatchAttempted, JobLedger, Orchestrator, WorkerEndpoint
 from .results import WorkerAuthority, handoff_digest
-from .verifier import Rejected, ResultVerifier
+from .verifier import AcceptanceLedger, Rejected, ResultVerifier
 from .workers import Worker, WorkerRunner
 
 _TRACE_PREFIX = "trace-"
@@ -216,7 +216,8 @@ def build(*, root_secret: bytes, policy: Policy,
           runner_factory: Callable[..., WorkerRunner] | None = None,
           anchor: AuditAnchor | None = None,
           anchor_state: str | None = None,
-          job_ledger: JobLedger | None = None) -> Service:
+          job_ledger: JobLedger | None = None,
+          acceptance_ledger: AcceptanceLedger | None = None) -> Service:
     """Assemble one service. The only function that knows all the parts.
 
     The default anchor is an `AnchorProcess`, persisted to `anchor_state` when
@@ -230,7 +231,11 @@ def build(*, root_secret: bytes, policy: Policy,
 
     Without `job_ledger` the orchestrator burns job ids in this process only,
     which is what the demo and most tests want. The server entry passes the
-    PostgreSQL ledger, so a restart remembers every id it burned.
+    PostgreSQL ledger, so a restart remembers every id it burned. Likewise,
+    `acceptance_ledger` defaults to process memory for explicit demo/test users;
+    the serving entry supplies PostgreSQL and checks its historical artifacts
+    before any runner is constructed. Stored artifacts require their trusted
+    policy and public keys to remain compatible; rotation is a separate gate.
     """
     if (api_keys is None) == (principals is None):
         _fail("pass exactly one of api_keys or principals")
@@ -254,6 +259,11 @@ def build(*, root_secret: bytes, policy: Policy,
                       approval_store=approvals)
     worker_authority = WorkerAuthority(result_key=keys.result_key,
                                        integrity_key=keys.integrity_key)
+    if acceptance_ledger is not None:
+        if not isinstance(acceptance_ledger, AcceptanceLedger):
+            _fail("acceptance_ledger must be an AcceptanceLedger")
+        acceptance_ledger.check(policy=policy, handoff_verifier=handoff_verifier,
+                                worker_verifier=worker_authority.verifier())
     # The production/default path is fail-closed isolated execution. Tests may
     # inject a runner_factory deliberately, but a host without the required
     # POSIX isolation primitives must fail here rather than silently fall back
@@ -293,7 +303,8 @@ def build(*, root_secret: bytes, policy: Policy,
                                 job_ledger=job_ledger)
     verifier = ResultVerifier(verifier_id=verifier_id,
                               handoff_verifier=handoff_verifier,
-                              worker_verifier=worker_authority.verifier())
+                              worker_verifier=worker_authority.verifier(),
+                              acceptance_ledger=acceptance_ledger)
     pending = PendingJobs()
 
     submit, complete = _submitter(
