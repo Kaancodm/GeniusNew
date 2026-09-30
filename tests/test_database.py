@@ -5,6 +5,7 @@ from hashlib import sha256
 from pathlib import Path
 import tempfile
 import unittest
+import uuid
 from unittest.mock import patch
 
 import psycopg
@@ -145,6 +146,171 @@ class DatabaseTest(unittest.TestCase):
                     "SELECT pg_get_userbyid(relowner) FROM pg_class "
                     "WHERE oid=to_regclass(%s)", ("public." + table,)).fetchone()[0]
                 self.assertNotEqual(owner, "genius_core")
+
+
+class StartCheckTest(unittest.TestCase):
+    """Gate B2: the start refuses a runtime that could undo the database's rules."""
+
+    def setUp(self):
+        self.db = PostgresDatabase()
+        self.addCleanup(self.db.close)
+        database.migrate(self.db.owner_dsn)
+
+    def owner(self, *statements):
+        with self.db.connect() as connection:
+            for statement in statements:
+                connection.execute(statement)
+
+    def refused(self, message, dsn=None):
+        with self.assertRaisesRegex(ContractError, message):
+            with database.open_database(dsn or self.db.runtime_dsn):
+                self.fail("the start was not refused")
+
+    def test_the_documented_runtime_role_starts(self):
+        with database.open_database(self.db.runtime_dsn) as connection:
+            self.assertEqual(connection.execute("SELECT current_user").fetchone(),
+                             ("genius_core",))
+
+    def test_a_superuser_is_refused_as_the_runtime(self):
+        self.refused("must not be privileged", dsn=self.db.owner_dsn)
+
+    def test_a_runtime_that_can_disable_triggers_is_refused(self):
+        for privilege in ("SET", "ALTER SYSTEM"):
+            with self.subTest(privilege=privilege):
+                self.owner(f"GRANT {privilege} ON PARAMETER session_replication_role TO genius_core")
+                try:
+                    self.refused("must not disable triggers")
+                finally:
+                    self.owner(f"REVOKE {privilege} ON PARAMETER session_replication_role FROM genius_core")
+
+    def test_trigger_bypass_through_a_non_inherited_role_is_refused(self):
+        role = "geniusnew_test_parameter_" + uuid.uuid4().hex
+        self.owner(f"CREATE ROLE {role}",
+                   f"GRANT SET ON PARAMETER session_replication_role TO {role}",
+                   f"GRANT {role} TO genius_core WITH INHERIT FALSE, SET TRUE")
+        try:
+            self.refused("must not disable triggers")
+        finally:
+            self.owner(f"REVOKE {role} FROM genius_core",
+                       f"REVOKE SET ON PARAMETER session_replication_role FROM {role}",
+                       f"DROP ROLE {role}")
+
+    def test_excess_table_or_schema_rights_through_a_non_inherited_role_are_refused(self):
+        role = "geniusnew_test_access_" + uuid.uuid4().hex
+        self.owner(f"CREATE ROLE {role}",
+                   f"GRANT {role} TO genius_core WITH INHERIT FALSE, SET TRUE")
+        try:
+            for grant, revoke, reason in (
+                    (f"GRANT DELETE ON job_ledger TO {role}",
+                     f"REVOKE DELETE ON job_ledger FROM {role}", "documented table privileges"),
+                    (f"GRANT CREATE ON SCHEMA public TO {role}",
+                     f"REVOKE CREATE ON SCHEMA public FROM {role}", "must not create objects")):
+                with self.subTest(grant=grant):
+                    self.owner(grant)
+                    try:
+                        self.refused(reason)
+                    finally:
+                        self.owner(revoke)
+        finally:
+            self.owner(f"REVOKE {role} FROM genius_core", f"DROP ROLE {role}")
+
+    def test_a_runtime_with_server_file_or_program_access_is_refused(self):
+        for role in ("pg_read_server_files", "pg_write_server_files",
+                     "pg_execute_server_program"):
+            with self.subTest(role=role):
+                self.owner(f"GRANT {role} TO genius_core")
+                try:
+                    self.refused("must not be privileged")
+                finally:
+                    self.owner(f"REVOKE {role} FROM genius_core")
+
+    def test_a_runtime_that_can_set_a_privileged_role_is_refused(self):
+        role = "geniusnew_test_privileged_" + uuid.uuid4().hex
+        self.owner(f"CREATE ROLE {role} CREATEROLE",
+                   f"GRANT {role} TO genius_core WITH INHERIT FALSE, SET TRUE")
+        try:
+            self.refused("must not be privileged")
+        finally:
+            self.owner(f"REVOKE {role} FROM genius_core", f"DROP ROLE {role}")
+
+    def test_membership_with_only_documented_rights_starts(self):
+        role = "geniusnew_test_reader_" + uuid.uuid4().hex
+        self.owner(f"CREATE ROLE {role}",
+                   f"GRANT SELECT ON job_ledger TO {role}",
+                   f"GRANT {role} TO genius_core")
+        try:
+            with database.open_database(self.db.runtime_dsn):
+                pass
+        finally:
+            self.owner(f"REVOKE {role} FROM genius_core",
+                       f"REVOKE SELECT ON job_ledger FROM {role}", f"DROP ROLE {role}")
+
+    def test_a_runtime_that_owns_a_core_table_is_refused(self):
+        # Owner privileges are revoked, so only the ownership itself is left.
+        self.owner("ALTER TABLE job_ledger OWNER TO genius_core",
+                   "REVOKE ALL ON job_ledger FROM genius_core",
+                   "GRANT SELECT, INSERT, UPDATE ON job_ledger TO genius_core")
+        self.refused("must not own the Core tables")
+
+    def test_each_privilege_beyond_or_short_of_the_documented_set_is_refused(self):
+        changes = [
+                ("GRANT DELETE ON job_ledger TO genius_core",
+                 "REVOKE DELETE ON job_ledger FROM genius_core"),
+                ("GRANT TRIGGER ON job_ledger TO genius_core",
+                 "REVOKE TRIGGER ON job_ledger FROM genius_core"),
+                ("GRANT UPDATE ON acceptance_ledger TO genius_core",
+                 "REVOKE UPDATE ON acceptance_ledger FROM genius_core"),
+                ("GRANT INSERT ON schema_migrations TO genius_core",
+                 "REVOKE INSERT ON schema_migrations FROM genius_core"),
+                ("REVOKE UPDATE ON job_ledger FROM genius_core",
+                 "GRANT UPDATE ON job_ledger TO genius_core")]
+        with self.db.connect() as connection:
+            if connection.info.server_version >= 170000:
+                changes.append(("GRANT MAINTAIN ON job_ledger TO genius_core",
+                                "REVOKE MAINTAIN ON job_ledger FROM genius_core"))
+        for grant, revoke in changes:
+            with self.subTest(grant=grant):
+                self.owner(grant)
+                self.refused("exactly the documented table privileges")
+                self.owner(revoke)
+        with database.open_database(self.db.runtime_dsn):
+            pass
+
+    def test_a_runtime_that_may_create_in_the_core_schema_is_refused(self):
+        self.owner("GRANT CREATE ON SCHEMA public TO genius_core")
+        self.refused("must not create objects in the Core schema")
+
+    def test_a_formally_invalid_ledger_row_is_refused(self):
+        valid = dict(job_id="'job-demo'", subject="'subject-demo'",
+                     handoff_sha256="repeat('a', 64)", state="'EXECUTION_COMMITTED'",
+                     created_at="100", reserved_at="100", updated_at="110", expires_at="160")
+        for changes in (dict(job_id="''"), dict(job_id="repeat('j', 129)"),
+                        dict(subject="''"), dict(handoff_sha256="repeat('A', 64)"),
+                        dict(handoff_sha256="repeat('g', 64)"),
+                        dict(created_at="0", reserved_at="0"),
+                        dict(updated_at="99"), dict(updated_at="4102444801",
+                                                    expires_at="4102444802"),
+                        dict(expires_at="100"), dict(expires_at="4102444801"),
+                        dict(reserved_at="99"), dict(reserved_at="111")):
+            with self.subTest(changes=changes):
+                row = {**valid, **changes}
+                self.owner(f"INSERT INTO job_ledger VALUES ({row['job_id']}, "
+                           f"{row['subject']}, {row['handoff_sha256']}, {row['state']}, "
+                           f"{row['created_at']}, {row['reserved_at']}, "
+                           f"{row['updated_at']}, {row['expires_at']})")
+                self.refused("job ledger holds a formally invalid row")
+                self.owner("DELETE FROM job_ledger")
+        self.owner(f"INSERT INTO job_ledger VALUES ({valid['job_id']}, {valid['subject']}, "
+                   f"{valid['handoff_sha256']}, {valid['state']}, {valid['created_at']}, "
+                   f"{valid['reserved_at']}, {valid['updated_at']}, {valid['expires_at']})")
+        with database.open_database(self.db.runtime_dsn):
+            pass
+
+    def test_the_bounds_are_the_orchestrator_s_and_the_audit_contract_s(self):
+        from geniusnew import audit, orchestrator
+        self.assertEqual(database._MAX_TIME, audit._MAX_OCCURRED_AT)
+        self.assertEqual(database._MAX_TIME, orchestrator._MAX_OCCURRED_AT)
+        self.assertEqual(database._MAX_JOB_ID_BYTES, orchestrator._MAX_JOB_ID_BYTES)
 
 
 class ConnectionInputTest(unittest.TestCase):
