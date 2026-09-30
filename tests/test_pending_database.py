@@ -183,6 +183,16 @@ class DurablePendingTest(ApprovalFixture, unittest.TestCase):
     def test_final_refusal_atomically_removes_pending_and_burns_id(self):
         self.assert_refused(102)
 
+    def test_refusal_rejects_invalid_times_before_changing_pending_state(self):
+        pending, _ = self.stores()
+        waiting = self.add(pending)
+        for now in (0, True, 99, 4102444801):
+            with self.subTest(now=now):
+                with self.assertRaisesRegex(ContractError, 'refusal time'):
+                    pending.refuse('job-demo', 'subject-demo', now=now)
+                self.assertEqual(pending.peek('job-demo'), waiting)
+                self.assertEqual(self.rows(), [('PENDING_APPROVAL', None)])
+
     def test_pending_subject_and_duplicate_id_are_refused(self):
         pending, _ = self.stores()
         self.add(pending)
