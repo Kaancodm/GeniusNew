@@ -1,8 +1,14 @@
-"""Gate B1: synchronous connections and an exact, transactional schema history.
+"""Gates B1 and B2: an exact schema history, and the job ledger on top of it.
 
 Serving never installs or repairs a schema. Only the explicit migration command
 uses the migration owner's credentials; runtime gets SELECT on the history.
-The ledger tables remain unused by the runtime until gates B2 and B3.
+Since B2 the runtime burns job ids in `job_ledger` (`PostgresJobLedger`); the
+acceptance ledger stays unused until B3.
+
+The start check refuses a runtime role that could undo what the database is
+there to enforce. Triggers that forbid deleting or rewinding a job are worth
+nothing to a superuser or to the tables' owner, so connecting as either is a
+configuration error, not a convenience.
 """
 
 from __future__ import annotations
@@ -10,17 +16,35 @@ from __future__ import annotations
 from contextlib import contextmanager
 from hashlib import sha256
 from pathlib import Path
+import threading
 import time
 
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
 from .contracts import ContractError
+from .orchestrator import JobLedger, Reservation
 
 _MIGRATIONS = ((1, "0001_core_foundation.sql"),)
 _MIGRATION_DIR = Path(__file__).with_name("migrations")
 # Serialize competing migration processes, including the first installation.
 _MIGRATION_LOCK = 0x47454E4955534231
+
+# The audit contract's upper bound for a timestamp, as `orchestrator.py` and
+# `audit.py` use it; a test pins the three together.
+_MAX_TIME = 4102444800
+_MAX_JOB_ID_BYTES = 128
+
+_CORE_TABLES = ("schema_migrations", "job_ledger", "acceptance_ledger")
+# What the runtime role holds on each Core table, and nothing else
+# (docs/DATABASE.md §10). An owner or a superuser holds every one of them.
+_RUNTIME_PRIVILEGES = {
+    "schema_migrations": frozenset({"SELECT"}),
+    "job_ledger": frozenset({"SELECT", "INSERT", "UPDATE"}),
+    "acceptance_ledger": frozenset({"SELECT", "INSERT"}),
+}
+_TABLE_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE",
+                     "REFERENCES", "TRIGGER")
 
 
 def _fail(message: str) -> None:
@@ -81,6 +105,56 @@ def _check_tables(connection) -> None:
                        "result_wire, accepted_at FROM public.acceptance_ledger LIMIT 0")
 
 
+def _check_runtime_role(connection) -> None:
+    """Refuse a runtime role that could undo what the database enforces."""
+    privileged = connection.execute(
+        "SELECT rolsuper OR rolbypassrls OR rolcreaterole OR rolcreatedb OR rolreplication "
+        "FROM pg_catalog.pg_roles WHERE rolname = current_user").fetchone()
+    if privileged is None or privileged[0]:
+        _fail("database runtime role must not be privileged")
+    # Membership counts: a member of the owning role can alter the table and
+    # disable its triggers even after the owner revoked its own privileges.
+    owned = connection.execute(
+        "SELECT count(*) FROM pg_catalog.pg_class c "
+        "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE n.nspname = 'public' AND c.relname = ANY(%s) "
+        "AND pg_catalog.pg_has_role(current_user, c.relowner, 'MEMBER')",
+        (list(_CORE_TABLES),)).fetchone()[0]
+    if owned:
+        _fail("database runtime role must not own the Core tables")
+    for table, expected in _RUNTIME_PRIVILEGES.items():
+        held = frozenset(
+            privilege for privilege in _TABLE_PRIVILEGES
+            if connection.execute(
+                "SELECT pg_catalog.has_table_privilege(current_user, %s, %s)",
+                ("public." + table, privilege)).fetchone()[0])
+        if held != expected:
+            _fail("database runtime role must hold exactly the documented table privileges")
+    if connection.execute(
+            "SELECT pg_catalog.has_schema_privilege(current_user, 'public', 'CREATE')"
+    ).fetchone()[0]:
+        _fail("database runtime role must not create objects in the Core schema")
+
+
+def _check_job_ledger(connection) -> None:
+    """Re-check every stored row formally (docs/DATABASE.md §3 rule 5, §8 item 3).
+
+    A row this code could not have written means someone else wrote it, and a
+    start on top of it would trust whatever they meant by it.
+    """
+    invalid = connection.execute(
+        "SELECT count(*) FROM public.job_ledger WHERE NOT ("
+        "job_id <> '' AND octet_length(job_id) <= %s AND subject <> '' "
+        "AND handoff_sha256 ~ '^[0-9a-f]{64}$' "
+        "AND created_at BETWEEN 1 AND %s "
+        "AND updated_at BETWEEN created_at AND %s "
+        "AND expires_at > created_at AND expires_at <= %s "
+        "AND (reserved_at IS NULL OR reserved_at BETWEEN created_at AND updated_at))",
+        (_MAX_JOB_ID_BYTES, _MAX_TIME, _MAX_TIME, _MAX_TIME)).fetchone()[0]
+    if invalid:
+        _fail("job ledger holds a formally invalid row")
+
+
 @contextmanager
 def open_database(dsn: str):
     """Validate the installed foundation before any listener or worker exists."""
@@ -90,7 +164,69 @@ def open_database(dsn: str):
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             _check_history(_history(connection), expected, complete=True)
             _check_tables(connection)
+            _check_runtime_role(connection)
+            _check_job_ledger(connection)
         yield connection
+
+
+class PostgresJobLedger(JobLedger):
+    """Gate B2: burned job ids in `public.job_ledger`, shared by every instance.
+
+    Each call is one statement on an autocommit connection, so it is its own
+    transaction and nothing here holds one open while a worker runs
+    (docs/DATABASE.md §7). The primary key decides a race between instances.
+    A database error is a refusal: there is no in-memory fallback, because a
+    fallback is a ledger the next instance cannot see.
+    """
+
+    def __init__(self, connection) -> None:
+        if not isinstance(connection, psycopg.Connection):
+            _fail("job ledger needs a psycopg connection")
+        # Inside a caller's open transaction a reservation would stay invisible
+        # to every other instance until that caller commits.
+        if not connection.autocommit:
+            _fail("job ledger connection must be in autocommit mode")
+        self._connection = connection
+        # The connection is shared by the service's request threads.
+        self._lock = threading.Lock()
+
+    def is_burned(self, job_id: str) -> bool:
+        return self._execute("SELECT 1 FROM public.job_ledger WHERE job_id = %s",
+                             (job_id,), fetch=True) is not None
+
+    def reserve(self, reservation: Reservation) -> bool:
+        if not isinstance(reservation, Reservation):
+            _fail("job ledger reserves only a Reservation")
+        rowcount = self._execute(
+            "INSERT INTO public.job_ledger (job_id, subject, handoff_sha256, state, "
+            "created_at, reserved_at, updated_at, expires_at) "
+            "VALUES (%s, %s, %s, 'RESERVED', %s, %s, %s, %s) "
+            "ON CONFLICT (job_id) DO NOTHING",
+            (reservation.job_id, reservation.subject, reservation.handoff_sha256,
+             reservation.reserved_at, reservation.reserved_at, reservation.reserved_at,
+             reservation.expires_at))
+        return rowcount == 1
+
+    def commit_execution(self, reservation: Reservation, *, now: int) -> None:
+        if not isinstance(reservation, Reservation):
+            _fail("job ledger commits only a Reservation")
+        # Only the row for this handoff, and only from RESERVED: of two callers
+        # holding the same reservation, one moves it and the other is refused.
+        rowcount = self._execute(
+            "UPDATE public.job_ledger SET state = 'EXECUTION_COMMITTED', updated_at = %s "
+            "WHERE job_id = %s AND handoff_sha256 = %s AND state = 'RESERVED'",
+            (now, reservation.job_id, reservation.handoff_sha256))
+        if rowcount != 1:
+            _fail("job reservation could not be committed to execution")
+
+    def _execute(self, query: str, parameters: tuple, *, fetch: bool = False):
+        try:
+            with self._lock:
+                cursor = self._connection.execute(query, parameters)
+                return cursor.fetchone() if fetch else cursor.rowcount
+        except psycopg.Error:
+            # The same reason as `_connect`: driver errors carry server text.
+            raise ContractError("job ledger is unavailable") from None
 
 
 def migrate(dsn: str) -> None:

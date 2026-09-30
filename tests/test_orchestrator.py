@@ -1,17 +1,29 @@
+import hashlib
 import itertools
+import os
+import select
+import signal
+import subprocess
+import sys
+import threading
 import unittest
+from pathlib import Path
 from unittest import mock
 
+import psycopg
+
 from geniusnew import orchestrator as orchestrator_module
+from geniusnew.database import PostgresJobLedger, migrate
 from geniusnew.approvals import ApprovalStore, create_scope
 from geniusnew.audit import AuditAuthority, event_from_handoff
 from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, validate
 from geniusnew.gateway import DispatchPermit, Gateway
 from geniusnew.orchestrator import (ACTIONS, DENIALS, Admission, Decision, Denied,
-                                    Dispatch, DispatchAttempted, Orchestrator,
-                                    WorkerEndpoint)
+                                    Dispatch, DispatchAttempted, JobLedger, Orchestrator,
+                                    ProcessLocalJobLedger, Reservation, WorkerEndpoint)
 from geniusnew.results import WorkerAuthority, accept
 from geniusnew.workers import DeterministicSummarizer, Worker, WorkerRunner
+from postgres_support import PostgresDatabase
 
 # Zero-entropy and self-describing. Its job is to be unmistakable if it ever
 # turns up where an execution-side exception text must not reach.
@@ -78,13 +90,13 @@ class Fixture:
 
     def orchestrator_for(self, *, workers=DEFAULT, gateway=DEFAULT,
                          orchestrator_id='orchestrator-demo', signer=DEFAULT,
-                         on_admitted=None):
+                         on_admitted=None, job_ledger=None):
         return Orchestrator(
             orchestrator_id=orchestrator_id,
             signer=self.key if signer is DEFAULT else signer,
             gateway=self.gateway if gateway is DEFAULT else gateway,
             workers=(self.endpoint,) if workers is DEFAULT else workers,
-            on_admitted=on_admitted)
+            on_admitted=on_admitted, job_ledger=job_ledger)
 
     def counting(self, **arguments):
         return CountingRunner(authority=self.result_authority, **arguments)
@@ -277,7 +289,7 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         self.denied(self.submit, orchestrator=orchestrator,
                     policy=self.policy_for(worker_agent_id='worker-missing'))
         self.assertEqual(runner.calls, [])
-        self.assertEqual(orchestrator._jobs, set())
+        self.assertEqual(orchestrator._ledger.job_ids(), set())
 
     def test_misrouting_is_refused_before_an_approval_can_be_burned(self):
         """A one-time approval must not pay for a job that was never routable."""
@@ -327,7 +339,7 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         wire = self.wire(policy=policy)
         with self.assertRaisesRegex(ContractError, 'required'):
             self.dispatch(wire, policy=policy, now=102)
-        self.assertEqual(self.orchestrator._jobs, set())
+        self.assertEqual(self.orchestrator._ledger.job_ids(), set())
 
         scope = create_scope(wire, subject='subject-demo', job_id='job-demo',
                              policy=policy, verifier=self.key, now=101)
@@ -339,7 +351,7 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         dispatched = self.dispatch(wire, policy=policy, now=102,
                                    approval_token=granted.token)
         self.assertIsInstance(dispatched.result_wire, bytes)
-        self.assertEqual(self.orchestrator._jobs, {'job-demo'})
+        self.assertEqual(self.orchestrator._ledger.job_ids(), {'job-demo'})
 
     def test_the_gateway_receipt_travels_with_the_dispatch(self):
         """The result verifier refuses an approval-bound job without it.
@@ -390,7 +402,7 @@ class OrchestratorTest(Fixture, unittest.TestCase):
             with self.subTest(call=call):
                 with self.assertRaisesRegex(ContractError, 'at most 128 bytes'):
                     call()
-        self.assertEqual(self.orchestrator._jobs, set())
+        self.assertEqual(self.orchestrator._ledger.job_ids(), set())
 
     # --- it cannot admit its own job ----------------------------------------
 
@@ -685,7 +697,9 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         def rival_wins(permit):
             events.append(('admitted', permit.approval_record_hash))
             # The other caller reserves the same id in this window.
-            orchestrator._jobs.add('job-demo')
+            orchestrator._ledger.reserve(Reservation(
+                job_id='job-demo', subject='subject-demo', handoff_sha256='a' * 64,
+                expires_at=1000, reserved_at=102))
 
         orchestrator = self.orchestrator_for(
             workers=(WorkerEndpoint('worker-demo', runner),), on_admitted=rival_wins)
@@ -709,7 +723,7 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         with self.assertRaisesRegex(ContractError, 'audit is unavailable'):
             self.dispatch(self.wire(), orchestrator=orchestrator)
         self.assertEqual(runner.calls, [])
-        self.assertEqual(orchestrator._jobs, set())
+        self.assertEqual(orchestrator._ledger.job_ids(), set())
 
     def test_the_sanitized_refusal_keeps_no_handle_on_the_original(self):
         """`from exc` puts the text back in __cause__ and in every traceback.
@@ -740,25 +754,6 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         formatted = ''.join(traceback.format_exception(
             type(caught.exception), caught.exception, caught.exception.__traceback__))
         self.assertNotIn(CANARY, formatted)
-
-    def test_the_ledger_is_process_local_and_this_is_the_boundary(self):
-        """Held open on purpose, the way `test_results.py` holds acceptance open.
-
-        The ledger is a set in one process, so a restart or a second replica
-        with the same identity will dispatch the same unexpired handoff again —
-        the gateway keeps no handoff ledger and mints a fresh permit each time.
-        Durable shared state is a persistence decision the roadmap places
-        outside v0.1 ("Datenbank / Persistenz" under *Bewusst nicht in v0.1*),
-        so the honest thing is to pin the limit rather than claim more than one
-        process can enforce.
-        """
-        wire = self.wire()
-        self.dispatch(wire)
-        self.assertEqual(self.denied(self.dispatch, wire).reason_code,
-                         'JOB_ID_REUSED')
-        fresh = self.orchestrator_for()
-        self.assertIsInstance(self.dispatch(wire, orchestrator=fresh), Dispatch)
-
 
     # --- construction fails closed ------------------------------------------
 
@@ -841,6 +836,333 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         wrong = self.policy_for(orchestrator_id='orchestrator-other')
         with self.assertRaisesRegex(ContractError, 'does not name this orchestrator'):
             self.orchestrator.route(**{**good, 'policy': wrong})
+
+
+def reservation(**changes):
+    fields = dict(job_id='job-demo', subject='subject-demo', handoff_sha256='a' * 64,
+                  expires_at=160, reserved_at=110)
+    fields.update(changes)
+    return Reservation(**fields)
+
+
+class RacingLedger(ProcessLocalJobLedger):
+    """Another instance burns the id between this one's check and its insert.
+
+    `is_burned` answers from before that moment and `reserve` from after it,
+    which is exactly what two orchestrators on one database can observe.
+    """
+
+    def is_burned(self, job_id):
+        return False
+
+    def reserve(self, reservation):
+        return False
+
+
+class JobLedgerContractTest(Fixture, unittest.TestCase):
+    """The ledger contract, independent of where the ledger keeps its rows."""
+
+    def test_a_reservation_refuses_what_the_start_check_would_refuse(self):
+        for changes, message in (
+                (dict(job_id=''), 'job_id must be a non-empty string'),
+                (dict(job_id=7), 'job_id must be a non-empty string'),
+                (dict(subject=''), 'subject must be a non-empty string'),
+                (dict(job_id='j' * 129), 'job_id must be at most 128 bytes'),
+                (dict(handoff_sha256='A' * 64), 'lowercase SHA-256 digest'),
+                (dict(handoff_sha256='a' * 63), 'lowercase SHA-256 digest'),
+                (dict(handoff_sha256=None), 'lowercase SHA-256 digest'),
+                (dict(expires_at=0, reserved_at=0), 'outside the range'),
+                (dict(reserved_at=True), 'outside the range'),
+                (dict(expires_at=4102444801), 'outside the range'),
+                (dict(expires_at=110), 'before its handoff expires'),
+                (dict(expires_at=109), 'before its handoff expires')):
+            with self.subTest(changes=changes):
+                with self.assertRaisesRegex(ContractError, message):
+                    reservation(**changes)
+        self.assertEqual(reservation().job_id, 'job-demo')
+
+    def test_the_process_local_ledger_moves_each_job_forward_once(self):
+        ledger = ProcessLocalJobLedger()
+        with self.assertRaisesRegex(ContractError, 'only a reserved job'):
+            ledger.commit_execution(reservation(), now=110)
+        self.assertTrue(ledger.reserve(reservation()))
+        self.assertFalse(ledger.reserve(reservation()))
+        ledger.commit_execution(reservation(), now=110)
+        with self.assertRaisesRegex(ContractError, 'only a reserved job'):
+            ledger.commit_execution(reservation(), now=111)
+        self.assertTrue(ledger.is_burned('job-demo'))
+
+    def test_the_ledger_is_part_of_the_orchestrator_s_configuration(self):
+        for ledger in (object(), set(), ProcessLocalJobLedger):
+            with self.subTest(ledger=ledger):
+                with self.assertRaisesRegex(ContractError, 'job_ledger must be a JobLedger'):
+                    self.orchestrator_for(job_ledger=ledger)
+        with self.assertRaises(TypeError):
+            JobLedger()
+
+    def test_a_lost_race_inside_the_ledger_is_a_reused_id_and_runs_nothing(self):
+        runner = self.counting(wire=b'x')
+        orchestrator = self.orchestrator_for(
+            workers=(WorkerEndpoint('worker-demo', runner),), job_ledger=RacingLedger())
+        decision = self.denied(self.dispatch, self.wire(), orchestrator=orchestrator)
+        self.assertEqual(decision.reason_code, 'JOB_ID_REUSED')
+        self.assertEqual(runner.calls, [])
+
+    def test_the_job_is_committed_to_execution_before_the_worker_sees_it(self):
+        ledger = ProcessLocalJobLedger()
+        seen = []
+
+        class Observing(CountingRunner):
+            def execute(self, permit, *, now):
+                seen.append(dict(ledger._states))
+                return super().execute(permit, now=now)
+
+        orchestrator = self.orchestrator_for(
+            workers=(WorkerEndpoint('worker-demo', Observing(
+                authority=self.result_authority, wire=b'x')),),
+            job_ledger=ledger)
+        self.dispatch(self.wire(), orchestrator=orchestrator)
+        self.assertEqual(seen, [{'job-demo': 'EXECUTION_COMMITTED'}])
+
+
+# Runs in its own process so that it can be killed where no cleanup can run:
+# after the ledger committed the job to execution, while the worker is running.
+_CRASH_CHILD = r'''
+import os, sys, time
+import psycopg
+from geniusnew.approvals import ApprovalStore
+from geniusnew.contracts import Grant, HandoffSigner, Policy
+from geniusnew.database import PostgresJobLedger
+from geniusnew.gateway import Gateway
+from geniusnew.orchestrator import Orchestrator, WorkerEndpoint
+from geniusnew.results import WorkerAuthority
+from geniusnew.workers import DeterministicSummarizer, WorkerRunner
+
+
+class Stuck(WorkerRunner):
+    def execute(self, permit, *, now):
+        print('RUNNING', flush=True)
+        time.sleep(60)
+
+
+key = HandoffSigner(integrity_key=b'phase-2-test-integrity-key-32bytes')
+grant = Grant('subject-demo', 'user-demo', 'worker-demo', 'basic', ('summarize',),
+              'isolated', False)
+policy = Policy('policy-v1', 'orchestrator-demo', 60, ('summarize', 'translate'),
+                ('isolated',), (grant,))
+gateway = Gateway(gateway_id='gateway-test', handoff_verifier=key.verifier(),
+                  approval_store=ApprovalStore())
+authority = WorkerAuthority(result_key=b'a-separate-result-key-of-32bytes!')
+connection = psycopg.connect(os.environ['GENIUSNEW_CRASH_DSN'], autocommit=True)
+orchestrator = Orchestrator(
+    orchestrator_id='orchestrator-demo', signer=key, gateway=gateway,
+    workers=(WorkerEndpoint('worker-demo', Stuck(DeterministicSummarizer(),
+                                                 authority=authority)),),
+    job_ledger=PostgresJobLedger(connection))
+orchestrator.submit({'text': 'the quick brown fox'}, subject='subject-demo',
+                    job_id='job-crash', policy=policy, now=100)
+'''
+
+
+class PersistentLedgerTest(Fixture, unittest.TestCase):
+    """Gate B2: the job ledger lives in PostgreSQL and outlives the process."""
+
+    def setUp(self):
+        super().setUp()
+        self.db = PostgresDatabase()
+        self.addCleanup(self.db.close)
+        migrate(self.db.owner_dsn)
+
+    def ledger(self):
+        """A ledger on its own runtime connection, as a restarted process has."""
+        connection = self.db.connect(runtime=True)
+        self.addCleanup(connection.close)
+        return PostgresJobLedger(connection)
+
+    def rows(self):
+        with self.db.connect() as owner:
+            return owner.execute(
+                "SELECT job_id, subject, handoff_sha256, state, created_at, reserved_at, "
+                "updated_at, expires_at FROM job_ledger ORDER BY job_id").fetchall()
+
+    def test_a_restarted_orchestrator_does_not_dispatch_a_burned_job_id(self):
+        """Reversed from `test_the_ledger_is_process_local_and_this_is_the_boundary`.
+
+        The ledger used to be a set in one process, so a restart or a second
+        replica dispatched the same unexpired handoff again: the gateway keeps
+        no handoff ledger and mints a fresh permit each time. With the ledger in
+        the database, a fresh orchestrator on a fresh connection refuses the id
+        before the gateway is asked, and its worker never runs.
+        """
+        wire = self.wire()
+        self.dispatch(wire, orchestrator=self.orchestrator_for(job_ledger=self.ledger()))
+        runner = self.counting(wire=b'x')
+        restarted = self.orchestrator_for(
+            workers=(WorkerEndpoint('worker-demo', runner),), job_ledger=self.ledger())
+        self.assertEqual(self.denied(self.dispatch, wire, orchestrator=restarted).reason_code,
+                         'JOB_ID_REUSED')
+        self.assertEqual(runner.calls, [])
+
+    def test_a_dispatch_leaves_exactly_its_committed_row(self):
+        wire = self.wire()
+        dispatched = self.dispatch(wire, orchestrator=self.orchestrator_for(
+            job_ledger=self.ledger()), now=110)
+        self.assertEqual(self.rows(), [(
+            'job-demo', 'subject-demo', dispatched.handoff_sha256,
+            'EXECUTION_COMMITTED', 110, 110, 110, 160)])
+
+    def test_two_instances_racing_for_one_job_id_run_it_exactly_once(self):
+        """Both pass the early check and both get a permit; the database decides."""
+        wire = self.wire()
+        barrier = threading.Barrier(2, timeout=10)
+        runner = self.counting(wire=b'x')
+        instances = [self.orchestrator_for(
+            workers=(WorkerEndpoint('worker-demo', runner),),
+            on_admitted=lambda permit: barrier.wait(), job_ledger=self.ledger())
+            for _ in range(2)]
+        outcomes = []
+
+        def race(orchestrator):
+            try:
+                outcomes.append(self.dispatch(wire, orchestrator=orchestrator))
+            except Denied as denied:
+                outcomes.append(denied.decision.reason_code)
+
+        threads = [threading.Thread(target=race, args=(instance,)) for instance in instances]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(30)
+        self.assertEqual(len(outcomes), 2)
+        self.assertEqual(outcomes.count('JOB_ID_REUSED'), 1)
+        self.assertEqual(sum(isinstance(outcome, Dispatch) for outcome in outcomes), 1)
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual([row[3] for row in self.rows()], ['EXECUTION_COMMITTED'])
+
+    def test_the_job_is_committed_in_the_database_before_the_worker_sees_it(self):
+        observed = []
+        db = self.db
+
+        class Observing(CountingRunner):
+            def execute(self, permit, *, now):
+                with db.connect() as owner:
+                    observed.append(owner.execute(
+                        "SELECT state FROM job_ledger WHERE job_id = 'job-demo'").fetchone())
+                return super().execute(permit, now=now)
+
+        orchestrator = self.orchestrator_for(
+            workers=(WorkerEndpoint('worker-demo', Observing(
+                authority=self.result_authority, wire=b'x')),),
+            job_ledger=self.ledger())
+        self.dispatch(self.wire(), orchestrator=orchestrator)
+        self.assertEqual(observed, [('EXECUTION_COMMITTED',)])
+
+    def test_a_crash_at_the_effect_boundary_is_never_run_again(self):
+        """Killed while the worker runs: the row stays committed, nothing retries it."""
+        root = Path(__file__).resolve().parent.parent
+        child = subprocess.Popen(
+            [sys.executable, '-c', _CRASH_CHILD], cwd=root, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+            env={**os.environ, 'PYTHONPATH': str(root),
+                 'GENIUSNEW_CRASH_DSN': self.db.runtime_dsn})
+        try:
+            ready, _, _ = select.select([child.stdout], [], [], 30)
+            self.assertTrue(ready, 'the child never reached its worker')
+            self.assertEqual(child.stdout.readline(), b'RUNNING\n')
+        finally:
+            child.kill()
+            child.wait(10)
+            child.stdout.close()
+        self.assertEqual(child.returncode, -signal.SIGKILL)
+        wire = self.wire(job_id='job-crash', now=100)
+        [row] = self.rows()
+        self.assertEqual((row[0], row[3], row[5]), ('job-crash', 'EXECUTION_COMMITTED', 100))
+        self.assertEqual(row[2], hashlib.sha256(wire).hexdigest())
+        runner = self.counting(wire=b'x')
+        restarted = self.orchestrator_for(
+            workers=(WorkerEndpoint('worker-demo', runner),), job_ledger=self.ledger())
+        decision = self.denied(self.dispatch, wire, orchestrator=restarted,
+                               job_id='job-crash', now=110)
+        self.assertEqual(decision.reason_code, 'JOB_ID_REUSED')
+        self.assertEqual(runner.calls, [])
+
+    def test_a_commit_that_cannot_be_recorded_runs_nothing_and_keeps_the_id(self):
+        """The database goes away between reservation and commit."""
+        connection = self.db.connect(runtime=True)
+        self.addCleanup(connection.close)
+
+        class Failing(PostgresJobLedger):
+            def commit_execution(self, reservation, *, now):
+                connection.close()
+                super().commit_execution(reservation, now=now)
+
+        runner = self.counting(wire=b'x')
+        orchestrator = self.orchestrator_for(
+            workers=(WorkerEndpoint('worker-demo', runner),),
+            job_ledger=Failing(connection))
+        wire = self.wire()
+        with self.assertRaisesRegex(ContractError, 'job ledger is unavailable') as caught:
+            self.dispatch(wire, orchestrator=orchestrator)
+        self.assertNotIsInstance(caught.exception, DispatchAttempted)
+        self.assertEqual(runner.calls, [])
+        self.assertEqual([row[3] for row in self.rows()], ['RESERVED'])
+        restarted = self.orchestrator_for(job_ledger=self.ledger())
+        self.assertEqual(self.denied(self.dispatch, wire, orchestrator=restarted).reason_code,
+                         'JOB_ID_REUSED')
+
+    def test_a_refused_execution_keeps_its_id_burned(self):
+        runner = self.counting(raises=ContractError('worker refused'))
+        orchestrator = self.orchestrator_for(
+            workers=(WorkerEndpoint('worker-demo', runner),), job_ledger=self.ledger())
+        wire = self.wire()
+        with self.assertRaises(DispatchAttempted):
+            self.dispatch(wire, orchestrator=orchestrator)
+        self.assertEqual([row[3] for row in self.rows()], ['EXECUTION_COMMITTED'])
+        self.assertEqual(self.denied(self.dispatch, wire, orchestrator=orchestrator).reason_code,
+                         'JOB_ID_REUSED')
+        self.assertEqual(len(runner.calls), 1)
+
+    def test_the_runtime_cannot_release_or_rewind_a_burned_id(self):
+        self.dispatch(self.wire(), orchestrator=self.orchestrator_for(job_ledger=self.ledger()))
+        before = self.rows()
+        with self.db.connect(runtime=True) as runtime:
+            for query, error in (
+                    ("DELETE FROM job_ledger", psycopg.errors.InsufficientPrivilege),
+                    ("UPDATE job_ledger SET state = 'RESERVED'", psycopg.errors.CheckViolation),
+                    ("UPDATE job_ledger SET job_id = 'job-other'", psycopg.errors.CheckViolation),
+                    ("UPDATE job_ledger SET state = 'REFUSED'", psycopg.errors.CheckViolation)):
+                with self.subTest(query=query), self.assertRaises(error):
+                    runtime.execute(query)
+        self.assertEqual(self.rows(), before)
+
+    def test_a_ledger_needs_an_autocommit_psycopg_connection(self):
+        with self.assertRaisesRegex(ContractError, 'needs a psycopg connection'):
+            PostgresJobLedger(object())
+        connection = psycopg.connect(self.db.runtime_dsn, connect_timeout=5)
+        self.addCleanup(connection.close)
+        with self.assertRaisesRegex(ContractError, 'autocommit mode'):
+            PostgresJobLedger(connection)
+
+    def test_the_ledger_refuses_anything_but_a_reservation(self):
+        ledger = self.ledger()
+        with self.assertRaisesRegex(ContractError, 'reserves only a Reservation'):
+            ledger.reserve(object())
+        with self.assertRaisesRegex(ContractError, 'commits only a Reservation'):
+            ledger.commit_execution(object(), now=110)
+        self.assertEqual(self.rows(), [])
+
+    def test_only_a_reserved_row_can_be_committed_and_only_once(self):
+        ledger = self.ledger()
+        with self.assertRaisesRegex(ContractError, 'could not be committed'):
+            ledger.commit_execution(reservation(), now=110)
+        self.assertTrue(ledger.reserve(reservation()))
+        with self.assertRaisesRegex(ContractError, 'could not be committed'):
+            ledger.commit_execution(reservation(handoff_sha256='b' * 64), now=110)
+        ledger.commit_execution(reservation(), now=110)
+        with self.assertRaisesRegex(ContractError, 'could not be committed'):
+            self.ledger().commit_execution(reservation(), now=111)
+        self.assertFalse(self.ledger().reserve(reservation()))
+        self.assertEqual([row[3] for row in self.rows()], ['EXECUTION_COMMITTED'])
 
 
 if __name__ == '__main__':
