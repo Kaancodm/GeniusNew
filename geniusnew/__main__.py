@@ -24,6 +24,7 @@ from typing import Sequence
 from .config import ServiceConfig, load_config, read_database_dsn
 from .contracts import ContractError
 from .http_entry import PrincipalRegistry, serve
+from .orchestrator import JobLedger
 from .wiring import Service, build
 
 
@@ -51,16 +52,16 @@ def _refuse_discontinuous_start(service: Service) -> None:
 
 def _serve(config_path: str) -> int:
     config = load_config(config_path)
-    from .database import open_database
+    from .database import PostgresJobLedger, open_database
 
-    with open_database(config.database_dsn):
-        return _run_service(config)
+    with open_database(config.database_dsn) as connection:
+        return _run_service(config, job_ledger=PostgresJobLedger(connection))
 
 
-def _run_service(config: ServiceConfig) -> int:
+def _run_service(config: ServiceConfig, *, job_ledger: JobLedger) -> int:
     service = build(root_secret=config.root_secret, policy=config.policy,
                     principals=config.principals, workers=config.workers,
-                    anchor_state=config.anchor_state)
+                    anchor_state=config.anchor_state, job_ledger=job_ledger)
     try:
         _refuse_discontinuous_start(service)
         server = serve(service.entry, host=config.listen_host, port=config.listen_port)
