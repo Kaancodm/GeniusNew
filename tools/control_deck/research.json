@@ -1,0 +1,61 @@
+{
+  "updated_at": "2026-09-29",
+  "items": [
+    {
+      "title": "Context Engineering: kleine PRs + Research→Plan→Build→Evidence",
+      "source": "saved-notes/youtube",
+      "verdict": "BEREITS VORHANDEN",
+      "reason": "Entspricht dem aktuellen Gate-/PR-Workflow.",
+      "gate": "workflow"
+    },
+    {
+      "title": "Laya Shadow Router für Claude/Gemini/Codex/Zen",
+      "source": "saved-notes",
+      "verdict": "BEREITS VORHANDEN",
+      "reason": "PR #69 + lokaler Laya 1.3.3 Shadow-Test; keine Authority.",
+      "gate": "experiment"
+    },
+    {
+      "title": "Braintrust Eval Lab für KI-Worker/Router",
+      "source": "braintrust.dev/docs/evaluation-quickstart",
+      "verdict": "REVIEW NÖTIG",
+      "reason": "Zeitpunkt fest markiert: nach Core/DB und bevor die echte KI-Beta startet. Zuerst nur synthetische/bereinigte Eval-Daten; keine Secrets oder Kundendaten.",
+      "gate": "pre-ai-beta"
+    },
+    {
+      "title": "Intellifluence für Launch-/Influencer-Outreach",
+      "source": "appsumo/freebie",
+      "verdict": "NACH BETA",
+      "reason": "Erst aktivieren, wenn GeniusNew eine öffentliche Beta/Landingpage und ein konkretes Marketingziel hat. Das 1-Jahres-Angebot soll nicht während der Entwicklungsphase ablaufen.",
+      "gate": "launch-marketing"
+    },
+    {
+      "title": "TwinGenius mit zwei unabhängigen Branches/Evaluatoren",
+      "source": "saved-ideas",
+      "verdict": "NACH BETA",
+      "reason": "Nützlich als unabhängiger Vergleich, aber vor Beta Feature-Creep.",
+      "gate": "post-beta"
+    },
+    {
+      "title": "Hermes als externer Research-Provider",
+      "source": "saved-ideas",
+      "verdict": "NACH BETA",
+      "reason": "Nur hinter kontrolliertem Gateway; externe Ergebnisse bleiben untrusted.",
+      "gate": "post-beta"
+    },
+    {
+      "title": "CLI-Anything als agententauglicher Software-Adapter",
+      "source": "saved-notes/youtube",
+      "verdict": "NACH BETA",
+      "reason": "Interessant für Tool-Adapter, schließt aber kein aktuelles Beta-Gate.",
+      "gate": "post-beta"
+    },
+    {
+      "title": "OpenRig als Dev-Agent-Orchestrator",
+      "source": "saved-notes/youtube",
+      "verdict": "NACH BETA",
+      "reason": "Kann Dev-Orchestrierung vereinfachen, darf Beta-Persistenz nicht verdrängen.",
+      "gate": "post-beta"
+    }
+  ]
+}

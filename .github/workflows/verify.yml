@@ -12,15 +12,33 @@ permissions:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    # Disposable CI database only; no production credentials or external endpoint.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: geniusnew_test_admin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d geniusnew_test_admin"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      GENIUSNEW_TEST_ADMIN_DSN: "host=127.0.0.1 port=5432 dbname=geniusnew_test_admin user=postgres"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install the pinned dependency
+      - name: Install PostgreSQL client library
+        run: sudo apt-get update && sudo apt-get install -y libpq5
+      - name: Install the pinned dependencies
         run: python -m pip install --require-hashes -r requirements.txt
       - name: Run contract tests
-        run: python -m unittest discover -s tests -v
+        run: python -W error::ResourceWarning -m unittest discover -s tests -v
+      - name: Run demo after tests
+        run: ./scripts/demo.sh
 
   guarded:
     runs-on: ubuntu-latest
@@ -41,6 +59,20 @@ jobs:
     needs: guarded
     runs-on: ubuntu-latest
     name: refusals (${{ matrix.module }})
+    # Disposable CI database only; no production credentials or external endpoint.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: geniusnew_test_admin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d geniusnew_test_admin"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      GENIUSNEW_TEST_ADMIN_DSN: "host=127.0.0.1 port=5432 dbname=geniusnew_test_admin user=postgres"
     strategy:
       fail-fast: false
       matrix:
@@ -50,7 +82,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install the pinned dependency
+      - name: Install PostgreSQL client library
+        run: sudo apt-get update && sudo apt-get install -y libpq5
+      - name: Install the pinned dependencies
         run: python -m pip install --require-hashes -r requirements.txt
       - name: Every refusal must have a test that notices its removal
         env:

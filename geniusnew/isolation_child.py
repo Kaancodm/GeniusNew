@@ -15,6 +15,8 @@ from .isolation import (
     _MAX_CHILD_REQUEST_BYTES,
     _SandboxDenied,
     _audit_hook,
+    _install_filesystem_rules,
+    _install_process_filter,
     _set_resource_limits,
     _write_message,
 )
@@ -30,8 +32,13 @@ def _decode_request(data: bytes) -> dict[str, Any]:
         raise ContractError("invalid isolation request") from exc
     if not isinstance(value, dict) or canonical(value) != data:
         raise ContractError("invalid isolation request")
-    if set(value) != {"version", "worker", "payload", "limits"} or value["version"] != 1:
+    if (set(value) != {"version", "worker", "payload", "limits", "read_paths"}
+            or value["version"] != 1):
         raise ContractError("invalid isolation request")
+    read_paths = value["read_paths"]
+    if not isinstance(read_paths, list) or not all(
+            type(path) is str and os.path.isabs(path) for path in read_paths):
+        raise ContractError("invalid isolation read paths")
     if not isinstance(value["worker"], dict):
         raise ContractError("invalid isolation worker")
     if set(value["worker"]) != {"module", "qualname", "state", "tool"}:
@@ -81,7 +88,13 @@ def child_entry(root: str) -> int:
         os.environ.update({"HOME": root, "TMPDIR": root, "TEMP": root, "TMP": root})
         tempfile.tempdir = root
         state = {"violated": False}
-        sys.addaudithook(_audit_hook(root, state))
+        read_paths = tuple(request["read_paths"])
+        # Both kernel layers go in before the hook, which refuses the ctypes
+        # they need, and before the worker module is imported, so its import
+        # code is confined too. A failure lands in the outer handler.
+        _install_filesystem_rules(root, read_paths)
+        _install_process_filter()
+        sys.addaudithook(_audit_hook(root, state, read_paths))
 
         try:
             worker = _resolve_worker(request["worker"])
