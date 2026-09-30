@@ -1,15 +1,17 @@
 """B5 uses a real PostgreSQL for atomic appends, recovery and append-only rights."""
 
 from concurrent.futures import ThreadPoolExecutor
+from threading import Event, Lock
 from unittest.mock import patch
 import unittest
 
 import psycopg
 
 from geniusnew import database
+from geniusnew import anchor_process
 from geniusnew.audit import AuditAuthority
 from geniusnew.audit_chain import AuditAnchor, _record_hash, verify
-from geniusnew.audit_store import PostgresAuditChain
+from geniusnew.audit_store import PostgresAuditChain, _AUDIT_LOCK
 from geniusnew.contracts import ContractError
 from geniusnew.wiring import _AnchoredAudit
 from tests.postgres_support import PostgresDatabase
@@ -155,6 +157,64 @@ class PostgresAuditTest(unittest.TestCase):
         self.assertEqual(self.counts(), (8, 8))
         head, stored = self.chain.snapshot(self.authority)
         self.assertEqual(verify(stored, head, authority=self.authority.verifier()), 8)
+
+    def test_oversized_anchor_commit_refuses_before_a_database_commit(self):
+        with patch.object(anchor_process, "_MAX_REQUEST_BYTES", 600):
+            with self.assertRaisesRegex(ContractError, "anchor message is too large"):
+                self.recorder().append(self.event)
+        self.assertEqual(self.counts(), (0, 0))
+        self.recorder().append(self.event)
+        self.assertEqual(self.counts(), (1, 1))
+
+    def test_anchor_state_bound_refuses_before_a_database_commit(self):
+        with patch.object(anchor_process, "_MAX_STATE_BYTES", 100):
+            with self.assertRaisesRegex(ContractError, "anchor state would exceed"):
+                self.recorder().append(self.event)
+        self.assertEqual(self.counts(), (0, 0))
+
+    def test_anchor_lock_refuses_an_outer_transaction_and_missing_release(self):
+        with self.chain.transaction():
+            with self.assertRaisesRegex(ContractError, "outside an existing transaction"):
+                with self.chain.anchor_lock():
+                    self.fail("entered anchor lock in an outer transaction")
+        with self.assertRaisesRegex(ContractError, "anchor lock was not held"):
+            with self.chain.anchor_lock():
+                self.assertEqual(self.connection.execute(
+                    "SELECT pg_advisory_unlock(%s)", (_AUDIT_LOCK,)).fetchone(), (True,))
+
+    def test_two_instances_keep_anchor_commit_inside_the_shared_lock(self):
+        first_entered = Event()
+        second_entered = Event()
+        turn = Lock()
+
+        class DelayedAnchor(AuditAnchor):
+            def commit(self, head, records, *, authority):
+                with turn:
+                    first = not first_entered.is_set()
+                    if first:
+                        first_entered.set()
+                if first:
+                    second_entered.wait(1)
+                else:
+                    second_entered.set()
+                return super().commit(head, records, authority=authority)
+
+        anchor = DelayedAnchor()
+        first = self.recorder(anchor)
+
+        def second_append():
+            with self.db.connect(runtime=True) as connection:
+                chain = PostgresAuditChain(connection, authority=self.authority)
+                _AnchoredAudit(self.authority, chain, anchor).append(self.event)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            earlier = executor.submit(first.append, self.event)
+            self.assertTrue(first_entered.wait(3))
+            later = executor.submit(second_append)
+            earlier.result(timeout=5)
+            later.result(timeout=5)
+        self.assertEqual(self.counts(), (2, 2))
+        self.assertEqual(anchor.committed, (2, self.chain.head_hash))
 
     def test_external_transaction_rolls_back_the_audit_and_other_mutation_together(self):
         with self.assertRaisesRegex(RuntimeError, "test-only rollback"):

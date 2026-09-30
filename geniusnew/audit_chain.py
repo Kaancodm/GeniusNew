@@ -48,6 +48,7 @@ could verify a head could also sign it; a head of that version is refused now.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import nullcontext
 from itertools import islice
 import hashlib
 import hmac
@@ -275,6 +276,9 @@ class AuditChain:
     def __init__(self) -> None:
         self._records: list[AuditRecord] = []
         self._lock = Lock()
+
+    def anchor_lock(self):
+        return nullcontext()
 
     def __len__(self) -> int:
         with self._lock:
