@@ -66,7 +66,7 @@ class DatabaseTest(unittest.TestCase):
         for change, reason in (
             ("DELETE FROM schema_migrations", "required database migration is missing"),
             ("UPDATE schema_migrations SET checksum = repeat('0',64)", "checksum mismatch"),
-            ("INSERT INTO schema_migrations VALUES (2, repeat('a',64), 1)", "unknown"),
+            ("INSERT INTO schema_migrations VALUES (9999, repeat('a',64), 1)", "unknown"),
             ("UPDATE schema_migrations SET version = 0", "unknown"),
             ("UPDATE schema_migrations SET applied_at = -1", "timestamp is invalid"),
         ):

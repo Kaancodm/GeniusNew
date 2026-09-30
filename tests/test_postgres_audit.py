@@ -42,7 +42,9 @@ class PostgresAuditTest(unittest.TestCase):
         return _AnchoredAudit(self.authority, self.chain, anchor or AuditAnchor())
 
     def test_record_and_signed_head_survive_a_new_connection_byte_exactly(self):
+        self.assertEqual((len(self.chain), self.chain.head_hash), (0, "0" * 64))
         record = self.chain.append(self.event)
+        self.assertEqual((len(self.chain), self.chain.head_hash), (1, record.record_hash))
         stored = self.owner("SELECT event FROM audit_chain")
         self.assertEqual(stored, [(self.event.to_bytes(),)])
         with self.db.connect(runtime=True) as other:
@@ -206,4 +208,10 @@ class PostgresAuditTest(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "append failed"):
             with self.chain.transaction() as connection:
                 self.chain.append(self.event, transaction=connection)
+        self.assertEqual(self.counts(), (0, 0))
+
+    def test_ordinary_append_refuses_to_publish_a_record_inside_an_outer_transaction(self):
+        with self.chain.transaction():
+            with self.assertRaisesRegex(ContractError, "outside an existing transaction"):
+                self.chain.append(self.event)
         self.assertEqual(self.counts(), (0, 0))

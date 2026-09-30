@@ -113,6 +113,14 @@ class PostgresAuditChain(AuditChain):
         except psycopg.Error:
             raise ContractError("audit chain is unavailable") from None
 
+    def __len__(self) -> int:
+        return len(self._snapshot()[1])
+
+    @property
+    def head_hash(self) -> str:
+        head, _ = self._snapshot()
+        return head.head_hash if head is not None else _EMPTY_HASH
+
     @property
     def records(self) -> tuple[AuditRecord, ...]:
         return self._snapshot()[1]
@@ -130,10 +138,18 @@ class PostgresAuditChain(AuditChain):
 
     @contextmanager
     def transaction(self):
-        """Hold the shared connection for a B6 caller's complete mutation."""
+        """Hold the shared connection for a B6 caller's complete mutation.
+
+        External coordinators must likewise hold connection_lock(connection)
+        throughout their transaction; the driver transaction alone is not a
+        thread boundary for a shared connection.
+        """
         try:
-            with self._lock, self._connection.transaction():
-                yield self._connection
+            with self._lock:
+                if self._connection.info.transaction_status != TransactionStatus.IDLE:
+                    _fail("audit transaction must begin outside an existing transaction")
+                with self._connection.transaction():
+                    yield self._connection
         except psycopg.Error:
             raise ContractError("audit transaction is unavailable") from None
 
@@ -143,10 +159,10 @@ class PostgresAuditChain(AuditChain):
         if transaction is not None:
             if transaction is not self._connection:
                 _fail("audit append transaction must use its own connection")
-            if transaction.info.transaction_status != TransactionStatus.INTRANS:
-                _fail("audit append requires an active external transaction")
             try:
                 with self._lock:
+                    if transaction.info.transaction_status != TransactionStatus.INTRANS:
+                        _fail("audit append requires an active external transaction")
                     return self._append(transaction, event)
             except psycopg.Error:
                 raise ContractError("audit chain append failed") from None
