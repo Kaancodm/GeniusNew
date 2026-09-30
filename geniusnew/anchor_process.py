@@ -246,7 +246,10 @@ def _state_lock(path: str | None):
     # appears under a different lock inode.
     digest = hashlib.sha256(os.fsencode(os.path.realpath(path))).hexdigest().encode("ascii")
     address = b"\x00geniusnew-anchor-state-" + digest
-    lease = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        lease = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    except OSError:
+        _fail("anchor state lease cannot be acquired")
     try:
         try:
             lease.bind(address)

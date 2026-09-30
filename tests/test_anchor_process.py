@@ -1,5 +1,6 @@
 """Roadmap step 8: the anchor in a process the writer cannot reach into."""
 
+import errno
 import io
 import json
 import os
@@ -185,6 +186,27 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
         restarted = AnchorProcess(verifier=self.authority.verifier(), state_path=path)
         self.addCleanup(restarted.close)
         self.assertEqual(restarted.committed, (5, self.head.head_hash))
+
+    def test_an_unavailable_state_lease_refuses_before_loading(self):
+        path = self.state_path()
+        with unittest.mock.patch.object(anchor_process.socket, 'socket',
+                                        side_effect=OSError(errno.EMFILE, 'test')):
+            with self.assertRaisesRegex(ContractError, 'state lease cannot be acquired'):
+                with anchor_process._state_lock(path):
+                    self.fail('entered without a lease')
+
+        class UnbindableLease:
+            def bind(self, address):
+                raise OSError(errno.EACCES, 'test')
+
+            def close(self):
+                pass
+
+        with unittest.mock.patch.object(anchor_process.socket, 'socket',
+                                        return_value=UnbindableLease()):
+            with self.assertRaisesRegex(ContractError, 'state lease cannot be acquired'):
+                with anchor_process._state_lock(path):
+                    self.fail('entered without a lease')
 
     def test_a_file_rolled_back_to_an_older_signed_head_is_accepted_and_this_is_the_boundary(self):
         """Held open. Every line is a genuine signed head, so cutting the file back
