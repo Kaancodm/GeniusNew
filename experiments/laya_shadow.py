@@ -32,6 +32,11 @@ class ShadowError(ValueError):
     """Raised when shadow input or output violates the experiment contract."""
 
 
+class _RejectRedirects(request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ShadowError("shadow endpoint redirects are forbidden")
+
+
 @dataclass(frozen=True)
 class ShadowObservation:
     model_choice: str | None
@@ -134,6 +139,8 @@ def http_decider(endpoint: str, timeout: float = 2.0) -> Callable[[bytes], bytes
     if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0:
         raise ShadowError("timeout must be positive")
 
+    opener = request.build_opener(request.ProxyHandler({}), _RejectRedirects())
+
     def decide(wire: bytes) -> bytes:
         req = request.Request(
             endpoint,
@@ -141,7 +148,7 @@ def http_decider(endpoint: str, timeout: float = 2.0) -> Callable[[bytes], bytes
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with request.urlopen(req, timeout=float(timeout)) as response:
+        with opener.open(req, timeout=float(timeout)) as response:
             if response.status != 200:
                 raise OSError("shadow service returned non-200")
             raw = response.read(_MAX_RESPONSE + 1)

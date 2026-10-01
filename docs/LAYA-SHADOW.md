@@ -15,6 +15,8 @@ dadurch nicht verändert.
 - Fehler, ungültige Antworten oder ein nicht erreichbarer Dienst ergeben `UNKNOWN`.
 - Der mitgelieferte HTTP-Adapter akzeptiert ausschließlich Loopback-Endpunkte
   (`127.0.0.1` oder `::1`). Hostnamen und URL-Userinfo werden abgelehnt.
+- HTTP-Redirects sind verboten; Proxy-Umgebungsvariablen werden für den Shadow-Adapter
+  nicht verwendet, damit der Request den Loopback-Host nicht verlassen kann.
 - Keine API-Keys, Tokens, Nutzdaten oder produktiven Jobs in diesem Experiment.
 - Keine Änderung an `requirements.txt`: der Adapter verwendet nur die
   Python-Standardbibliothek.

@@ -1,5 +1,10 @@
 import json
+import os
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest import mock
+from urllib import request as urllib_request
 
 from experiments.laya_shadow import (
     ShadowError,
@@ -95,6 +100,72 @@ class LayaShadowTests(unittest.TestCase):
     def test_http_endpoint_rejects_userinfo_host_confusion(self):
         with self.assertRaisesRegex(ShadowError, "loopback"):
             http_decider("http://127.0.0.1:8000@evil.example/v1/systemone")
+
+    def test_http_decider_rejects_redirects(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.send_response(302)
+                self.send_header("Location", "/final")
+                self.end_headers()
+
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(
+                    b'{"answers":{"agent":{"type":"choice","choice":"kiro"}}}'
+                )
+
+            def log_message(self, _format, *_args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            decide = http_decider(
+                f"http://127.0.0.1:{server.server_port}/v1/systemone"
+            )
+            with self.assertRaisesRegex(ShadowError, "redirect"):
+                decide(b"{}")
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
+    def test_http_decider_ignores_proxy_environment(self):
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(
+                    b'{"answers":{"agent":{"type":"choice","choice":"kiro"}}}'
+                )
+
+            def log_message(self, _format, *_args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        poisoned = {
+            "http_proxy": "http://127.0.0.1:9",
+            "HTTP_PROXY": "http://127.0.0.1:9",
+            "no_proxy": "",
+            "NO_PROXY": "",
+        }
+        try:
+            with (
+                mock.patch.dict(os.environ, poisoned, clear=False),
+                mock.patch.object(urllib_request, "_opener", None),
+            ):
+                raw = http_decider(
+                    f"http://127.0.0.1:{server.server_port}/v1/systemone"
+                )(b"{}")
+            self.assertEqual(parse_choice(raw), "kiro")
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
 
     def test_http_timeout_must_be_positive(self):
         with self.assertRaisesRegex(ShadowError, "timeout"):
