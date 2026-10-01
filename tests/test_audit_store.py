@@ -83,6 +83,10 @@ class StoredAuditSnapshotTest(unittest.TestCase):
                 with self.assertRaisesRegex(ContractError, "byte-exact"):
                     _event(altered)
 
+    def test_oversized_stored_event_refusal_keeps_its_specific_reason(self):
+        with self.assertRaisesRegex(ContractError, "event exceeds the maximum size"):
+            _event(None)
+
     def test_invalid_storage_bytes_or_event_are_contract_refusals(self):
         for raw in (None, "{}", b"\xff", b"{", b"[]", b"{}", b"[" * 1500):
             with self.subTest(raw_type=type(raw).__name__):
@@ -141,6 +145,7 @@ class StoredAuditSnapshotTest(unittest.TestCase):
             ((_MAX_COUNT, 0, 0, _MAX_COUNT), "record bound"),
             ((1, anchor_process._MAX_REQUEST_BYTES + 1, 1, 1), "byte bound"),
             ((1, 8193, 8193, 0), "event exceeds the maximum size"),
+            ((1, 1, 1, 0), "one-to-one"),
         )
         for stats, reason in cases:
             with self.subTest(reason=reason):
