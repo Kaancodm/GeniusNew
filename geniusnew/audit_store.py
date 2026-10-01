@@ -18,13 +18,18 @@ from psycopg.pq import TransactionStatus
 from .audit import AuditAuthority, AuditEvent, AuditVerifier, rehydrate_event
 from . import anchor_process
 from .audit_chain import (AuditChain, AuditHead, AuditRecord, _EMPTY_HASH,
-                          _MAX_COUNT, _record_hash, _verify_head, sign_head, verify)
+                          _HEAD_VERSION, _MAX_COUNT, _record_hash, _verify_head,
+                          sign_head, verify)
 from .contracts import ContractError
 from .database import connection_lock
 
 _AUDIT_LOCK = 0x47454E4955534235
 _MAX_EVENT_BYTES = 8192
 _MAX_HEAD_VERSION_BYTES = 64
+_MIN_HEAD_LINE_BYTES = len(anchor_process._head_line(
+    AuditHead(_HEAD_VERSION, 0, "0" * 64, "0" * 128)))
+_MAX_STORED_RECORDS = min(
+    _MAX_COUNT, anchor_process._MAX_STATE_BYTES // _MIN_HEAD_LINE_BYTES)
 
 
 def _fail(message: str) -> None:
@@ -100,18 +105,28 @@ class PostgresAuditChain(AuditChain):
         self._snapshot()
 
     def _read(self, connection):
+        record_count, event_bytes, head_count = connection.execute(
+            'SELECT (SELECT count(*) FROM public.audit_chain), '
+            '(SELECT COALESCE(sum(octet_length(event)), 0) FROM public.audit_chain), '
+            '(SELECT count(*) FROM public.audit_heads)').fetchone()
+        if record_count > _MAX_STORED_RECORDS or head_count > _MAX_STORED_RECORDS:
+            _fail("stored audit chain exceeds the supported record bound")
+        if record_count != head_count:
+            _fail("stored audit records and signed heads are not one-to-one")
+        if event_bytes > anchor_process._MAX_REQUEST_BYTES:
+            _fail("stored audit chain exceeds the supported byte bound")
         rows = connection.execute(
             'SELECT index, previous_hash, record_hash, '
             'CASE WHEN octet_length(event) <= %s THEN event ELSE NULL END '
             'FROM public.audit_chain ORDER BY index LIMIT %s',
-            (_MAX_EVENT_BYTES, _MAX_COUNT + 1,)).fetchall()
+            (_MAX_EVENT_BYTES, _MAX_STORED_RECORDS + 1,)).fetchall()
         heads = connection.execute(
             'SELECT count, '
             'CASE WHEN octet_length(version) <= %s THEN version ELSE NULL END, head_hash, '
             'CASE WHEN octet_length(signature) = 64 THEN signature ELSE NULL END, '
             'created_at '
             'FROM public.audit_heads ORDER BY count LIMIT %s',
-            (_MAX_HEAD_VERSION_BYTES, _MAX_COUNT + 1,)).fetchall()
+            (_MAX_HEAD_VERSION_BYTES, _MAX_STORED_RECORDS + 1,)).fetchall()
         return _stored_snapshot(rows, heads, verifier=self._authority.verifier())
 
     def _snapshot(self):

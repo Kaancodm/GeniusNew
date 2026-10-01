@@ -5,9 +5,10 @@ import json
 import unittest
 from unittest.mock import patch
 
+from geniusnew import anchor_process
 from geniusnew.audit import AuditAuthority, AuditEvent
 from geniusnew.audit_chain import AuditChain, _MAX_COUNT, sign_head
-from geniusnew.audit_store import _event, _stored_snapshot
+from geniusnew.audit_store import PostgresAuditChain, _event, _stored_snapshot
 from geniusnew.contracts import ContractError
 
 
@@ -113,3 +114,34 @@ class StoredAuditSnapshotTest(unittest.TestCase):
             with self.subTest(rows=type(rows).__name__):
                 with self.assertRaisesRegex(ContractError, "record bound"):
                     self.load(rows=rows, heads=heads)
+
+    def test_postgres_preflight_refuses_resource_bounds_before_bulk_fetch(self):
+        class Cursor:
+            def __init__(self, stats=None):
+                self.stats = stats
+
+            def fetchone(self):
+                return self.stats
+
+            def fetchall(self):
+                raise AssertionError("bulk audit rows were fetched before preflight")
+
+        class Connection:
+            def __init__(self, stats):
+                self.stats = stats
+
+            def execute(self, query, parameters=None):
+                if "count(*)" in query:
+                    return Cursor(self.stats)
+                return Cursor()
+
+        chain = object.__new__(PostgresAuditChain)
+        chain._authority = self.authority
+        cases = (
+            ((_MAX_COUNT, 0, _MAX_COUNT), "record bound"),
+            ((1, anchor_process._MAX_REQUEST_BYTES + 1, 1), "byte bound"),
+        )
+        for stats, reason in cases:
+            with self.subTest(reason=reason):
+                with self.assertRaisesRegex(ContractError, reason):
+                    chain._read(Connection(stats))
