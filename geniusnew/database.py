@@ -36,7 +36,7 @@ from .wiring import PendingJobs, _Waiting, _MAX_PENDING
 _SCOPE_KEYS = frozenset({"handoff_sha256", "handoff_expires_at", "job_id", "user_id",
                          "worker_agent_id", "risk_tier", "policy_version", "action"})
 _MIGRATIONS = ((1, "0001_core_foundation.sql"), (2, "0002_pending_jobs.sql"),
-               (3, "0003_approval_store.sql"))
+               (3, "0003_approval_store.sql"), (4, "0004_audit_chain.sql"))
 _MIGRATION_DIR = Path(__file__).with_name("migrations")
 # Serialize competing migration processes, including the first installation.
 _MIGRATION_LOCK = 0x47454E4955534231
@@ -48,7 +48,7 @@ _MAX_JOB_ID_BYTES = 128
 _MAX_TRACE_BYTES = 64
 
 _CORE_TABLES = ("schema_migrations", "job_ledger", "acceptance_ledger", "pending_jobs",
-                "approval_records", "approval_tokens")
+                "approval_records", "approval_tokens", "audit_chain", "audit_heads")
 # What the runtime role holds on each Core table, and nothing else
 # (docs/DATABASE.md §10). An owner or a superuser holds every one of them.
 _RUNTIME_PRIVILEGES = {
@@ -58,9 +58,21 @@ _RUNTIME_PRIVILEGES = {
     "pending_jobs": frozenset({"SELECT", "INSERT", "DELETE"}),
     "approval_records": frozenset({"SELECT", "INSERT"}),
     "approval_tokens": frozenset({"SELECT", "INSERT", "UPDATE"}),
+    "audit_chain": frozenset({"SELECT", "INSERT"}),
+    "audit_heads": frozenset({"SELECT", "INSERT"}),
 }
 _TABLE_PRIVILEGES = ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE",
                      "REFERENCES", "TRIGGER")
+
+
+_CONNECTION_LOCKS = WeakKeyDictionary()
+_CONNECTION_LOCKS_LOCK = threading.Lock()
+
+
+def connection_lock(connection):
+    """Serialize all users of a shared connection, including outer transactions."""
+    with _CONNECTION_LOCKS_LOCK:
+        return _CONNECTION_LOCKS.setdefault(connection, threading.RLock())
 
 
 def _fail(message: str) -> None:
@@ -123,6 +135,10 @@ def _check_tables(connection) -> None:
                        "FROM public.pending_jobs LIMIT 0")
     connection.execute("SELECT " + _APPROVAL_COLUMNS + " FROM public.approval_records LIMIT 0")
     connection.execute("SELECT token_digest, current_record_hash FROM public.approval_tokens LIMIT 0")
+    connection.execute("SELECT index, previous_hash, record_hash, event "
+                       "FROM public.audit_chain LIMIT 0")
+    connection.execute("SELECT count, version, head_hash, signature, created_at "
+                       "FROM public.audit_heads LIMIT 0")
 
 
 def _check_runtime_role(connection) -> None:
@@ -410,8 +426,8 @@ def migrate(dsn: str) -> None:
     """Apply only a known missing suffix; never rewrite history or repair damage."""
     expected = migration_files()
     with _connect(dsn) as connection:
-        # Only the known missing suffix is installed. DDL, grants and history
-        # stay atomic, including a failed first installation.
+        # Install the known suffix under the migration lock; DDL, grants and
+        # history commit together.
         with connection.transaction():
             connection.execute("SELECT pg_advisory_xact_lock(%s)", (_MIGRATION_LOCK,))
             exists = connection.execute(
@@ -435,17 +451,6 @@ def migrate(dsn: str) -> None:
                     "VALUES (%s, %s, %s)", (version, digest, int(time.time())))
             _check_history(_history(connection), expected, complete=True)
             _check_tables(connection)
-
-
-# One session can be shared by several adapters. Its transaction belongs to one
-# request at a time, including all statements issued by the other adapters.
-_CONNECTION_LOCKS = WeakKeyDictionary()
-_CONNECTION_LOCKS_LOCK = threading.Lock()
-
-
-def connection_lock(connection):
-    with _CONNECTION_LOCKS_LOCK:
-        return _CONNECTION_LOCKS.setdefault(connection, threading.RLock())
 
 
 def _store_connection(connection):
