@@ -258,20 +258,22 @@ class JobLedger(ABC):
         return not self.is_burned(job_id)
 
     def reserve_admitted(self, reservation: Reservation, *,
-                         approval_record_hash: str | None) -> bool:
+                         approval_record_hash: str | None,
+                         transaction=None) -> bool:
         """Reserve once, or confirm the reservation made by durable consume."""
-        return self.reserve(reservation)
+        return self.reserve(reservation, transaction=transaction)
 
     def is_full(self) -> bool:
         """Whether this ledger would refuse any new reservation."""
         return False
 
     @abstractmethod
-    def reserve(self, reservation: Reservation) -> bool:
+    def reserve(self, reservation: Reservation, *, transaction=None) -> bool:
         """Burn the id, or return False if it is already burned."""
 
     @abstractmethod
-    def commit_execution(self, reservation: Reservation, *, now: int) -> None:
+    def commit_execution(self, reservation: Reservation, *, now: int,
+                         transaction=None) -> None:
         """Record that the worker is about to see the permit."""
 
 
@@ -299,7 +301,9 @@ class ProcessLocalJobLedger(JobLedger):
         with self._lock:
             return len(self._states) >= _MAX_JOBS
 
-    def reserve(self, reservation: Reservation) -> bool:
+    def reserve(self, reservation: Reservation, *, transaction=None) -> bool:
+        if transaction is not None:
+            _fail("process-local job ledger cannot join a database transaction")
         with self._lock:
             if reservation.job_id in self._states:
                 return False
@@ -308,7 +312,10 @@ class ProcessLocalJobLedger(JobLedger):
             self._states[reservation.job_id] = "RESERVED"
             return True
 
-    def commit_execution(self, reservation: Reservation, *, now: int) -> None:
+    def commit_execution(self, reservation: Reservation, *, now: int,
+                         transaction=None) -> None:
+        if transaction is not None:
+            _fail("process-local job ledger cannot join a database transaction")
         with self._lock:
             # The same rule the database's trigger enforces: only a reserved
             # job moves forward, and only once.
@@ -381,6 +388,9 @@ class Orchestrator:
     def __init__(self, *, orchestrator_id: str, signer: HandoffSigner,
                  gateway: Gateway, workers: Iterable[WorkerEndpoint],
                  on_admitted: Callable[[DispatchPermit, str], None] | None = None,
+                 on_dispatched: Callable[[DispatchPermit, str, Decision], None] | None = None,
+                 atomic_admitted: Callable[..., Any] | None = None,
+                 atomic_dispatched: Callable[..., Any] | None = None,
                  job_ledger: JobLedger | None = None) -> None:
         self._orchestrator_id = _instance_id(orchestrator_id, "orchestrator_id")
         # The only component that holds the handoff signing key. The gateway
@@ -397,7 +407,18 @@ class Orchestrator:
         # gateway minted, and whoever receives it reads every field from there.
         if on_admitted is not None and not callable(on_admitted):
             _fail("on_admitted must be callable")
+        if on_dispatched is not None and not callable(on_dispatched):
+            _fail("on_dispatched must be callable")
+        if atomic_admitted is not None and not callable(atomic_admitted):
+            _fail("atomic_admitted must be callable")
+        if atomic_dispatched is not None and not callable(atomic_dispatched):
+            _fail("atomic_dispatched must be callable")
+        if (atomic_admitted is None) != (atomic_dispatched is None):
+            _fail("atomic dispatch auditing must configure both boundaries")
         self._on_admitted = on_admitted
+        self._on_dispatched = on_dispatched
+        self._atomic_admitted = atomic_admitted
+        self._atomic_dispatched = atomic_dispatched
 
         # Checked on the type, not by catching TypeError from `tuple()`: a
         # storage object whose iterator raises TypeError would otherwise be
@@ -483,34 +504,34 @@ class Orchestrator:
         digest = hashlib.sha256(wire).hexdigest() if type(wire) is bytes else None
         self._available(job_id, now=now, subject=subject, handoff_sha256=digest)
 
-        # The gateway revalidates these bytes independently and mints the only
-        # capability the worker boundary accepts. Its refusals are its own and
-        # travel unchanged.
-        permit = self._gateway.admit(wire, subject=subject, job_id=job_id,
-                                     policy=policy, now=now,
-                                     approval_token=approval_token)
-        if not isinstance(permit, DispatchPermit):
-            _fail("gateway did not return a dispatch permit")
-        # The permit has to be for the job that was sent. A permit for some other
-        # handoff would have the worker run a contract this orchestrator never
-        # submitted, while the wire reported below still described the one it did.
-        if not hmac.compare_digest(permit.handoff.to_bytes(), wire):
-            _fail("gateway admitted a different handoff than the one submitted")
-        # Before the reservation and before the runner. The permit exists and a
-        # one-time approval may be spent, so the in-memory admission precedes
-        # a lost race for the job id or an execution failure. If it cannot be
-        # recorded, nothing runs. Durable evidence needs persistent chain storage.
-        if self._on_admitted is not None:
-            self._on_admitted(permit, subject)
+        def admit_and_reserve(transaction=None, *, record_admission=False):
+            # The gateway revalidates these bytes independently and mints the
+            # only capability the worker boundary accepts. A durable caller
+            # supplies the audit transaction so approval consumption, reservation
+            # and HANDOFF_ADMITTED either commit together or not at all.
+            permit = self._gateway.admit(
+                wire, subject=subject, job_id=job_id, policy=policy, now=now,
+                approval_token=approval_token, transaction=transaction)
+            if not isinstance(permit, DispatchPermit):
+                _fail("gateway did not return a dispatch permit")
+            if not hmac.compare_digest(permit.handoff.to_bytes(), wire):
+                _fail("gateway admitted a different handoff than the one submitted")
+            if record_admission and self._on_admitted is not None:
+                self._on_admitted(permit, subject)
+            reservation = Reservation(
+                job_id=job_id, subject=subject,
+                handoff_sha256=handoff_digest(permit.handoff),
+                expires_at=permit.handoff.expires_at, reserved_at=now)
+            self._reserve(
+                reservation, now=now,
+                approval_record_hash=permit.approval_record_hash,
+                transaction=transaction)
+            return permit, reservation
 
-        # Burned here: a permit exists and the work is about to run. Earlier, and
-        # a job the gateway refused would lose its id for good; later, and two
-        # callers could each hold a valid permit for the same job.
-        reservation = Reservation(job_id=job_id, subject=subject,
-                                  handoff_sha256=handoff_digest(permit.handoff),
-                                  expires_at=permit.handoff.expires_at,
-                                  reserved_at=now)
-        self._reserve(reservation, now=now, approval_record_hash=permit.approval_record_hash)
+        if self._atomic_admitted is not None:
+            permit, reservation = self._atomic_admitted(admit_and_reserve, subject)
+        else:
+            permit, reservation = admit_and_reserve(record_admission=True)
         # Made before the runner is called, not after it returns: the decision
         # to dispatch is what this component decided, and it stands whether or
         # not the execution then succeeded.
@@ -519,7 +540,15 @@ class Orchestrator:
         # Recorded before the worker sees the permit. If this fails, nothing
         # runs and the id stays burned in RESERVED; once it succeeds, a crash
         # leaves the effect unknown and the id is never dispatched again.
-        self._ledger.commit_execution(reservation, now=now)
+        if self._atomic_dispatched is not None:
+            self._atomic_dispatched(
+                lambda transaction: self._ledger.commit_execution(
+                    reservation, now=now, transaction=transaction),
+                permit, subject, decided)
+        else:
+            self._ledger.commit_execution(reservation, now=now)
+            if self._on_dispatched is not None:
+                self._on_dispatched(permit, subject, decided)
         try:
             result_wire = self._run(endpoint, permit, now=now)
         except ContractError as refusal:
@@ -592,7 +621,8 @@ class Orchestrator:
                 _deny("JOB_LEDGER_FULL", now=now)
 
     def _reserve(self, reservation: Reservation, *, now: int,
-                 approval_record_hash: str | None = None) -> None:
+                 approval_record_hash: str | None = None,
+                 transaction=None) -> None:
         """Burn one job id, or confirm the gateway's durable reservation."""
         with self._lock:
             # Another dispatch can pass the earlier preflight before this one
@@ -605,7 +635,8 @@ class Orchestrator:
             # Decides the race this lock cannot see: another orchestrator on
             # the same database may have burned the id since the check above.
             if not self._ledger.reserve_admitted(
-                    reservation, approval_record_hash=approval_record_hash):
+                    reservation, approval_record_hash=approval_record_hash,
+                    transaction=transaction):
                 if (self._ledger.is_full()
                         and not self._ledger.is_burned(reservation.job_id)):
                     _deny("JOB_LEDGER_FULL", now=now)

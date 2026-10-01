@@ -160,7 +160,7 @@ class AcceptanceLedger(ABC):
 
     @abstractmethod
     def reserve(self, *, job_id: str, handoff_wire: bytes, result_wire: bytes,
-                now: int) -> bool:
+                now: int, transaction=None) -> bool:
         """Persist the pair, or return False when this handoff was already taken."""
 
     def check(self, *, policy: Policy, handoff_verifier: HandoffVerifier,
@@ -176,7 +176,9 @@ class ProcessLocalAcceptanceLedger(AcceptanceLedger):
         self._lock = Lock()
 
     def reserve(self, *, job_id: str, handoff_wire: bytes, result_wire: bytes,
-                now: int) -> bool:
+                now: int, transaction=None) -> bool:
+        if transaction is not None:
+            _fail("process-local acceptance ledger cannot join a database transaction")
         digest = hashlib.sha256(handoff_wire).hexdigest()
         with self._lock:
             if digest in self._accepted:
@@ -217,7 +219,8 @@ class ResultVerifier:
 
     def accept(self, result_wire: Any, *, handoff_wire: Any, subject: str,
                job_id: str, policy: Policy, now: int,
-               approval_record_hash: str | None = None) -> Acceptance:
+               approval_record_hash: str | None = None,
+               transaction=None) -> Acceptance:
         """Revalidate both wires, take the result once, and record the decision."""
         if type(now) is not int:
             _fail("now must be an integer")
@@ -247,7 +250,8 @@ class ResultVerifier:
         # lock out the genuine one.
         if not self._ledger.reserve(job_id=handoff.job_id,
                                     handoff_wire=handoff.to_bytes(),
-                                    result_wire=result.to_bytes(), now=now):
+                                    result_wire=result.to_bytes(), now=now,
+                                    transaction=transaction):
             raise Rejected("this handoff already has an accepted result",
                            reason_code="RESULT_ALREADY_ACCEPTED", occurred_at=now)
         return Acceptance(

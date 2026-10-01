@@ -67,6 +67,8 @@ from .workers import Worker, WorkerRunner
 _TRACE_PREFIX = "trace-"
 _MAX_PENDING = 1000
 _APPROVAL_TTL_SECONDS = 60
+_PENDING_EXPIRED = "PENDING_APPROVAL_EXPIRED"
+_PENDING_DISPATCH_REFUSED = "PENDING_DISPATCH_REFUSED"
 
 
 def _fail(message: str) -> None:
@@ -93,7 +95,10 @@ class PendingJobs:
         self._jobs: dict[str, _Waiting] = {}
         self._lock = Lock()
 
-    def add(self, job_id: str, waiting: _Waiting, *, now: int) -> None:
+    def add(self, job_id: str, waiting: _Waiting, *, now: int,
+            transaction=None) -> None:
+        if transaction is not None:
+            _fail("process-local pending store cannot join a database transaction")
         with self._lock:
             for stale in [key for key, value in self._jobs.items()
                           if value.handoff.expires_at <= now]:
@@ -132,22 +137,27 @@ class _AnchoredAudit:
         self.chain = chain
         self.anchor = anchor
         self._lock = Lock()
-        self._failed = False
+        self._needs_reanchor = False
 
-    def _available(self) -> None:
-        if self._failed:
-            _fail("audit anchor acknowledgement previously failed")
+    def _ack_locked(self):
+        try:
+            head = self._commit_locked()
+        except BaseException:
+            self._needs_reanchor = True
+            raise
+        self._needs_reanchor = False
+        return head
+
+    def _recover_locked(self) -> None:
+        if self._needs_reanchor:
+            self._ack_locked()
 
     def append(self, event: AuditEvent) -> None:
         with self._lock:
-            self._available()
             with self.chain.anchor_lock():
+                self._recover_locked()
                 self.chain.append(event)
-                try:
-                    self._commit_locked()
-                except BaseException:
-                    self._failed = True
-                    raise
+                self._ack_locked()
 
     def atomic(self, mutate: Callable[[Any], Any], event: Callable[[Any], AuditEvent]) -> Any:
         """Commit one durable mutation with its signed event before anchoring."""
@@ -158,27 +168,18 @@ class _AnchoredAudit:
         if not callable(mutate) or not callable(event):
             _fail("atomic audit mutation needs callbacks")
         with self._lock:
-            self._available()
             with self.chain.anchor_lock():
+                self._recover_locked()
                 with self.chain.transaction() as transaction:
                     result = mutate(transaction)
                     self.chain.append(event(result), transaction=transaction)
-                try:
-                    self._commit_locked()
-                except BaseException:
-                    self._failed = True
-                    raise
+                self._ack_locked()
                 return result
 
     def head(self):
         with self._lock:
-            self._available()
             with self.chain.anchor_lock():
-                try:
-                    return self._commit_locked()
-                except BaseException:
-                    self._failed = True
-                    raise
+                return self._ack_locked()
 
     def _commit_locked(self):
         head, records = self.chain.snapshot(self.audit)
@@ -224,18 +225,32 @@ class Service:
         waiting = self.pending.peek(job_id)
         now = self.clock()
         if getattr(self.pending, "durable", False) and now >= waiting.handoff.expires_at:
-            self.pending.refuse(job_id, waiting.subject, now=now)
+            _atomic_pending_refusal(
+                recorder=self._recorder, pending=self.pending, waiting=waiting,
+                job_id=job_id, subject=waiting.subject, now=now,
+                component="gateway", instance_id=self.gateway.gateway_id,
+                reason_code=_PENDING_EXPIRED)
         scope = create_scope(waiting.wire, subject=waiting.subject, job_id=job_id,
                              policy=self.policy, verifier=self.handoff_verifier,
                              now=now)
-        grant = self.approvals.grant(scope, now=now, ttl_seconds=ttl_seconds)
-        _append_event(
-            recorder=self._recorder, handoff=waiting.handoff,
-            api_subject=waiting.subject,
-            trace_id=waiting.trace_id, component="gateway",
-            instance_id=self.gateway.gateway_id, action="APPROVAL_GRANTED",
-            decision="ALLOWED", reason_code="OPERATOR_APPROVED", occurred_at=now,
-            approval_record_hash=grant.record_hash)
+        def grant_event(grant):
+            return event_from_handoff(
+                waiting.handoff, trace_id=waiting.trace_id,
+                actor=self.audit.actor("gateway", self.gateway.gateway_id),
+                action="APPROVAL_GRANTED", decision="ALLOWED",
+                reason_code="OPERATOR_APPROVED", occurred_at=now,
+                approval_record_hash=grant.record_hash,
+                api_subject=waiting.subject)
+
+        if getattr(self.pending, "durable", False):
+            grant = self._recorder.atomic(
+                lambda transaction: self.approvals.grant(
+                    scope, now=now, ttl_seconds=ttl_seconds,
+                    transaction=transaction),
+                grant_event)
+        else:
+            grant = self.approvals.grant(scope, now=now, ttl_seconds=ttl_seconds)
+            self._recorder.append(grant_event(grant))
         return grant.token
 
     def head(self):
@@ -303,20 +318,30 @@ def build(*, root_secret: bytes, policy: Policy,
     now = clock or (lambda: int(time.time()))
     if audit_chain_factory is not None and not callable(audit_chain_factory):
         _fail("audit_chain_factory must be callable")
+    if database_connection is not None:
+        from .database import PostgresAcceptanceLedger, PostgresJobLedger
+        if (type(job_ledger) is not PostgresJobLedger
+                or job_ledger._connection is not database_connection):
+            _fail("durable pending storage needs a job ledger on the same connection")
+        if (type(acceptance_ledger) is not PostgresAcceptanceLedger
+                or acceptance_ledger._connection is not database_connection):
+            _fail("durable acceptance storage needs the audit database connection")
 
     audit = AuditAuthority(audit_key=keys.audit_key)
     chain = AuditChain() if audit_chain_factory is None else audit_chain_factory(audit)
     if not isinstance(chain, AuditChain):
         _fail("audit_chain_factory must return an AuditChain")
+    if database_connection is not None:
+        from .audit_store import PostgresAuditChain
+        if (type(chain) is not PostgresAuditChain
+                or chain._connection is not database_connection):
+            _fail("durable service needs a PostgreSQL audit chain on the same connection")
     if anchor is None:
         anchor = AnchorProcess(verifier=audit.verifier(), state_path=anchor_state)
     recorder = _AnchoredAudit(audit, chain, anchor)
     if audit_chain_factory is not None:
         try:
             if database_connection is not None:
-                from .audit_store import PostgresAuditChain
-                if not isinstance(chain, PostgresAuditChain):
-                    _fail("durable service needs a PostgreSQL audit chain")
                 chain.check_core_bindings()
             recorder.head()
         except BaseException:
@@ -333,10 +358,7 @@ def build(*, root_secret: bytes, policy: Policy,
             approvals = ApprovalStore()
             pending = PendingJobs()
         else:
-            from .database import PostgresApprovalStore, PostgresJobLedger, PostgresPendingJobs
-            if (type(job_ledger) is not PostgresJobLedger
-                    or job_ledger._connection is not database_connection):
-                _fail("durable pending storage needs a job ledger on the same connection")
+            from .database import PostgresApprovalStore, PostgresPendingJobs
             approvals = PostgresApprovalStore(database_connection)
             pending = PostgresPendingJobs(database_connection, policy=policy, verifier=handoff_verifier)
         gateway = Gateway(gateway_id=gateway_id, handoff_verifier=handoff_verifier,
@@ -373,12 +395,20 @@ def build(*, root_secret: bytes, policy: Policy,
                       "one worker cannot be registered as several agents")
             endpoints.append(WorkerEndpoint(agents.pop(), runner))
 
-        orchestrator = Orchestrator(orchestrator_id=policy.orchestrator_id,
-                                    signer=handoff_signer,
-                                    gateway=gateway, workers=endpoints,
-                                    on_admitted=_admission_recorder(
-                                        gateway=gateway, recorder=recorder),
-                                    job_ledger=job_ledger)
+        durable_dispatch = database_connection is not None
+        orchestrator = Orchestrator(
+            orchestrator_id=policy.orchestrator_id,
+            signer=handoff_signer, gateway=gateway, workers=endpoints,
+            on_admitted=(None if durable_dispatch else _admission_recorder(
+                gateway=gateway, recorder=recorder)),
+            on_dispatched=(None if durable_dispatch else _dispatch_recorder(
+                recorder=recorder, orchestrator_id=policy.orchestrator_id)),
+            atomic_admitted=(_atomic_admission_recorder(
+                gateway=gateway, recorder=recorder) if durable_dispatch else None),
+            atomic_dispatched=(_atomic_dispatch_recorder(
+                recorder=recorder, orchestrator_id=policy.orchestrator_id)
+                if durable_dispatch else None),
+            job_ledger=job_ledger)
         verifier = ResultVerifier(verifier_id=verifier_id,
                                   handoff_verifier=handoff_verifier,
                                   worker_verifier=worker_authority.verifier(),
@@ -387,7 +417,8 @@ def build(*, root_secret: bytes, policy: Policy,
         submit, complete = _submitter(
             orchestrator=orchestrator, verifier=verifier,
             recorder=recorder, policy=policy,
-            handoff_verifier=handoff_verifier, now=now, pending=pending)
+            handoff_verifier=handoff_verifier, now=now, pending=pending,
+            durable=durable_dispatch)
         entry = HttpEntry(
             registry=(PrincipalRegistry.from_api_keys(api_keys) if api_keys is not None
                       else PrincipalRegistry(principals)),
@@ -440,9 +471,84 @@ def _admission_recorder(*, gateway: Gateway,
     return record
 
 
+def _dispatch_recorder(*, recorder: _AnchoredAudit,
+                       orchestrator_id: str) -> Callable[[DispatchPermit, str, Any], None]:
+    """Record the execution decision before the worker sees the permit."""
+
+    def record(permit: DispatchPermit, subject: str, decision: Any) -> None:
+        handoff = handoff_from_permit(permit)
+        _append_event(
+            recorder=recorder, handoff=handoff, api_subject=subject,
+            trace_id=_trace_id(handoff), component="orchestrator",
+            instance_id=orchestrator_id, action=decision.action,
+            decision=decision.decision, reason_code=decision.reason_code,
+            occurred_at=decision.occurred_at)
+
+    return record
+
+
+def _atomic_admission_recorder(*, gateway: Gateway, recorder: _AnchoredAudit):
+    """Commit approval/reservation and HANDOFF_ADMITTED in one DB transaction."""
+
+    def record(mutate, subject: str):
+        def event(result):
+            permit, _reservation = result
+            handoff = handoff_from_permit(permit)
+            if permit.gateway_id != gateway.gateway_id:
+                _fail("admission names a gateway this service did not wire")
+            return event_from_handoff(
+                handoff, trace_id=_trace_id(handoff),
+                actor=recorder.audit.actor("gateway", permit.gateway_id),
+                action="HANDOFF_ADMITTED", decision="ALLOWED",
+                reason_code=ADMISSION_REASON_CODE, occurred_at=permit.admitted_at,
+                approval_record_hash=permit.approval_record_hash,
+                api_subject=subject)
+
+        return recorder.atomic(mutate, event)
+
+    return record
+
+
+def _atomic_dispatch_recorder(*, recorder: _AnchoredAudit, orchestrator_id: str):
+    """Commit EXECUTION_COMMITTED and EXECUTION_DISPATCHED atomically."""
+
+    def record(mutate, permit: DispatchPermit, subject: str, decision: Any) -> None:
+        handoff = handoff_from_permit(permit)
+
+        def event(_result):
+            return event_from_handoff(
+                handoff, trace_id=_trace_id(handoff),
+                actor=recorder.audit.actor("orchestrator", orchestrator_id),
+                action=decision.action, decision=decision.decision,
+                reason_code=decision.reason_code, occurred_at=decision.occurred_at,
+                api_subject=subject)
+
+        recorder.atomic(mutate, event)
+
+    return record
+
+
+def _atomic_pending_refusal(*, recorder: _AnchoredAudit, pending: PendingJobs,
+                            waiting: _Waiting, job_id: str, subject: str,
+                            now: int, component: str, instance_id: str,
+                            reason_code: str) -> None:
+    """Commit a terminal pending-job refusal and its audit evidence together."""
+
+    recorder.atomic(
+        lambda transaction: pending.refuse(
+            job_id, subject, now=now, transaction=transaction),
+        lambda _result: event_from_handoff(
+            waiting.handoff, trace_id=waiting.trace_id,
+            actor=recorder.audit.actor(component, instance_id),
+            action="HANDOFF_REJECTED", decision="DENIED",
+            reason_code=reason_code, occurred_at=now,
+            api_subject=subject))
+
+
 def _submitter(*, orchestrator: Orchestrator,
                verifier: ResultVerifier, recorder: _AnchoredAudit, policy: Policy,
-               handoff_verifier: HandoffVerifier, now: Callable[[], int], pending: PendingJobs):
+               handoff_verifier: HandoffVerifier, now: Callable[[], int],
+               pending: PendingJobs, durable: bool):
     """Turn one authenticated request into one audited, verified job.
 
     Evidence is appended as each security-relevant decision happens. That is
@@ -457,13 +563,53 @@ def _submitter(*, orchestrator: Orchestrator,
     checked by exactly the path every other job is.
     """
 
+    def append_gateway_refusal(refusal: GatewayRejected, *, handoff,
+                                   trace_id: str, subject: str) -> None:
+        _append_event(
+            recorder=recorder, handoff=handoff, trace_id=trace_id,
+            api_subject=subject, component="gateway",
+            instance_id=refusal.gateway_id, action="HANDOFF_REJECTED",
+            decision="DENIED", reason_code=refusal.reason_code,
+            occurred_at=refusal.occurred_at)
+
+    def append_orchestrator_refusal(refusal: Denied, *, handoff,
+                                    trace_id: str, subject: str) -> None:
+        _append_event(
+            recorder=recorder, handoff=handoff, trace_id=trace_id,
+            api_subject=subject, component="orchestrator",
+            instance_id=orchestrator.orchestrator_id,
+            action=refusal.decision.action,
+            decision=refusal.decision.decision,
+            reason_code=refusal.decision.reason_code,
+            occurred_at=refusal.decision.occurred_at)
+
     def submit(*, subject: str, job_id: str, payload: Mapping[str, str]) -> dict[str, Any]:
-        wire, handoff, trace_id = issue_job(subject=subject, job_id=job_id,
-                                            payload=payload)
+        wire, handoff, trace_id, issued = issue_job(
+            subject=subject, job_id=job_id, payload=payload)
+
+        def issued_event(_result=None):
+            return event_from_handoff(
+                handoff, trace_id=trace_id,
+                actor=recorder.audit.actor("orchestrator", orchestrator.orchestrator_id),
+                action=issued.action, decision=issued.decision,
+                reason_code=issued.reason_code, occurred_at=issued.occurred_at,
+                api_subject=subject)
+
         if policy.grant_for(subject).requires_approval:
-            pending.add(job_id, _Waiting(subject, wire, handoff, trace_id), now=now())
+            waiting = _Waiting(subject, wire, handoff, trace_id)
+            pending_at = now()
+            if durable:
+                recorder.atomic(
+                    lambda transaction: pending.add(
+                        job_id, waiting, now=pending_at, transaction=transaction),
+                    issued_event)
+            else:
+                recorder.append(issued_event())
+                pending.add(job_id, waiting, now=pending_at)
             return {"status": "PENDING_APPROVAL",
                     "handoff_sha256": handoff_digest(handoff)}
+
+        recorder.append(issued_event())
         return run(subject=subject, job_id=job_id, wire=wire, handoff=handoff,
                    trace_id=trace_id)
 
@@ -472,20 +618,39 @@ def _submitter(*, orchestrator: Orchestrator,
         try:
             return run(subject=subject, job_id=job_id, wire=waiting.wire,
                        handoff=waiting.handoff, trace_id=waiting.trace_id,
-                       approval_token=approval_token)
+                       approval_token=approval_token,
+                       defer_refusals=durable)
         except Denied as refusal:
-            if (getattr(pending, "durable", False)
-                    and refusal.decision.reason_code != "JOB_ID_REUSED"):
-                pending.refuse(job_id, subject, now=now())
+            if durable:
+                if refusal.decision.reason_code == "JOB_ID_REUSED":
+                    append_orchestrator_refusal(
+                        refusal, handoff=waiting.handoff,
+                        trace_id=waiting.trace_id, subject=subject)
+                else:
+                    _atomic_pending_refusal(
+                        recorder=recorder, pending=pending, waiting=waiting,
+                        job_id=job_id, subject=subject,
+                        now=refusal.decision.occurred_at,
+                        component="orchestrator",
+                        instance_id=orchestrator.orchestrator_id,
+                        reason_code=_PENDING_DISPATCH_REFUSED)
             raise
-        except GatewayRejected:
-            # Refused before anything ran — a wrong token, or one for another
-            # job. The job's id is not burned and its own approval is not
-            # spent, so it stays waiting for the right one. If anchoring the
-            # refusal failed instead, this handler is not reached and the
-            # pending entry remains consumed conservatively.
-            if getattr(pending, "durable", False) and now() >= waiting.handoff.expires_at:
-                pending.refuse(job_id, subject, now=now())
+        except GatewayRejected as refusal:
+            # Invalid approvals leave the durable job waiting. Once its handoff
+            # is expired, however, the transition to REFUSED is itself audited
+            # in the same transaction.
+            if durable:
+                if refusal.occurred_at >= waiting.handoff.expires_at:
+                    _atomic_pending_refusal(
+                        recorder=recorder, pending=pending, waiting=waiting,
+                        job_id=job_id, subject=subject,
+                        now=refusal.occurred_at, component="gateway",
+                        instance_id=refusal.gateway_id,
+                        reason_code=_PENDING_EXPIRED)
+                else:
+                    append_gateway_refusal(
+                        refusal, handoff=waiting.handoff,
+                        trace_id=waiting.trace_id, subject=subject)
             else:
                 pending.restore(job_id, waiting)
             raise
@@ -502,54 +667,31 @@ def _submitter(*, orchestrator: Orchestrator,
             policy=policy, handoff_verifier=handoff_verifier, wire=admission.wire,
             subject=subject, job_id=job_id, now=admitted_at)
         trace_id = _trace_id(handoff)
-        _append_event(
-            recorder=recorder, handoff=handoff, trace_id=trace_id,
-            api_subject=subject,
-            component="orchestrator", instance_id=orchestrator.orchestrator_id,
-            action=admission.decision.action,
-            decision=admission.decision.decision,
-            reason_code=admission.decision.reason_code,
-            occurred_at=admission.decision.occurred_at)
-        return admission.wire, handoff, trace_id
+        return admission.wire, handoff, trace_id, admission.decision
 
     def run(*, subject: str, job_id: str, wire: bytes, handoff, trace_id: str,
-            approval_token: bytes | None = None) -> dict[str, Any]:
+            approval_token: bytes | None = None,
+            defer_refusals: bool = False) -> dict[str, Any]:
         dispatch_at = now()
         try:
             dispatched = orchestrator.dispatch(
                 wire, subject=subject, job_id=job_id, policy=policy,
                 now=dispatch_at, approval_token=approval_token)
         except GatewayRejected as refusal:
-            _append_event(
-                recorder=recorder, handoff=handoff, trace_id=trace_id,
-                api_subject=subject,
-                component="gateway", instance_id=refusal.gateway_id,
-                action="HANDOFF_REJECTED", decision="DENIED",
-                reason_code=refusal.reason_code,
-                occurred_at=refusal.occurred_at)
+            if not defer_refusals:
+                append_gateway_refusal(
+                    refusal, handoff=handoff, trace_id=trace_id,
+                    subject=subject)
             raise
         except Denied as refusal:
-            _append_event(
-                recorder=recorder, handoff=handoff, trace_id=trace_id,
-                api_subject=subject,
-                component="orchestrator", instance_id=orchestrator.orchestrator_id,
-                action=refusal.decision.action,
-                decision=refusal.decision.decision,
-                reason_code=refusal.decision.reason_code,
-                occurred_at=refusal.decision.occurred_at)
+            if not defer_refusals:
+                append_orchestrator_refusal(
+                    refusal, handoff=handoff, trace_id=trace_id,
+                    subject=subject)
             raise
         except DispatchAttempted as refusal:
-            # A DispatchAttempted means gateway admission succeeded — already
-            # on the chain — and the orchestrator committed to execution before
-            # the worker boundary refused or failed. Preserve both of those.
-            _append_event(
-                recorder=recorder, handoff=handoff, trace_id=trace_id,
-                api_subject=subject,
-                component="orchestrator", instance_id=orchestrator.orchestrator_id,
-                action=refusal.decision.action,
-                decision=refusal.decision.decision,
-                reason_code=refusal.decision.reason_code,
-                occurred_at=refusal.decision.occurred_at)
+            # Admission and dispatch are already on the chain before the worker
+            # boundary is entered. Preserve only the worker-side refusal here.
             _append_event(
                 recorder=recorder, handoff=handoff, trace_id=trace_id,
                 api_subject=subject,
@@ -558,21 +700,30 @@ def _submitter(*, orchestrator: Orchestrator,
                 reason_code="EXECUTION_REFUSED", occurred_at=dispatch_at)
             raise
 
-        for decision in dispatched.decisions:
-            _append_event(
-                recorder=recorder, handoff=handoff, trace_id=trace_id,
-                api_subject=subject,
-                component="orchestrator", instance_id=orchestrator.orchestrator_id,
-                action=decision.action, decision=decision.decision,
-                reason_code=decision.reason_code,
-                occurred_at=decision.occurred_at)
-
         verify_at = now()
-        try:
-            acceptance = verifier.accept(
+
+        def accept_result(transaction=None):
+            return verifier.accept(
                 dispatched.result_wire, handoff_wire=dispatched.handoff_wire,
                 subject=subject, job_id=job_id, policy=policy, now=verify_at,
-                approval_record_hash=dispatched.approval_record_hash)
+                approval_record_hash=dispatched.approval_record_hash,
+                transaction=transaction)
+
+        def accepted_event(acceptance):
+            return event_from_handoff(
+                handoff, trace_id=trace_id,
+                actor=recorder.audit.actor("monitor", verifier.verifier_id),
+                action=acceptance.action, decision=acceptance.decision,
+                reason_code=acceptance.reason_code,
+                occurred_at=acceptance.occurred_at,
+                approval_record_hash=acceptance.approval_record_hash,
+                api_subject=subject, result_sha256=acceptance.result_sha256)
+
+        try:
+            if durable:
+                acceptance = recorder.atomic(accept_result, accepted_event)
+            else:
+                acceptance = accept_result()
         except Rejected as refusal:
             _append_event(
                 recorder=recorder, handoff=handoff, trace_id=trace_id,
@@ -583,15 +734,8 @@ def _submitter(*, orchestrator: Orchestrator,
                 occurred_at=refusal.occurred_at)
             raise
 
-        _append_event(
-            recorder=recorder, handoff=handoff, trace_id=trace_id,
-            api_subject=subject,
-            component="monitor", instance_id=verifier.verifier_id,
-            action=acceptance.action, decision=acceptance.decision,
-            reason_code=acceptance.reason_code,
-            occurred_at=acceptance.occurred_at,
-            approval_record_hash=acceptance.approval_record_hash,
-            result_sha256=acceptance.result_sha256)
+        if not durable:
+            recorder.append(accepted_event(acceptance))
         return {
             "status": acceptance.status,
             "reason_code": acceptance.result.reason_code,

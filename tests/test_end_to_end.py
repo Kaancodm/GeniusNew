@@ -408,8 +408,8 @@ class EndToEndTest(Fixture, unittest.TestCase):
     # Review finding LOW-1 (26.09.2026): it used to be appended after the worker
     # returned, inferred by the composition root rather than read off the permit.
 
-    def test_the_admission_is_on_the_chain_before_the_worker_runs(self):
-        """In the live process, admission precedes any worker execution."""
+    def test_admission_and_dispatch_are_on_the_chain_before_the_worker_runs(self):
+        """In the live process, admission and dispatch precede worker execution."""
         keys = self.service.keys
         runners = []
 
@@ -429,7 +429,8 @@ class EndToEndTest(Fixture, unittest.TestCase):
         self.assertEqual(self.post(url=self.url_for(service))[1]['status'], 'SUCCEEDED')
         self.assertEqual(runner.seen, [
             ('orchestrator', 'orchestrator-1', 'HANDOFF_ISSUED', self.clock[0]),
-            ('gateway', 'gateway-1', 'HANDOFF_ADMITTED', self.clock[0])])
+            ('gateway', 'gateway-1', 'HANDOFF_ADMITTED', self.clock[0]),
+            ('orchestrator', 'orchestrator-1', 'EXECUTION_DISPATCHED', self.clock[0])])
         self.assertEqual(len(service.chain.records), 4)
         # Read off the permit, and still the same job's trace.
         self.assertEqual(len({record.event.trace_id for record in service.chain.records}), 1)

@@ -911,7 +911,9 @@ class RacingLedger(ProcessLocalJobLedger):
     def is_burned(self, job_id):
         return False
 
-    def reserve(self, reservation):
+    def reserve(self, reservation, *, transaction=None):
+        if transaction is not None:
+            raise AssertionError('the process-local race must not join a transaction')
         return False
 
 

@@ -27,8 +27,7 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
         database.migrate(self.db.owner_dsn)
         self.connection = self.db.connect(runtime=True)
         self.addCleanup(self.connection.close)
-        self.acceptance_connection = self.db.connect(runtime=True)
-        self.addCleanup(self.acceptance_connection.close)
+        self.acceptance_connection = self.connection
 
     def start(self, *, requires_approval=False):
         keys = derive_keys(ROOT_SECRET)
@@ -187,7 +186,7 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
         ).fetchone(), ("COMPLETED",))
         self.start().close()
 
-    def test_failed_anchor_acknowledgement_stops_further_audit_writes(self):
+    def test_failed_anchor_acknowledgement_blocks_new_writes_until_reanchored(self):
         service = self.start()
         self.addCleanup(service.close)
         signer = HandoffSigner(integrity_key=derive_keys(ROOT_SECRET).integrity_key)
@@ -201,14 +200,21 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
             actor=service.audit.actor("orchestrator", "orchestrator-1"),
             action="HANDOFF_ISSUED", decision="ALLOWED",
             reason_code="POLICY_SATISFIED", occurred_at=100)
+
         with mock.patch.object(service.anchor, "commit",
                                side_effect=ContractError("anchor unavailable")):
             with self.assertRaisesRegex(ContractError, "anchor unavailable"):
                 service._recorder.append(event)
-        self.assertEqual(len(service.chain), 1)
-        with self.assertRaisesRegex(ContractError, "previously failed"):
-            service._recorder.append(event)
-        self.assertEqual(len(service.chain), 1)
+            self.assertEqual(len(service.chain), 1)
+            with self.assertRaisesRegex(ContractError, "anchor unavailable"):
+                service._recorder.append(event)
+            self.assertEqual(len(service.chain), 1)
+
+        service._recorder.append(event)
+        self.assertEqual(len(service.chain), 2)
+        records = service.chain.records
+        self.assertEqual(service.anchor.committed,
+                         (len(records), records[-1].record_hash))
 
     def test_durable_stores_refuse_a_foreign_transaction_connection(self):
         service = self.start(requires_approval=True)
@@ -279,6 +285,38 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
                 ("e" * 64,))
         with self.assertRaisesRegex(ContractError, "audit issuance"):
             self.start()
+
+    def test_refused_job_needs_its_terminal_audit_event(self):
+        keys = derive_keys(ROOT_SECRET)
+        authority = AuditAuthority(audit_key=keys.audit_key)
+        signer = HandoffSigner(integrity_key=keys.integrity_key)
+        policy = self.policy_for(requires_approval=True)
+        job_id = "job-refused-terminal"
+        wire = issue({"text": "refused"}, subject="subject-demo",
+                     job_id=job_id, policy=policy, signer=signer, now=100)
+        handoff = validate_pending(
+            wire, subject="subject-demo", job_id=job_id,
+            policy=policy, verifier=signer.verifier(), now=100)
+        waiting = _Waiting(
+            "subject-demo", wire, handoff,
+            "trace-" + sha256(wire).hexdigest()[:16])
+        pending = database.PostgresPendingJobs(
+            self.connection, policy=policy, verifier=signer.verifier())
+        pending.add(job_id, waiting, now=100)
+        self.append_issued(handoff, authority)
+        pending.refuse(job_id, "subject-demo", now=110)
+
+        with self.assertRaisesRegex(ContractError, "terminal audit events"):
+            self.start(requires_approval=True)
+
+        PostgresAuditChain(self.connection, authority=authority).append(
+            event_from_handoff(
+                handoff, api_subject="subject-demo",
+                trace_id="trace-" + handoff_digest(handoff)[:16],
+                actor=authority.actor("orchestrator", "orchestrator-1"),
+                action="HANDOFF_REJECTED", decision="DENIED",
+                reason_code="PENDING_DISPATCH_REFUSED", occurred_at=110))
+        self.start(requires_approval=True).close()
 
     def test_changed_api_subject_without_a_signed_binding_refuses_start(self):
         keys = derive_keys(ROOT_SECRET)

@@ -267,9 +267,11 @@ class PostgresJobLedger(JobLedger):
                             "WHERE job_id=%s", (job_id,), fetch=True)
         return row is None or row == ("PENDING_APPROVAL", subject, handoff_sha256)
 
-    def reserve_admitted(self, reservation: Reservation, *, approval_record_hash: str | None) -> bool:
+    def reserve_admitted(self, reservation: Reservation, *,
+                         approval_record_hash: str | None,
+                         transaction=None) -> bool:
         if approval_record_hash is None:
-            return self.reserve(reservation)
+            return self.reserve(reservation, transaction=transaction)
         row = self._execute(
             "SELECT CASE WHEN octet_length(r.scope) <= %s THEN r.scope ELSE NULL END,"
             "r.changed_at FROM public.job_ledger j "
@@ -281,7 +283,7 @@ class PostgresJobLedger(JobLedger):
             "AND r.state='CONSUMED'", (_MAX_WIRE_BYTES, approval_record_hash,
             reservation.job_id,
             reservation.subject, reservation.handoff_sha256, reservation.expires_at,
-            reservation.reserved_at), fetch=True)
+            reservation.reserved_at), fetch=True, transaction=transaction)
         if row is None:
             return False
         scope = ApprovalScope(**decode_wire(row[0], keys=_SCOPE_KEYS, noun="approval scope"))
@@ -629,8 +631,9 @@ class PostgresPendingJobs(PendingJobs):
         with _store_transaction(self._connection, self._lock,
                                 transaction=transaction) as connection:
             # Serializes admission against the global queue bound across replicas.
+            # Expiry is not swept here: changing an existing job to REFUSED
+            # without its audit event would violate the B6 atomicity boundary.
             connection.execute("SELECT pg_advisory_xact_lock(513812742)")
-            self._expire(connection, now=now)
             if connection.execute("SELECT count(*) FROM public.pending_jobs").fetchone()[0] >= _MAX_PENDING:
                 _fail("too many jobs are waiting for approval")
             inserted = connection.execute(
@@ -686,15 +689,6 @@ class PostgresPendingJobs(PendingJobs):
             connection.execute("UPDATE public.job_ledger SET state='REFUSED',updated_at=%s "
                                "WHERE job_id=%s", (now, job_id))
 
-    def _expire(self, connection, *, now):
-        rows = connection.execute(
-            "SELECT j.job_id FROM public.job_ledger j JOIN public.pending_jobs p "
-            "ON p.job_id=j.job_id WHERE j.state='PENDING_APPROVAL' AND p.expires_at<=%s "
-            "ORDER BY j.job_id FOR UPDATE OF j", (now,)).fetchall()
-        for (job_id,) in rows:
-            connection.execute("DELETE FROM public.pending_jobs WHERE job_id=%s", (job_id,))
-            connection.execute("UPDATE public.job_ledger SET state='REFUSED',updated_at=%s "
-                               "WHERE job_id=%s", (now, job_id))
 
 
 class PostgresApprovalStore(ApprovalStore):

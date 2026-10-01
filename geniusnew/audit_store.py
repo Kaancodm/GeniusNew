@@ -27,6 +27,10 @@ from .database import _SCOPE_KEYS, connection_lock
 _AUDIT_LOCK = 0x47454E4955534235
 _MAX_TIME = 4102444800
 _MAX_EVENT_BYTES = 8192
+_TERMINAL_PENDING_REFUSALS = frozenset({
+    "PENDING_APPROVAL_EXPIRED",
+    "PENDING_DISPATCH_REFUSED",
+})
 
 
 def _fail(message: str) -> None:
@@ -130,13 +134,13 @@ class PostgresAuditChain(AuditChain):
                     "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
                 _, records = self._read(self._connection)
                 jobs = self._connection.execute(
-                    "SELECT job_id,subject,handoff_sha256,state,reserved_at "
+                    "SELECT job_id,subject,handoff_sha256,state,reserved_at,updated_at "
                     "FROM public.job_ledger").fetchall()
                 issued = {
                     (record.event.job_id, record.event.handoff_sha256)
                     for record in records if record.event.action == "HANDOFF_ISSUED"
                 }
-                for job_id, subject, digest, _, _ in jobs:
+                for job_id, subject, digest, _, _, _ in jobs:
                     if (_audit_safe(job_id, "job_id"), digest) not in issued:
                         _fail("job ledger has no audit issuance")
                     expected_subject = sha256(_subject_bytes(subject)).hexdigest()
@@ -154,7 +158,7 @@ class PostgresAuditChain(AuditChain):
                      record.event.approval_record_hash)
                     for record in records if record.event.action == "HANDOFF_ADMITTED")
                 expected = Counter()
-                for job_id, subject, digest, state, reserved_at in jobs:
+                for job_id, subject, digest, state, reserved_at, _ in jobs:
                     if state in ("RESERVED", "EXECUTION_COMMITTED", "COMPLETED"):
                         expected[(_audit_safe(job_id, "job_id"), digest, reserved_at, None)] += 1
                 if any(count != 1 for count in admitted.values()) or any(
@@ -168,7 +172,7 @@ class PostgresAuditChain(AuditChain):
                     _fail("job ledger and audit admissions do not match")
                 expected_executions = Counter(
                     (_audit_safe(job_id, "job_id"), digest, reserved_at)
-                    for job_id, subject, digest, state, reserved_at in jobs
+                    for job_id, subject, digest, state, reserved_at, _ in jobs
                     if state in ("EXECUTION_COMMITTED", "COMPLETED"))
                 actual_executions = Counter(
                     (event.job_id, event.handoff_sha256, event.occurred_at)
@@ -176,6 +180,17 @@ class PostgresAuditChain(AuditChain):
                     if event.action == "EXECUTION_DISPATCHED")
                 if actual_executions != expected_executions:
                     _fail("job ledger and audit execution events do not match")
+                expected_refusals = Counter(
+                    (_audit_safe(job_id, "job_id"), digest, updated_at)
+                    for job_id, subject, digest, state, _, updated_at in jobs
+                    if state == "REFUSED")
+                actual_refusals = Counter(
+                    (event.job_id, event.handoff_sha256, event.occurred_at)
+                    for event in (record.event for record in records)
+                    if event.action == "HANDOFF_REJECTED"
+                    and event.reason_code in _TERMINAL_PENDING_REFUSALS)
+                if actual_refusals != expected_refusals:
+                    _fail("refused jobs and terminal audit events do not match")
                 approval_actions = {
                     "GRANTED": "APPROVAL_GRANTED",
                     "CONSUMED": "HANDOFF_ADMITTED",
