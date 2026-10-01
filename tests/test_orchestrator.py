@@ -1,5 +1,6 @@
 import hashlib
 import itertools
+from concurrent.futures import ThreadPoolExecutor
 import os
 import select
 import signal
@@ -394,6 +395,59 @@ class OrchestratorTest(Fixture, unittest.TestCase):
                                    job_id='job-2')
         self.assertEqual(decision.reason_code, 'JOB_LEDGER_FULL')
         self.assertEqual(len(runner.calls), 1)
+
+    def test_reservation_rechecks_capacity_after_an_earlier_preflight(self):
+        ledger = ProcessLocalJobLedger()
+        orchestrator = self.orchestrator_for(job_ledger=ledger)
+        with mock.patch.object(orchestrator_module, '_MAX_JOBS', 1):
+            self.assertTrue(ledger.reserve(reservation(job_id='job-first')))
+            decision = self.denied(orchestrator._reserve,
+                                   reservation(job_id='job-second'), now=110)
+        self.assertEqual(decision.reason_code, 'JOB_LEDGER_FULL')
+        self.assertEqual(ledger.job_ids(), frozenset({'job-first'}))
+
+    def test_full_ledger_reports_reused_id_before_capacity(self):
+        ledger = ProcessLocalJobLedger()
+        orchestrator = self.orchestrator_for(job_ledger=ledger)
+        with mock.patch.object(orchestrator_module, '_MAX_JOBS', 1):
+            self.assertTrue(ledger.reserve(reservation(job_id='job-first')))
+            decision = self.denied(orchestrator._reserve,
+                                   reservation(job_id='job-first'), now=110)
+        self.assertEqual(decision.reason_code, 'JOB_ID_REUSED')
+
+    def test_two_orchestrators_report_capacity_race_as_ledger_full(self):
+        gate = threading.Barrier(2)
+
+        class RacingLedger(ProcessLocalJobLedger):
+            def __init__(self):
+                super().__init__()
+                self.calls = 0
+                self.calls_lock = threading.Lock()
+
+            def is_full(self):
+                full = super().is_full()
+                with self.calls_lock:
+                    self.calls += 1
+                    wait = self.calls <= 2
+                if wait:
+                    gate.wait(timeout=3)
+                return full
+
+        ledger = RacingLedger()
+        instances = [self.orchestrator_for(job_ledger=ledger) for _ in range(2)]
+
+        def attempt(index):
+            try:
+                instances[index]._reserve(reservation(job_id=f'job-race-{index}'), now=110)
+                return 'RESERVED'
+            except Denied as refusal:
+                return refusal.decision.reason_code
+
+        with mock.patch.object(orchestrator_module, '_MAX_JOBS', 1):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                outcomes = list(executor.map(attempt, range(2)))
+        self.assertCountEqual(outcomes, ['RESERVED', 'JOB_LEDGER_FULL'])
+        self.assertEqual(len(ledger.job_ids()), 1)
 
     def test_an_oversized_job_id_is_refused_before_the_ledger_stores_it(self):
         for call in (lambda: self.wire(job_id='j' * 129),
@@ -892,6 +946,26 @@ class JobLedgerContractTest(Fixture, unittest.TestCase):
             ledger.commit_execution(reservation(), now=111)
         self.assertTrue(ledger.is_burned('job-demo'))
 
+    def test_shared_process_local_ledger_cannot_overfill_concurrently(self):
+        ledger = ProcessLocalJobLedger()
+        barrier = threading.Barrier(3)
+        outcomes = []
+
+        def reserve_job(job_id):
+            barrier.wait()
+            outcomes.append(ledger.reserve(reservation(job_id=job_id)))
+
+        with mock.patch.object(orchestrator_module, '_MAX_JOBS', 1):
+            threads = [threading.Thread(target=reserve_job, args=(job_id,))
+                       for job_id in ('job-first', 'job-second')]
+            for thread in threads:
+                thread.start()
+            barrier.wait()
+            for thread in threads:
+                thread.join(5)
+        self.assertEqual(outcomes.count(True), 1)
+        self.assertEqual(len(ledger.job_ids()), 1)
+
     def test_the_ledger_is_part_of_the_orchestrator_s_configuration(self):
         for ledger in (object(), set(), ProcessLocalJobLedger):
             with self.subTest(ledger=ledger):
@@ -1142,6 +1216,15 @@ class PersistentLedgerTest(Fixture, unittest.TestCase):
         self.addCleanup(connection.close)
         with self.assertRaisesRegex(ContractError, 'autocommit mode'):
             PostgresJobLedger(connection)
+
+    def test_a_ledger_does_not_reserve_inside_an_outer_transaction(self):
+        connection = self.db.connect(runtime=True)
+        self.addCleanup(connection.close)
+        ledger = PostgresJobLedger(connection)
+        with connection.transaction(force_rollback=True):
+            with self.assertRaisesRegex(ContractError, 'existing transaction'):
+                ledger.reserve(reservation())
+        self.assertEqual(self.rows(), [])
 
     def test_the_ledger_refuses_anything_but_a_reservation(self):
         ledger = self.ledger()

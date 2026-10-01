@@ -186,7 +186,7 @@ class ServeTest(unittest.TestCase):
 
     def test_newer_migration_is_refused_before_listener_and_anchor(self):
         with self.db.connect() as connection:
-            connection.execute("INSERT INTO schema_migrations VALUES (2, repeat('a',64), 1)")
+            connection.execute("INSERT INTO schema_migrations VALUES (9999, repeat('a',64), 1)")
         self.assert_database_start_refused("unknown or out-of-order database migration")
 
     def test_migrate_command_uses_its_separate_private_dsn_file(self):

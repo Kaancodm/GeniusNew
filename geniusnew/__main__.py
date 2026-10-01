@@ -60,11 +60,13 @@ def _serve(config_path: str) -> int:
     # unrelated jobs running concurrently in the request threads.
     with open_database(config.database_dsn) as jobs, open_database(config.database_dsn) as results:
         return _run_service(config, job_ledger=PostgresJobLedger(jobs),
-                            acceptance_ledger=PostgresAcceptanceLedger(results))
+                            acceptance_ledger=PostgresAcceptanceLedger(results),
+                            database_connection=jobs)
 
 
 def _run_service(config: ServiceConfig, *, job_ledger: JobLedger,
-                 acceptance_ledger: AcceptanceLedger) -> int:
+                 acceptance_ledger: AcceptanceLedger,
+                 database_connection=None) -> int:
     if config.anchor_socket is not None:
         # Served anchor (gate C2): its lifecycle is not ours, so `service.close`
         # leaves it running and `_refuse_discontinuous_start` asks it.
@@ -73,12 +75,14 @@ def _run_service(config: ServiceConfig, *, job_ledger: JobLedger,
         service = build(root_secret=config.root_secret, policy=config.policy,
                         principals=config.principals, workers=config.workers,
                         anchor=anchor, limits=config.limits, job_ledger=job_ledger,
-                        acceptance_ledger=acceptance_ledger)
+                        acceptance_ledger=acceptance_ledger,
+                        database_connection=database_connection)
     else:
         service = build(root_secret=config.root_secret, policy=config.policy,
                         principals=config.principals, workers=config.workers,
                         anchor_state=config.anchor_state, limits=config.limits,
-                        job_ledger=job_ledger, acceptance_ledger=acceptance_ledger)
+                        job_ledger=job_ledger, acceptance_ledger=acceptance_ledger,
+                        database_connection=database_connection)
     try:
         _refuse_discontinuous_start(service)
         server = serve(service.entry, host=config.listen_host, port=config.listen_port,
