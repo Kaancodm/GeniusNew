@@ -28,14 +28,17 @@ GeniusNew ist ein Zero-Trust-Agentensystem in Python. Regeln: `AGENTS.md`, Rolle
    `requirements.txt` hash-gepinnt? Ohne Kaans OK gilt das als *High*.
 8. **Wissensblock:** Enthält die Beschreibung eines Codex-PRs den ausgefüllten Block
    „## Für die Wissensdatenbank“? Fehlt er: *High*. Ändert ein Codex-PR
-   `docs/STATUS.md` oder `docs/DECISIONS.md`? Diese Dateien gehören Gemini: *Medium*.
+   `docs/STATUS.md`? Diese Datei gehört Gemini: *Medium*. Ändert er
+   `docs/COLLABORATION.md`, `docs/DECISIONS.md` oder `docs/DATABASE.md`? Diese Dateien
+   gehören Claude Code beziehungsweise ChatGPT (im Auftrag von Kaan), nicht Codex:
+   *High*.
 
-9. **DB-PRs** (Speicher-Code, Schema, Migrationen, `docs/DATABASE.md`): Liegt der
-   Anker in derselben Datenbank oder unter denselben Zugangsdaten wie die Audit-Kette?
-   *Critical*. Startet der Dienst bei beschädigtem oder fehlendem Speicher still bei
-   null? *Critical*. Stehen Zugangsdaten oder DB-Dateien im Repository? *Critical*.
-   Weicht das Schema von `docs/DATABASE.md` ab? *High*. Am Ende jedes DB-Reviews steht
-   „Gemini-Freigabe DB: ja“ oder „Gemini-Freigabe DB: nein“ mit Grund.
+9. **DB-Code-PRs** (Speicher-Code, Schema, Migrationen): Liegt der Anker in derselben
+   Datenbank oder unter denselben Zugangsdaten wie die Audit-Kette? *Critical*. Startet
+   der Dienst bei beschädigtem oder fehlendem Speicher still bei null? *Critical*.
+   Stehen Zugangsdaten oder DB-Dateien im Repository? *Critical*. Weicht das Schema von
+   `docs/DATABASE.md` ab? *High*. Die Freigabe für diese PRs gibt Claude Code
+   (`Claude DB Review: APPROVED`/`CHANGES REQUESTED`), nicht Gemini.
 
 ## Nicht bemängeln
 

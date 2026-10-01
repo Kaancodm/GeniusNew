@@ -1,7 +1,13 @@
+import errno
+import json
 import os
+import signal
+import socket
 import subprocess
+import sys
 import tempfile
 import time
+import types
 import unittest
 from unittest.mock import patch
 
@@ -12,7 +18,19 @@ import geniusnew.isolation as isolation_module
 import geniusnew.isolation_child as isolation_child_module
 from geniusnew.isolation import IsolationLimits, IsolatedWorkerRunner
 from geniusnew.results import WorkerAuthority, accept
-from geniusnew.workers import DeterministicSummarizer, Worker, WorkerRunner
+from geniusnew.workers import (
+    DeterministicSummarizer,
+    Worker,
+    WorkerRunner,
+    _WorkerIsolationViolation,
+    _WorkerResourceExhausted,
+)
+
+# The runner refuses to start without all three; elsewhere only its refusal is tested.
+_LANDLOCK_SUPPORTED = isolation_module._landlock_abi() >= isolation_module._LANDLOCK_MIN_ABI
+_ISOLATION_SUPPORTED = (isolation_module._resource_supported()
+                        and isolation_module._process_filter_supported()
+                        and _LANDLOCK_SUPPORTED)
 
 
 class ReturningWorker(Worker):
@@ -69,7 +87,7 @@ class SpawnWorker(Worker):
 
 
 class NativeSpawnWorker(Worker):
-    """Starts a shell through a spawn path the current audit hook does not deny.
+    """Starts a shell through the one spawn path that raises no audit event.
 
     `spawnv_passfds` is the stdlib's own thin wrapper around
     `_posixsubprocess.fork_exec`, kept in step with it on every Python version,
@@ -86,11 +104,26 @@ class NativeSpawnWorker(Worker):
 
         # The path travels as $0, never through the shell's parser.
         pid = spawnv_passfds(b"/bin/sh", [b"/bin/sh", b"-c", b'echo escaped > "$0"',
-                                         os.fsencode(self.path)], ())
-        # Reap the child before returning: the assertion needs a completed write,
-        # not a race between a detached shell and temporary-directory cleanup.
-        _, status = os.waitpid(pid, 0)
-        return {"text": f"shell exit={os.waitstatus_to_exitcode(status)}"}
+                                          os.fsencode(self.path)], ())
+        # If process creation ever gets past the filter, wait for the child so
+        # the escape side effect cannot race the assertions in the parent test.
+        os.waitpid(pid, 0)
+        return {"text": "spawned"}
+
+
+class ThreadWorker(Worker):
+    """Starts a thread: the filter must tell a thread from a new process."""
+
+    tool = "summarize"
+
+    def run(self, payload):
+        import threading
+
+        seen = []
+        thread = threading.Thread(target=seen.append, args=(payload["text"],))
+        thread.start()
+        thread.join()
+        return {"text": seen[0]}
 
 
 class OutsideReadWorker(Worker):
@@ -236,7 +269,7 @@ class IsolationLimitsTest(unittest.TestCase):
         self.assertEqual(IsolationLimits(max_file_bytes=4096).max_file_bytes, 4096)
         self.assertEqual(IsolationLimits(max_open_files=16).max_open_files, 16)
 
-    @unittest.skipUnless(isolation_module._resource_supported(), "POSIX resource limits required")
+    @unittest.skipUnless(_ISOLATION_SUPPORTED, "POSIX limits and a seccomp filter required")
     def test_runner_requires_a_limits_object(self):
         authority = WorkerAuthority(result_key=b"a-separate-result-key-of-32bytes!")
         with self.assertRaisesRegex(ContractError, "IsolationLimits"):
@@ -249,6 +282,32 @@ class IsolationLimitsTest(unittest.TestCase):
         with patch.object(isolation_module, "_resource_supported", return_value=False):
             with self.assertRaisesRegex(ContractError, "POSIX resource limits"):
                 IsolatedWorkerRunner(DeterministicSummarizer(), authority=authority)
+
+    def test_runner_fails_closed_without_a_process_filter(self):
+        authority = WorkerAuthority(result_key=b"a-separate-result-key-of-32bytes!")
+        with patch.object(isolation_module, "_resource_supported", return_value=True), \
+                patch.object(isolation_module, "_process_filter_supported", return_value=False):
+            with self.assertRaisesRegex(ContractError, "seccomp process filter"):
+                IsolatedWorkerRunner(DeterministicSummarizer(), authority=authority)
+
+    def test_runner_fails_closed_below_landlock_abi_4(self):
+        authority = WorkerAuthority(result_key=b"a-separate-result-key-of-32bytes!")
+        for abi in (0, 3):
+            with self.subTest(abi=abi), \
+                    patch.object(isolation_module, "_resource_supported", return_value=True), \
+                    patch.object(isolation_module, "_process_filter_supported", return_value=True), \
+                    patch.object(isolation_module, "_landlock_abi", return_value=abi):
+                with self.assertRaisesRegex(ContractError, "Landlock ABI 4"):
+                    IsolatedWorkerRunner(DeterministicSummarizer(), authority=authority)
+
+    def test_a_worker_module_without_a_file_is_refused(self):
+        module = types.ModuleType("geniusnew_test_fileless_module")
+        exec("from geniusnew.workers import Worker\n"
+             "class FilelessWorker(Worker):\n    tool = 'summarize'\n", module.__dict__)
+        sys.modules[module.__name__] = module
+        self.addCleanup(sys.modules.pop, module.__name__)
+        with self.assertRaisesRegex(ContractError, "module must be a file"):
+            isolation_module._read_paths(module.FilelessWorker())
 
     def test_local_worker_classes_are_not_accepted_for_exec_isolation(self):
         class LocalWorker(Worker):
@@ -292,9 +351,21 @@ class IsolationChildContractTest(unittest.TestCase):
                 "max_file_bytes": 1024 * 1024,
                 "max_open_files": 64,
             },
+            "read_paths": ["/usr/lib/python3"],
         }
         value.update(over)
         return value
+
+    def test_a_valid_request_decodes(self):
+        value = self.request_value()
+        self.assertEqual(isolation_child_module._decode_request(canonical(value)), value)
+
+    def test_read_paths_must_be_a_list_of_absolute_strings(self):
+        for read_paths in ("/usr/lib", ["relative/dir"], [42], {"/usr": 1}):
+            with self.subTest(read_paths=read_paths):
+                with self.assertRaisesRegex(ContractError, "invalid isolation read paths"):
+                    isolation_child_module._decode_request(
+                        canonical(self.request_value(read_paths=read_paths)))
 
     def test_request_size_guard_rejects_an_otherwise_valid_oversized_request(self):
         value = self.request_value(payload={"text": "x" * 40000})
@@ -369,7 +440,283 @@ class IsolationChildContractTest(unittest.TestCase):
             isolation_child_module._resolve_worker(self.good_spec(tool="other"))
 
 
-@unittest.skipUnless(isolation_module._resource_supported(), "POSIX resource limits required")
+# Written out again rather than read from `_FILTER_ARCHES`: a test that iterates
+# the table it checks cannot notice an entry missing from it. `getpid` is the
+# control that shows a probe can pass at all.
+_SYSCALLS = {
+    "x86_64": {"getpid": 39, "clone": 56, "fork": 57, "vfork": 58, "execve": 59,
+               "execveat": 322, "clone3": 435},
+}
+_PROBE = r"""
+import ctypes, os, sys
+import geniusnew.isolation as isolation
+
+machine = os.uname().machine
+if sys.argv[1] == "foreign-arch":
+    isolation._FILTER_ARCHES[machine] = dict(isolation._FILTER_ARCHES[machine], arch=0)
+syscall = ctypes.CDLL(None, use_errno=True).syscall
+syscall.restype = ctypes.c_long
+syscall.argtypes = (ctypes.c_long,) * 6
+values = [int(value) for value in sys.argv[2:]]
+isolation._install_process_filter()
+result = syscall(*values, *[0] * (6 - len(values)))
+os._exit(100 + ctypes.get_errno() if result < 0 else 0)
+"""
+
+
+class ProcessFilterContractTest(unittest.TestCase):
+    def test_an_unknown_architecture_gets_no_filter(self):
+        with self.assertRaisesRegex(ContractError, "architecture"):
+            isolation_module._process_filter("sparc64")
+
+    def test_sigsys_from_the_child_is_an_isolation_violation(self):
+        if isolation_module._SIGSYS is None:
+            self.skipTest("no SIGSYS on this platform")
+        with self.assertRaises(_WorkerIsolationViolation):
+            isolation_module._decode_child_message(b"", -signal.SIGSYS)
+        # Any other signal is still a resource termination.
+        with self.assertRaises(_WorkerResourceExhausted):
+            isolation_module._decode_child_message(b"", -signal.SIGKILL)
+
+    @unittest.skipUnless(isolation_module._process_filter_supported(), "Linux seccomp filter required")
+    def test_install_refuses_when_no_new_privs_cannot_be_set(self):
+        calls = []
+
+        def prctl(option, *args):
+            calls.append(option)
+            return -1 if option == isolation_module._PR_SET_NO_NEW_PRIVS else 0
+
+        with self.assertRaisesRegex(ContractError, "no_new_privs"):
+            isolation_module._install_process_filter(prctl)
+        self.assertEqual(calls, [isolation_module._PR_SET_NO_NEW_PRIVS])
+
+    @unittest.skipUnless(isolation_module._process_filter_supported(), "Linux seccomp filter required")
+    def test_install_refuses_when_the_kernel_rejects_the_filter(self):
+        calls = []
+
+        def prctl(option, *args):
+            calls.append((option, args))
+            return -1 if option == isolation_module._PR_SET_SECCOMP else 0
+
+        with self.assertRaisesRegex(ContractError, "seccomp filter"):
+            isolation_module._install_process_filter(prctl)
+        self.assertEqual(calls[0], (isolation_module._PR_SET_NO_NEW_PRIVS, (1, 0, 0, 0)))
+        option, (mode, pointer, *rest) = calls[1]
+        self.assertEqual((option, mode, rest), (
+            isolation_module._PR_SET_SECCOMP, isolation_module._SECCOMP_MODE_FILTER, [0, 0]))
+        self.assertNotEqual(pointer, 0)
+
+
+@unittest.skipUnless(isolation_module._process_filter_supported(), "Linux seccomp filter required")
+class ProcessFilterTest(unittest.TestCase):
+    """Each rule of the filter, driven by one raw syscall in a throwaway process.
+
+    The worker tests reach the filter only through whatever Python and libc
+    happen to call. These name each syscall the filter must stop, so a rule
+    dropped from the table cannot go unnoticed.
+    """
+
+    def setUp(self):
+        self.syscalls = _SYSCALLS[os.uname().machine]
+
+    def probe(self, mode, number, *args):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(isolation_module.__file__)))
+        completed = subprocess.run(
+            [sys.executable, "-c", _PROBE, mode, str(number), *map(str, args)],
+            cwd=root, capture_output=True, timeout=10,
+        )
+        return completed.returncode
+
+    def test_an_ordinary_syscall_passes(self):
+        self.assertEqual(self.probe("native", self.syscalls["getpid"]), 0)
+
+    def test_every_process_or_program_start_syscall_is_killed(self):
+        for name in ("fork", "vfork", "execve", "execveat"):
+            with self.subTest(syscall=name):
+                self.assertEqual(self.probe("native", self.syscalls[name]), -signal.SIGSYS)
+
+    def test_clone_without_clone_thread_is_killed(self):
+        self.assertEqual(
+            self.probe("native", self.syscalls["clone"], signal.SIGCHLD), -signal.SIGSYS)
+
+    def test_clone3_is_refused_with_enosys_so_libc_falls_back_to_clone(self):
+        self.assertEqual(self.probe("native", self.syscalls["clone3"]), 100 + errno.ENOSYS)
+
+    def test_a_foreign_syscall_abi_is_killed(self):
+        # Pretend the native ABI is foreign: then even getpid must die.
+        self.assertEqual(
+            self.probe("foreign-arch", self.syscalls["getpid"]), -signal.SIGSYS)
+
+    @unittest.skipUnless(sys.platform.startswith("linux") and os.uname().machine == "x86_64",
+                         "x32 exists only on x86_64")
+    def test_x32_syscall_numbers_are_killed(self):
+        number = 0x40000000 | self.syscalls["getpid"]
+        self.assertEqual(self.probe("native", number), -signal.SIGSYS)
+
+
+class ReadHookTest(unittest.TestCase):
+    """The audit hook alone, without Landlock: it must refuse the same reads."""
+
+    def test_reads_off_the_allowlist_are_refused_and_recorded(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as allowed, \
+                tempfile.TemporaryDirectory() as outside:
+            root, allowed, outside = map(os.path.realpath, (root, allowed, outside))
+            state = {"violated": False}
+            hook = isolation_module._audit_hook(root, state, (allowed,))
+            hook("open", (os.path.join(root, "inside.txt"), "r", os.O_RDONLY))
+            hook("open", (os.path.join(allowed, "module.py"), "r", os.O_RDONLY))
+            self.assertFalse(state["violated"])
+            for path in (os.path.join(outside, "secret"), "/proc/1/environ", "/dev/null"):
+                with self.subTest(path=path):
+                    with self.assertRaises(isolation_module._SandboxDenied):
+                        hook("open", (path, "r", os.O_RDONLY))
+            self.assertTrue(state["violated"])
+
+
+class FilesystemRulesContractTest(unittest.TestCase):
+    """Every refusal of the Landlock installer, driven by a fake kernel."""
+
+    def kernel(self, *, abi=4, fail=None):
+        calls = []
+        self.attrs = []
+
+        def syscall(number, *args):
+            calls.append(number)
+            if number == isolation_module._SYS_LANDLOCK_CREATE_RULESET:
+                if args[-1] == isolation_module._LANDLOCK_CREATE_RULESET_VERSION:
+                    return abi
+                self.attrs.append(args[0]._obj)
+                return -1 if fail == "create" else os.open(os.devnull, os.O_RDONLY)
+            if number == isolation_module._SYS_LANDLOCK_ADD_RULE:
+                return -1 if fail == "add" else 0
+            if number == isolation_module._SYS_LANDLOCK_RESTRICT_SELF:
+                return -1 if fail == "restrict" else 0
+            raise AssertionError(number)
+
+        def prctl(option, *args):
+            calls.append(("prctl", option))
+            return -1 if fail == "prctl" else 0
+
+        return calls, syscall, prctl
+
+    def install(self, root, read_paths=(), **kernel):
+        calls, syscall, prctl = self.kernel(**kernel)
+        isolation_module._install_filesystem_rules(root, read_paths, syscall, prctl)
+        return calls
+
+    def test_each_kernel_failure_is_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            for fail, message in (("create", "create the worker's Landlock ruleset"),
+                                  ("add", "add a Landlock rule"),
+                                  ("prctl", "no_new_privs"),
+                                  ("restrict", "restrict the worker with Landlock")):
+                with self.subTest(fail=fail):
+                    with self.assertRaisesRegex(ContractError, message):
+                        self.install(root, fail=fail)
+
+    def test_an_abi_below_4_is_refused_before_any_rule(self):
+        with tempfile.TemporaryDirectory() as root:
+            for abi in (0, 1, 3):
+                with self.subTest(abi=abi):
+                    with self.assertRaisesRegex(ContractError, "Landlock ABI 4"):
+                        self.install(root, abi=abi)
+
+    def test_everything_the_abi_knows_is_handled_and_tcp_is_denied(self):
+        with tempfile.TemporaryDirectory() as root:
+            for abi, scoped in ((4, 0), (6, isolation_module._LANDLOCK_SCOPES)):
+                with self.subTest(abi=abi):
+                    self.install(root, abi=abi)
+                    attr = self.attrs[-1]
+                    self.assertEqual(attr.handled_access_fs, isolation_module._landlock_fs_rights(abi))
+                    self.assertEqual(attr.handled_access_net, isolation_module._LANDLOCK_NET_TCP)
+                    self.assertEqual(attr.scoped, scoped)
+
+    def test_filesystem_rights_per_abi(self):
+        self.assertEqual([isolation_module._landlock_fs_rights(abi) for abi in range(1, 8)],
+                         [0x1FFF, 0x3FFF, 0x7FFF, 0x7FFF, 0xFFFF, 0xFFFF, 0xFFFF])
+
+    def test_one_rule_per_existing_path_then_restrict(self):
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as allowed:
+            calls = self.install(root, (allowed, os.path.join(allowed, "missing")))
+        add = isolation_module._SYS_LANDLOCK_ADD_RULE
+        self.assertEqual(calls.count(add), 2)  # root and the existing read path
+        self.assertEqual(calls[-2:], [("prctl", isolation_module._PR_SET_NO_NEW_PRIVS),
+                                      isolation_module._SYS_LANDLOCK_RESTRICT_SELF])
+
+    def test_a_missing_job_directory_is_refused(self):
+        with tempfile.TemporaryDirectory() as parent:
+            with self.assertRaises(FileNotFoundError):
+                self.install(os.path.join(parent, "gone"))
+
+    def test_no_kernel_support_reads_as_abi_0(self):
+        self.assertEqual(isolation_module._landlock_abi(lambda *args: -1), 0)
+        with patch.object(isolation_module.sys, "platform", "darwin"):
+            self.assertEqual(isolation_module._landlock_abi(lambda *args: 7), 0)
+
+
+_LANDLOCK_PROBE = r"""
+import json, os, socket, sys
+import geniusnew.isolation as isolation
+
+root, allowed, outside, port = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+isolation._install_filesystem_rules(root, (allowed,))
+
+def attempt(action):
+    try:
+        action()
+        return "allowed"
+    except PermissionError:
+        return "denied"
+
+def read(path):
+    with open(path, encoding="utf-8") as handle:
+        handle.read()
+
+def write(path):
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("x")
+
+print(json.dumps({
+    "read_root": attempt(lambda: read(os.path.join(root, "inside.txt"))),
+    "write_root": attempt(lambda: write(os.path.join(root, "new.txt"))),
+    "read_allowed": attempt(lambda: read(os.path.join(allowed, "allowed.txt"))),
+    "write_allowed": attempt(lambda: write(os.path.join(allowed, "new.txt"))),
+    "read_outside": attempt(lambda: read(os.path.join(outside, "secret.txt"))),
+    "list_outside": attempt(lambda: os.listdir(outside)),
+    "write_outside": attempt(lambda: write(os.path.join(outside, "new.txt"))),
+    "tcp_connect": attempt(lambda: socket.create_connection(("127.0.0.1", port), timeout=2).close()),
+}))
+"""
+
+
+@unittest.skipUnless(_LANDLOCK_SUPPORTED, "Landlock ABI 4 required")
+class FilesystemRulesTest(unittest.TestCase):
+    """Landlock alone, without the audit hook, in a throwaway process."""
+
+    def test_the_kernel_enforces_the_allowlist(self):
+        package_root = os.path.dirname(os.path.dirname(os.path.abspath(isolation_module.__file__)))
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as allowed, \
+                tempfile.TemporaryDirectory() as outside, socket.socket() as listener:
+            for directory, name in ((root, "inside.txt"), (allowed, "allowed.txt"),
+                                    (outside, "secret.txt")):
+                with open(os.path.join(directory, name), "w", encoding="utf-8") as handle:
+                    handle.write("content")
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            completed = subprocess.run(
+                [sys.executable, "-c", _LANDLOCK_PROBE, root, allowed, outside,
+                 str(listener.getsockname()[1])],
+                cwd=package_root, capture_output=True, timeout=10, check=True,
+            )
+            self.assertFalse(os.path.exists(os.path.join(outside, "new.txt")))
+        self.assertEqual(json.loads(completed.stdout), {
+            "read_root": "allowed", "write_root": "allowed", "read_allowed": "allowed",
+            "write_allowed": "denied", "read_outside": "denied", "list_outside": "denied",
+            "write_outside": "denied", "tcp_connect": "denied",
+        })
+
+
+@unittest.skipUnless(_ISOLATION_SUPPORTED, "POSIX limits, seccomp and Landlock ABI 4 required")
 class ProcessIsolationTest(unittest.TestCase):
     def setUp(self):
         self.signer = HandoffSigner(integrity_key=b"phase-2-test-integrity-key-32bytes")
@@ -553,37 +900,56 @@ class ProcessIsolationTest(unittest.TestCase):
         self.assertFalse(taken.succeeded)
         self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
 
-    def test_a_spawn_below_the_audit_hook_escapes_and_this_is_the_boundary(self):
-        """Held open (SECURITY.md): the hook does not deny this spawn path.
-        Python 3.14 emits an internal audit event, but this hook ignores it.
-        The spawned process writes where the worker's Python calls may not.
-        Only worker code can do this, not a client. Closing it takes an OS
-        sandbox; whoever does must invert this test and update SECURITY.md.
+    def test_a_spawn_below_the_audit_hook_is_killed_by_the_kernel(self):
+        """`_posixsubprocess` raises no audit event, so the hook never sees this
+        spawn. The seccomp filter does: the kernel kills the child at the
+        syscall, before a shell exists that could write anything, and the
+        kill cannot be caught by the worker.
         """
         with tempfile.TemporaryDirectory() as outside:
             target = os.path.join(outside, "escape.txt")
             taken = self.taken(
                 self.runner(NativeSpawnWorker(target)).execute(self.permit_for(self.handoff), now=110)
             )
-            self.assertTrue(taken.succeeded)
-            self.assertEqual(taken.output, {"text": "shell exit=0"})
-            with open(target, encoding="utf-8") as handle:
-                self.assertEqual(handle.read(), "escaped\n")
+            self.assertFalse(os.path.exists(target))
+        self.assertFalse(taken.succeeded)
+        self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
+        self.assertIsNone(taken.output)
 
-    def test_a_read_outside_the_temporary_directory_is_allowed_and_this_is_the_boundary(self):
-        """Held open (SECURITY.md): only `/proc`, `/sys` and `/dev` are refused
-        to a reading worker. Anything else the service user can read, a worker
-        can read and hand back as its output, which goes to the client.
-        """
+    def test_a_worker_may_still_start_a_thread(self):
+        taken = self.taken(
+            self.runner(ThreadWorker()).execute(self.permit_for(self.handoff), now=110)
+        )
+        self.assertTrue(taken.succeeded)
+        self.assertEqual(taken.output, {"text": "the quick brown fox"})
+
+    def test_a_service_secret_outside_the_allowlist_cannot_be_read(self):
+        """Gate A2's minimum target: a 0600 file of the service user, the way
+        the root secret is stored, never reaches the worker's output."""
         with tempfile.TemporaryDirectory() as outside:
-            target = os.path.join(outside, "host-file.txt")
+            target = os.path.join(outside, "root-secret")
             with open(target, "w", encoding="utf-8") as handle:
                 handle.write("CANARY-OUTSIDE-THE-SANDBOX")
+            os.chmod(target, 0o600)
             taken = self.taken(
                 self.runner(OutsideReadWorker(target)).execute(self.permit_for(self.handoff), now=110)
             )
+        self.assertFalse(taken.succeeded)
+        self.assertEqual(taken.reason_code, "ISOLATION_VIOLATED")
+        self.assertIsNone(taken.output)
+
+    def test_the_package_source_is_readable_and_this_is_the_boundary(self):
+        """Held open (SECURITY.md): the Python runtime, `geniusnew/` and the
+        worker module's directory stay readable, so a secret stored in one of
+        them would reach the client."""
+        target = os.path.join(os.path.dirname(isolation_module.__file__), "__init__.py")
+        with open(target, encoding="utf-8") as handle:
+            expected = handle.read()
+        taken = self.taken(
+            self.runner(OutsideReadWorker(target)).execute(self.permit_for(self.handoff), now=110)
+        )
         self.assertTrue(taken.succeeded)
-        self.assertEqual(taken.output, {"text": "CANARY-OUTSIDE-THE-SANDBOX"})
+        self.assertEqual(taken.output, {"text": expected})
 
     def test_parent_proc_environment_cannot_be_read(self):
         taken = self.taken(

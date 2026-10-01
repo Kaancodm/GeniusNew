@@ -43,19 +43,20 @@ ein Befehl, der einen Job über
 HTTP durch alle Schichten schickt, die Audit-Kette gegen den verankerten Kopf prüft und
 den Job danach fünfzehnmal angreift.
 
-**Voraussetzungen:** Linux (oder WSL), Python 3.11 oder neuer, `git`. Die direkte
-Abhängigkeit `cryptography` liefert die Ed25519-Signaturen von Handoff, Ergebnis und
-Audit-Kopf. Sie und ihre Abhängigkeiten sind mit Versionen und Hashes in
+**Voraussetzungen:** Linux (oder WSL), Python 3.11 oder neuer, `git`, `libpq`
+(Debian/Ubuntu: `libpq5`). `cryptography` liefert die Ed25519-Signaturen, `psycopg`
+den synchronen PostgreSQL-Zugriff. Beide und ihre Abhängigkeiten sind mit Versionen und Hashes in
 `requirements.txt` gepinnt. Für den Quickstart ist nach der Installation kein externer Internetzugriff erforderlich — der HTTP-Eingang lauscht
-nur auf `127.0.0.1` —, und nichts bleibt auf der Platte zurück außer temporären
-Verzeichnissen, die wieder verschwinden.
+nur auf `127.0.0.1`. Die vollständige Testsuite braucht zusätzlich einen lokalen
+PostgreSQL-Testcluster und `GENIUSNEW_TEST_ADMIN_DSN` gemäß
+[PostgreSQL-B1-Anleitung](docs/POSTGRES-B1.md). Die Demo benötigt keine Datenbank.
 
 ```sh
 git clone https://github.com/Kaancodm/GeniusNew.git
 cd GeniusNew
 python3 -m venv .venv && . .venv/bin/activate
 python3 -m pip install --require-hashes -r requirements.txt
-python3 -W error::ResourceWarning -m unittest discover -s tests   # Sekunden, endet mit OK
+python3 -W error::ResourceWarning -m unittest discover -s tests   # Test-DB vorher einrichten
 ./scripts/demo.sh                                                 # der Nachweis
 ```
 
@@ -94,9 +95,9 @@ ohne Permit, gekürzte oder zurückgesetzte Kette) wird abgelehnt.
 **Was `PASS` nicht bedeutet:** keine Produktionsfreigabe und kein Sicherheitsnachweis
 für einen echten Betrieb. Außer Worker und Audit-Anker sind die Instanzen getrennte
 Objekte in einem Prozess; die Worker-Isolation ist eine Prozessgrenze, keine microVM, und
-beruht auf einem Python-Audit-Hook, den Worker-Code umgehen kann — ein Worker kann so
-Prozesse starten und außerhalb seines Verzeichnisses schreiben, und er darf Dateien des
-Hosts lesen; der Anker wird vom Dienst unter demselben Nutzer gestartet (seine
+beruht auf einem Python-Audit-Hook plus Seccomp (kein Prozessstart) und Landlock
+(nur Job-Verzeichnis, lesend Python-Laufzeit, Paket und Worker-Modul, kein TCP); der
+Anker wird vom Dienst unter demselben Nutzer gestartet (seine
 Zustandsdatei übersteht einen Neustart, schützt aber nicht vor Rückschnitt durch diesen
 Nutzer); alle Signaturen (Handoff, Ergebnis, Audit-Kopf) sind Ed25519, aber alle
 Schlüssel hängen an einem Root-Secret. Die bekannten Grenzen stehen einzeln in
@@ -163,10 +164,36 @@ Siehe:
 - `docs/ISOLATION-V01.md`
 - `docs/GATEWAY-V01.md`
 - `docs/ROADMAP-V01.md`
+- `docs/ROADMAP-V02.md` — Gates bis technisch beta-ready (v0.2)
+
+## Betrieb als Dienst
+
+Neben der Demo startet `python -m geniusnew serve` den Kern als Dienst, ausschließlich
+aus einer TOML-Konfiguration (Vorlage: `docs/examples/geniusnew.toml`):
+
+```sh
+head -c 32 /dev/urandom > /etc/geniusnew/root_secret && chmod 600 /etc/geniusnew/root_secret
+python -m geniusnew digest-api-key < api-key-file   # Digest für [principals]
+python -m geniusnew migrate --dsn-file /etc/geniusnew/migration_dsn
+python -m geniusnew serve --config /etc/geniusnew/geniusnew.toml
+```
+
+Vorher Core-Datenbank, getrennte Rollen und private DSN-Dateien gemäß
+[PostgreSQL-B1-Anleitung](docs/POSTGRES-B1.md) einrichten. `serve` verweigert eine
+unerreichbare Datenbank sowie fehlende, geänderte oder unbekannte Migrationen vor
+dem Öffnen des HTTP-Listeners. Es führt selbst keine Migration aus.
+
+Der Dienst startet nicht, wenn etwas fehlt oder nicht stimmt: unbekannte Schlüssel,
+eine Nicht-Loopback-Adresse (TLS kommt vom Reverse-Proxy), eine Root-Secret-Datei mit
+Gruppen- oder Fremdrechten, das Demo-Secret, ein Principal ohne Grant oder ein Tool ohne
+Worker. SIGTERM beendet ihn sauber. Solange die Audit-Kette nicht dauerhaft gespeichert
+ist, verweigert er nach einem Neustart mit bereits verankerten Einträgen den Start
+(`SECURITY.md`).
 
 ## Lokale Prüfung
 
-In der aktivierten venv aus dem Quickstart, immer nacheinander. Der Refusal-Guard
+In der aktivierten venv aus dem Quickstart mit konfigurierter PostgreSQL-Test-DSN,
+immer nacheinander. Der Refusal-Guard
 prüft die vom Thema betroffenen Module; hier ist die Worker-Isolation das Beispiel:
 
 ```sh

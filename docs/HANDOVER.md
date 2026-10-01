@@ -45,6 +45,6 @@ Keine Secrets, keine Tokens. Nur Aussagen, die du belegen kannst (SHA, PR-Link,
 Befehlsausgabe).
 ```
 
-Die Antwort auf Prompt 2 geht an Gemini Pro. Gemini überträgt sie in die
-Wissensdatenbank (`docs/STATUS.md`, `docs/DECISIONS.md`, NotebookLM), bevor das nächste
-Werkzeug Prompt 1 bekommt.
+Die Antwort auf Prompt 2 geht an Gemini Pro und Claude Code. Gemini überträgt sie nach
+`docs/STATUS.md` und NotebookLM, Claude Code nach `docs/DECISIONS.md`, bevor das
+nächste Werkzeug Prompt 1 bekommt.

@@ -60,7 +60,8 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/isolation_child.py", "geniusnew/gateway.py",
            "geniusnew/orchestrator.py", "geniusnew/verifier.py",
            "geniusnew/http_entry.py", "geniusnew/wiring.py",
-           "geniusnew/anchor_process.py")
+           "geniusnew/anchor_process.py", "geniusnew/config.py",
+           "geniusnew/__main__.py", "geniusnew/database.py")
 
 # Each module's own way of refusing counts. `_deny` is `orchestrator.py`'s
 # helper, `Rejected` is `verifier.py`'s exception type, `GatewayRejected`
@@ -179,9 +180,14 @@ def _disable(source: str, refusal: Refusal) -> str:
     raise SystemExit(f"could not locate the refusal at {refusal.label()}")
 
 
-def _suite_passes(cwd: Path) -> bool:
+def _suite_passes(cwd: Path, *, failfast: bool = False) -> bool:
+    # A mutant is caught by its first failing test. The unmutated baseline
+    # still runs every test so an unrelated failure cannot validate a mutant.
+    command = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"]
+    if failfast:
+        command.append("-f")
     completed = subprocess.run(
-        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"],
+        command,
         cwd=cwd, capture_output=True, text=True,
     )
     return completed.returncode == 0
@@ -212,7 +218,7 @@ def check(paths: list[str]) -> int:
             # not locate the refusal" after ten minutes of work.
             original = target.read_text()
             target.write_text(_disable(original, refusal))
-            survived = _suite_passes(workspace)
+            survived = _suite_passes(workspace, failfast=True)
             target.write_text(original)
 
             mark = "SURVIVED" if survived else "caught  "

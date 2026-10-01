@@ -56,12 +56,12 @@ from .contracts import (ContractError, HandoffSigner, HandoffVerifier, Policy, v
                         validate_pending)
 from .gateway import (ADMISSION_REASON_CODE, DispatchPermit, Gateway, GatewayRejected,
                       handoff_from_permit)
-from .http_entry import HttpEntry, PrincipalRegistry
+from .http_entry import HttpEntry, HttpLimits, PrincipalRegistry
 from .isolation import IsolatedWorkerRunner
 from .keys import ServiceKeys, derive_keys
-from .orchestrator import Denied, DispatchAttempted, Orchestrator, WorkerEndpoint
+from .orchestrator import Denied, DispatchAttempted, JobLedger, Orchestrator, WorkerEndpoint
 from .results import WorkerAuthority, handoff_digest
-from .verifier import Rejected, ResultVerifier
+from .verifier import AcceptanceLedger, Rejected, ResultVerifier
 from .workers import Worker, WorkerRunner
 
 _TRACE_PREFIX = "trace-"
@@ -207,24 +207,49 @@ class Service:
             self.anchor.close()
 
 
-def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
-          workers: Iterable[Worker], clock: Callable[[], int] | None = None,
+def build(*, root_secret: bytes, policy: Policy,
+          workers: Iterable[Worker], api_keys: Mapping[bytes, str] | None = None,
+          principals: Mapping[str, str] | None = None,
+          clock: Callable[[], int] | None = None,
           gateway_id: str = "gateway-1", verifier_id: str = "verifier-1",
           job_ids: Callable[[], str] | None = None,
           runner_factory: Callable[..., WorkerRunner] | None = None,
           anchor: AuditAnchor | None = None,
-          anchor_state: str | None = None) -> Service:
+          anchor_state: str | None = None,
+          limits: HttpLimits | None = None,
+          job_ledger: JobLedger | None = None,
+          acceptance_ledger: AcceptanceLedger | None = None) -> Service:
     """Assemble one service. The only function that knows all the parts.
 
     The default anchor is an `AnchorProcess`, persisted to `anchor_state` when
     one is given so that a restarted service resumes from what it committed.
     Passing an in-process `AuditAnchor` is a test seam, the same way
     `runner_factory` is: it puts the anchor back inside the writer's memory.
+
+    Callers name principals by exactly one of `api_keys` (plaintext keys, hashed
+    here) or `principals` (SHA-256 digests to subjects). A server reads the
+    digests from its configuration so that no plaintext key has to exist on it.
+
+    `limits` bounds the entry's rate and in-flight jobs; its `max_connections`
+    belongs to the listener, which the caller starts with `http_entry.serve`.
+
+    Without `job_ledger` the orchestrator burns job ids in this process only,
+    which is what the demo and most tests want. The server entry passes the
+    PostgreSQL ledger, so a restart remembers every id it burned. Likewise,
+    `acceptance_ledger` defaults to process memory for explicit demo/test users;
+    the serving entry supplies PostgreSQL and checks its historical artifacts
+    before any runner is constructed. Stored artifacts require their trusted
+    policy and public keys to remain compatible; rotation is a separate gate.
     """
+    if (api_keys is None) == (principals is None):
+        _fail("pass exactly one of api_keys or principals")
     if anchor is not None and not isinstance(anchor, AuditAnchor):
         _fail("anchor must be an AuditAnchor")
     if anchor is not None and anchor_state is not None:
         _fail("anchor_state configures the default anchor; pass one or the other")
+    if limits is not None and not isinstance(limits, HttpLimits):
+        _fail("limits must be HttpLimits")
+    limits = limits or HttpLimits()
     if not isinstance(policy, Policy):
         _fail("policy is invalid")
     keys = derive_keys(root_secret)
@@ -241,6 +266,11 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
                       approval_store=approvals)
     worker_authority = WorkerAuthority(result_key=keys.result_key,
                                        integrity_key=keys.integrity_key)
+    if acceptance_ledger is not None:
+        if not isinstance(acceptance_ledger, AcceptanceLedger):
+            _fail("acceptance_ledger must be an AcceptanceLedger")
+        acceptance_ledger.check(policy=policy, handoff_verifier=handoff_verifier,
+                                worker_verifier=worker_authority.verifier())
     # The production/default path is fail-closed isolated execution. Tests may
     # inject a runner_factory deliberately, but a host without the required
     # POSIX isolation primitives must fail here rather than silently fall back
@@ -276,10 +306,12 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
                                 signer=handoff_signer,
                                 gateway=gateway, workers=endpoints,
                                 on_admitted=_admission_recorder(
-                                    gateway=gateway, recorder=recorder))
+                                    gateway=gateway, recorder=recorder),
+                                job_ledger=job_ledger)
     verifier = ResultVerifier(verifier_id=verifier_id,
                               handoff_verifier=handoff_verifier,
-                              worker_verifier=worker_authority.verifier())
+                              worker_verifier=worker_authority.verifier(),
+                              acceptance_ledger=acceptance_ledger)
     pending = PendingJobs()
 
     submit, complete = _submitter(
@@ -287,8 +319,11 @@ def build(*, root_secret: bytes, policy: Policy, api_keys: Mapping[bytes, str],
         recorder=recorder, policy=policy,
         handoff_verifier=handoff_verifier, now=now, pending=pending)
     entry = HttpEntry(
-        registry=PrincipalRegistry.from_api_keys(api_keys),
+        registry=(PrincipalRegistry.from_api_keys(api_keys) if api_keys is not None
+                  else PrincipalRegistry(principals)),
         submit=submit, complete=complete, job_ids=job_ids,
+        rate_per_minute=limits.rate_per_minute, burst=limits.burst,
+        max_in_flight=limits.max_in_flight,
     )
     return Service(
         entry=entry, orchestrator=orchestrator, gateway=gateway,

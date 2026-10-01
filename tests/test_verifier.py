@@ -348,13 +348,11 @@ class ResultVerifierTest(Fixture, unittest.TestCase):
         self.assertEqual(self.take(wire).result_sha256,
                          hashlib.sha256(wire).hexdigest())
 
-    def test_the_ledger_is_process_local_and_this_is_the_boundary(self):
-        """Held open, the same limit the orchestrator's job ledger has.
+    def test_explicit_demo_storage_forgets_acceptance_with_a_new_instance(self):
+        """Demo/test callers can explicitly use the bounded process-local store.
 
-        A restart, or a second verifier with the same identity, takes the same
-        result again. Durable shared state is a persistence decision the roadmap
-        places outside v0.1, so the claim is one acceptance per handoff **per
-        instance** and a test pins it rather than the docs overstating it.
+        The serving entry always provides PostgreSQL. Its reversed persistence
+        regression is in test_acceptance_ledger.PersistentAcceptanceTest.
         """
         wire = self.result_for()
         self.take(wire)

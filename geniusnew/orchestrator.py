@@ -45,8 +45,16 @@ A job id is burned when a permit exists and the work is about to run, not before
 a request refused by the gateway leaves nothing behind and can be retried under
 its own id, while a dispatch that was reached stays burned even if it failed.
 Releasing a burned id on failure would make the ledger a replay window rather
-than a record. It is bounded, because an unbounded set a caller can grow is
-memory exhaustion with a paper trail.
+than a record.
+
+Where it is burned is a `JobLedger` (gate B2). `python -m geniusnew serve` uses
+the PostgreSQL ledger in `database.py`, so a restart or a second instance sees
+every burned id; the process-local one below is kept for the demo and for tests
+without a database, and it is bounded, because an unbounded set a caller can grow
+is memory exhaustion with a paper trail. Either way the job is committed to
+execution in the ledger before the worker sees the permit, and nothing here ever
+runs a committed job again: after a crash its effect may or may not have
+happened, and a second run is the one outcome that is certainly wrong.
 
 ## What a refusal carries
 
@@ -65,6 +73,7 @@ from __future__ import annotations
 
 import hmac
 import re
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from threading import Lock
 from types import MappingProxyType
@@ -76,6 +85,7 @@ from .results import handoff_digest
 from .workers import WorkerRunner
 
 _INSTANCE_ID = re.compile(r"\A[a-z0-9][a-z0-9-]{0,62}\Z")
+_SHA256 = re.compile(r"\A[0-9a-f]{64}\Z")
 
 # Every action below is in the closed vocabulary of `audit.py`. HANDOFF_ADMITTED
 # is deliberately absent: that is the gateway's decision, not this one's.
@@ -194,6 +204,107 @@ def _deny(reason_code: str, *, now: int) -> None:
 
 
 @dataclass(frozen=True)
+class Reservation:
+    """What a ledger records when a job id is burned.
+
+    Every field comes from the permit the gateway minted and the subject the
+    caller already proved, never from the request. Checked here as well as at
+    the database's start check: a row this refuses to write is a row the next
+    start would refuse to read.
+    """
+
+    job_id: str
+    subject: str
+    handoff_sha256: str
+    expires_at: int
+    reserved_at: int
+
+    def __post_init__(self) -> None:
+        for field in ("job_id", "subject"):
+            value = getattr(self, field)
+            if type(value) is not str or not value:
+                _fail(f"reservation {field} must be a non-empty string")
+        if len(self.job_id.encode("utf-8", "surrogatepass")) > _MAX_JOB_ID_BYTES:
+            _fail(f"reservation job_id must be at most {_MAX_JOB_ID_BYTES} bytes")
+        if type(self.handoff_sha256) is not str or not _SHA256.match(self.handoff_sha256):
+            _fail("reservation handoff_sha256 must be a lowercase SHA-256 digest")
+        for field in ("expires_at", "reserved_at"):
+            value = getattr(self, field)
+            if type(value) is not int or not 1 <= value <= _MAX_OCCURRED_AT:
+                _fail(f"reservation {field} is outside the range the audit contract accepts")
+        # The gateway admits only an unexpired handoff, so a reservation at or
+        # after its expiry would describe a dispatch that cannot have happened.
+        if self.expires_at <= self.reserved_at:
+            _fail("reservation must be made before its handoff expires")
+
+
+class JobLedger(ABC):
+    """Where burned job ids live. The orchestrator decides; the ledger remembers.
+
+    `reserve` must be atomic on its own and return False when the id is already
+    burned, including by another orchestrator that checked at the same moment.
+    `commit_execution` moves exactly that reservation from RESERVED to
+    EXECUTION_COMMITTED, and refuses when it cannot.
+    """
+
+    @abstractmethod
+    def is_burned(self, job_id: str) -> bool:
+        """Whether the id was ever reserved, in any state."""
+
+    def is_full(self) -> bool:
+        """Whether this ledger would refuse any new reservation."""
+        return False
+
+    @abstractmethod
+    def reserve(self, reservation: Reservation) -> bool:
+        """Burn the id, or return False if it is already burned."""
+
+    @abstractmethod
+    def commit_execution(self, reservation: Reservation, *, now: int) -> None:
+        """Record that the worker is about to see the permit."""
+
+
+class ProcessLocalJobLedger(JobLedger):
+    """The v0.1 ledger: this process's memory, bounded, forgotten on restart.
+
+    For the demo and for tests without a database. A restart or a second replica
+    with this ledger dispatches the same unexpired handoff again, which is why
+    `python -m geniusnew serve` never uses it.
+    """
+
+    def __init__(self) -> None:
+        self._states: dict[str, str] = {}
+        self._lock = Lock()
+
+    def job_ids(self) -> frozenset[str]:
+        with self._lock:
+            return frozenset(self._states)
+
+    def is_burned(self, job_id: str) -> bool:
+        with self._lock:
+            return job_id in self._states
+
+    def is_full(self) -> bool:
+        with self._lock:
+            return len(self._states) >= _MAX_JOBS
+
+    def reserve(self, reservation: Reservation) -> bool:
+        with self._lock:
+            if reservation.job_id in self._states:
+                return False
+            self._states[reservation.job_id] = "RESERVED"
+            return True
+
+    def commit_execution(self, reservation: Reservation, *, now: int) -> None:
+        with self._lock:
+            # The same rule the database's trigger enforces: only a reserved
+            # job moves forward, and only once.
+            if self._states.get(reservation.job_id) != "RESERVED":
+                _fail("only a reserved job can be committed to execution")
+            self._states[reservation.job_id] = "EXECUTION_COMMITTED"
+
+
+@dataclass(frozen=True)
 class WorkerEndpoint:
     """Trusted routing metadata plus the execution boundary for one worker."""
 
@@ -256,7 +367,8 @@ class Orchestrator:
 
     def __init__(self, *, orchestrator_id: str, signer: HandoffSigner,
                  gateway: Gateway, workers: Iterable[WorkerEndpoint],
-                 on_admitted: Callable[[DispatchPermit], None] | None = None) -> None:
+                 on_admitted: Callable[[DispatchPermit], None] | None = None,
+                 job_ledger: JobLedger | None = None) -> None:
         self._orchestrator_id = _instance_id(orchestrator_id, "orchestrator_id")
         # The only component that holds the handoff signing key. The gateway
         # holds the public half, so it can check what this issues but not issue.
@@ -291,7 +403,15 @@ class Orchestrator:
         self._workers: Mapping[str, WorkerEndpoint] = MappingProxyType({
             endpoint.worker_agent_id: endpoint for endpoint in endpoints
         })
-        self._jobs: set[str] = set()
+        # Process-local unless the caller hands over a durable ledger; the
+        # server entry always does (`__main__.py`).
+        if job_ledger is None:
+            job_ledger = ProcessLocalJobLedger()
+        if not isinstance(job_ledger, JobLedger):
+            _fail("job_ledger must be a JobLedger")
+        self._ledger = job_ledger
+        # Orders this process's check-then-reserve. Another instance on the
+        # same database is ordered by the ledger's own atomic reservation.
         self._lock = Lock()
 
     @property
@@ -372,12 +492,20 @@ class Orchestrator:
         # Burned here: a permit exists and the work is about to run. Earlier, and
         # a job the gateway refused would lose its id for good; later, and two
         # callers could each hold a valid permit for the same job.
-        self._reserve(job_id, now=now)
+        reservation = Reservation(job_id=job_id, subject=subject,
+                                  handoff_sha256=handoff_digest(permit.handoff),
+                                  expires_at=permit.handoff.expires_at,
+                                  reserved_at=now)
+        self._reserve(reservation, now=now)
         # Made before the runner is called, not after it returns: the decision
         # to dispatch is what this component decided, and it stands whether or
         # not the execution then succeeded.
         decided = Decision(action=_DISPATCHED, decision="ALLOWED",
                            reason_code=_SATISFIED, occurred_at=now)
+        # Recorded before the worker sees the permit. If this fails, nothing
+        # runs and the id stays burned in RESERVED; once it succeeds, a crash
+        # leaves the effect unknown and the id is never dispatched again.
+        self._ledger.commit_execution(reservation, now=now)
         try:
             result_wire = self._run(endpoint, permit, now=now)
         except ContractError as refusal:
@@ -385,7 +513,7 @@ class Orchestrator:
         return Dispatch(
             job_id=job_id,
             worker_agent_id=endpoint.worker_agent_id,
-            handoff_sha256=handoff_digest(permit.handoff),
+            handoff_sha256=reservation.handoff_sha256,
             handoff_wire=permit.handoff.to_bytes(),
             result_wire=result_wire,
             decisions=(decided,),
@@ -444,17 +572,20 @@ class Orchestrator:
         with self._lock:
             self._check_available(job_id, now=now)
 
-    def _reserve(self, job_id: str, *, now: int) -> None:
+    def _reserve(self, reservation: Reservation, *, now: int) -> None:
         """Burn one job id, atomically, and keep it burned."""
         with self._lock:
-            self._check_available(job_id, now=now)
-            self._jobs.add(job_id)
+            self._check_available(reservation.job_id, now=now)
+            # Decides the race this lock cannot see: another orchestrator on
+            # the same database may have burned the id since the check above.
+            if not self._ledger.reserve(reservation):
+                _deny("JOB_ID_REUSED", now=now)
 
     def _check_available(self, job_id: str, *, now: int) -> None:
         """Whether this id could be burned right now. The caller holds the lock."""
-        if job_id in self._jobs:
+        if self._ledger.is_burned(job_id):
             _deny("JOB_ID_REUSED", now=now)
-        if len(self._jobs) >= _MAX_JOBS:
+        if self._ledger.is_full():
             _deny("JOB_LEDGER_FULL", now=now)
 
     def _run(self, endpoint: WorkerEndpoint, permit: DispatchPermit, *,
