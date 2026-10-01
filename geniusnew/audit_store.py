@@ -105,16 +105,19 @@ class PostgresAuditChain(AuditChain):
         self._snapshot()
 
     def _read(self, connection):
-        record_count, event_bytes, head_count = connection.execute(
+        record_count, event_bytes, largest_event, head_count = connection.execute(
             'SELECT (SELECT count(*) FROM public.audit_chain), '
             '(SELECT COALESCE(sum(octet_length(event)), 0) FROM public.audit_chain), '
+            '(SELECT COALESCE(max(octet_length(event)), 0) FROM public.audit_chain), '
             '(SELECT count(*) FROM public.audit_heads)').fetchone()
         if record_count > _MAX_STORED_RECORDS or head_count > _MAX_STORED_RECORDS:
             _fail("stored audit chain exceeds the supported record bound")
-        if record_count != head_count:
-            _fail("stored audit records and signed heads are not one-to-one")
+        if largest_event > _MAX_EVENT_BYTES:
+            _fail("stored audit event exceeds the maximum size")
         if event_bytes > anchor_process._MAX_REQUEST_BYTES:
             _fail("stored audit chain exceeds the supported byte bound")
+        if record_count != head_count:
+            _fail("stored audit records and signed heads are not one-to-one")
         rows = connection.execute(
             'SELECT index, previous_hash, record_hash, '
             'CASE WHEN octet_length(event) <= %s THEN event ELSE NULL END '

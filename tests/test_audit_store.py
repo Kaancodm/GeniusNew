@@ -138,8 +138,9 @@ class StoredAuditSnapshotTest(unittest.TestCase):
         chain = object.__new__(PostgresAuditChain)
         chain._authority = self.authority
         cases = (
-            ((_MAX_COUNT, 0, _MAX_COUNT), "record bound"),
-            ((1, anchor_process._MAX_REQUEST_BYTES + 1, 1), "byte bound"),
+            ((_MAX_COUNT, 0, 0, _MAX_COUNT), "record bound"),
+            ((1, anchor_process._MAX_REQUEST_BYTES + 1, 1, 1), "byte bound"),
+            ((1, 8193, 8193, 0), "event exceeds the maximum size"),
         )
         for stats, reason in cases:
             with self.subTest(reason=reason):
