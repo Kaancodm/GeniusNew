@@ -62,6 +62,8 @@ def _stored_snapshot(rows, head_rows, *, verifier: AuditVerifier):
             _fail("stored audit head signature must be bytes")
         if type(created_at) is not int or not 0 < created_at <= _MAX_TIME:
             _fail("stored audit head timestamp is invalid")
+        if created_at != records[position - 1].event.occurred_at:
+            _fail("stored audit head timestamp does not match its record")
         head = _verify_head(AuditHead(version, count, digest, signature.hex()),
                             authority=verifier)
         heads.append(head)

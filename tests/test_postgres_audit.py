@@ -154,6 +154,13 @@ class PostgresAuditTest(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "signature"):
             PostgresAuditChain(self.connection, authority=self.authority)
 
+    def test_owner_changed_head_time_refuses_recovery(self):
+        self.chain.append(self.event)
+        self.owner("UPDATE public.audit_heads SET created_at=%s",
+                   (self.event.occurred_at + 1,))
+        with self.assertRaisesRegex(ContractError, "timestamp does not match"):
+            PostgresAuditChain(self.connection, authority=self.authority)
+
     def test_runtime_cannot_update_delete_or_truncate_either_audit_table(self):
         self.chain.append(self.event)
         for query in ("UPDATE audit_chain SET event=event", "DELETE FROM audit_chain",
