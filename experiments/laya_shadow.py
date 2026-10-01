@@ -14,9 +14,16 @@ from dataclasses import dataclass
 import json
 from typing import Callable
 from urllib import request
+from urllib.parse import urlsplit
 
 
-_ALLOWED_AGENTS = ("claude", "gemini", "codex", "zen")
+_AGENT_CRITERIA = {
+    "kiro": "automated implementation, repository work, and routine code changes",
+    "copilot": "GitHub-aware coding assistance, review, and focused implementation",
+    "gemini": "knowledge synthesis, documentation, and contradiction review",
+    "abacus": "cross-model analysis, agent experimentation, and fallback evaluation",
+}
+_ALLOWED_AGENTS = tuple(_AGENT_CRITERIA)
 _MAX_TEXT = 4096
 _MAX_RESPONSE = 64 * 1024
 
@@ -61,12 +68,7 @@ def build_request(task: str) -> bytes:
             "agent": {
                 "type": "choice",
                 "instructions": "Which agent should handle this GeniusNew task?",
-                "criteria": {
-                    "claude": "security, architecture, and difficult integration review",
-                    "gemini": "knowledge synthesis, documentation, and contradiction review",
-                    "codex": "implementation, tests, and focused code changes",
-                    "zen": "general planning and coordination",
-                },
+                "criteria": dict(_AGENT_CRITERIA),
             }
         },
     }
@@ -114,8 +116,19 @@ def observe(
 
 
 def http_decider(endpoint: str, timeout: float = 2.0) -> Callable[[bytes], bytes]:
-    if not isinstance(endpoint, str) or not endpoint.startswith(
-        ("http://127.0.0.1:", "http://localhost:")
+    if not isinstance(endpoint, str):
+        raise ShadowError("shadow endpoint must be loopback HTTP")
+    try:
+        parsed = urlsplit(endpoint)
+        port = parsed.port
+    except ValueError as exc:
+        raise ShadowError("shadow endpoint must be loopback HTTP") from exc
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {"127.0.0.1", "::1"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is None
     ):
         raise ShadowError("shadow endpoint must be loopback HTTP")
     if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0:

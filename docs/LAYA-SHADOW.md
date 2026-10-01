@@ -3,7 +3,7 @@
 Status: **Experiment, keine Autorität.**
 
 Ziel ist zu messen, ob ein lokaler Jev-kompatibler Decision-Service bei der Auswahl
-zwischen `claude`, `gemini`, `codex` und `zen` nützlich ist. Die bestehende
+zwischen `kiro`, `copilot`, `gemini` und `abacus` nützlich ist. Die bestehende
 GeniusNew-Policy, Gateway-Prüfung, Approvals, Signaturen und Audit-Entscheidungen werden
 dadurch nicht verändert.
 
@@ -14,7 +14,7 @@ dadurch nicht verändert.
   Modellwert überschrieben.
 - Fehler, ungültige Antworten oder ein nicht erreichbarer Dienst ergeben `UNKNOWN`.
 - Der mitgelieferte HTTP-Adapter akzeptiert ausschließlich Loopback-Endpunkte
-  (`127.0.0.1` oder `localhost`).
+  (`127.0.0.1` oder `::1`). Hostnamen und URL-Userinfo werden abgelehnt.
 - Keine API-Keys, Tokens, Nutzdaten oder produktiven Jobs in diesem Experiment.
 - Keine Änderung an `requirements.txt`: der Adapter verwendet nur die
   Python-Standardbibliothek.
@@ -41,7 +41,7 @@ Antwort wird ausschließlich `answers.agent.choice` gelesen. Beispiel:
 from experiments.laya_shadow import http_decider, observe
 
 decide = http_decider("http://127.0.0.1:8000/v1/systemone")
-result = observe("review gateway boundary", "claude", decide)
+result = observe("review gateway boundary", "kiro", decide)
 print(result.as_dict())
 ```
 
