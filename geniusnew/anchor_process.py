@@ -235,17 +235,7 @@ def _load(path: str | None, verifier: AuditVerifier) -> AuditAnchor:
 
 
 @contextmanager
-def _state_lock(path: str | None):
-    """Keep one live anchor owner for each durable state history."""
-    if path is None:
-        yield
-        return
-    # A Linux abstract socket is released with the process, even if the state
-    # directory does not exist yet. A file lock beside the state would let one
-    # process start before that directory exists and a second start after it
-    # appears under a different lock inode.
-    digest = hashlib.sha256(os.fsencode(os.path.realpath(path))).hexdigest().encode("ascii")
-    address = b"\x00geniusnew-anchor-state-" + digest
+def _state_lease(address: bytes):
     try:
         lease = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     except OSError:
@@ -260,6 +250,33 @@ def _state_lock(path: str | None):
         yield
     finally:
         lease.close()
+
+
+@contextmanager
+def _state_lock(path: str | None):
+    """Keep one live anchor owner for each durable state file identity."""
+    if path is None:
+        yield
+        return
+    # The path lease orders creation. The inode lease also catches hardlinks
+    # and bind mounts that name an already existing history by another path.
+    digest = hashlib.sha256(os.fsencode(os.path.realpath(path))).hexdigest().encode("ascii")
+    address = b"\x00geniusnew-anchor-state-" + digest
+    with _state_lease(address):
+        try:
+            fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+        except OSError:
+            _fail("anchor state file cannot be opened for its lease")
+        try:
+            identity = os.fstat(fd)
+            if not stat.S_ISREG(identity.st_mode):
+                _fail("anchor state file must be regular")
+            inode = f"{identity.st_dev}:{identity.st_ino}".encode("ascii")
+            inode_digest = hashlib.sha256(inode).hexdigest().encode("ascii")
+            with _state_lease(b"\x00geniusnew-anchor-inode-" + inode_digest):
+                yield
+        finally:
+            os.close(fd)
 
 
 def _append(path: str, head: AuditHead) -> None:
