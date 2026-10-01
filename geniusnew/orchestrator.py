@@ -380,7 +380,7 @@ class Orchestrator:
 
     def __init__(self, *, orchestrator_id: str, signer: HandoffSigner,
                  gateway: Gateway, workers: Iterable[WorkerEndpoint],
-                 on_admitted: Callable[[DispatchPermit], None] | None = None,
+                 on_admitted: Callable[[DispatchPermit, str], None] | None = None,
                  job_ledger: JobLedger | None = None) -> None:
         self._orchestrator_id = _instance_id(orchestrator_id, "orchestrator_id")
         # The only component that holds the handoff signing key. The gateway
@@ -501,7 +501,7 @@ class Orchestrator:
         # a lost race for the job id or an execution failure. If it cannot be
         # recorded, nothing runs. Durable evidence needs persistent chain storage.
         if self._on_admitted is not None:
-            self._on_admitted(permit)
+            self._on_admitted(permit, subject)
 
         # Burned here: a permit exists and the work is about to run. Earlier, and
         # a job the gateway refused would lose its id for good; later, and two

@@ -726,9 +726,10 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         runner = self.counting(wire=b'x')
         orchestrator = self.orchestrator_for(
             workers=(WorkerEndpoint('worker-demo', runner),),
-            on_admitted=lambda permit: seen.append((permit, len(runner.calls))))
+            on_admitted=lambda permit, subject: seen.append((permit, subject, len(runner.calls))))
         self.dispatch(self.wire(), orchestrator=orchestrator, now=110)
-        [(permit, calls_before)] = seen
+        [(permit, subject, calls_before)] = seen
+        self.assertEqual(subject, 'subject-demo')
         self.assertIsInstance(permit, DispatchPermit)
         self.assertEqual(calls_before, 0)
         self.assertIs(runner.calls[0][0], permit)
@@ -748,7 +749,8 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         events = []
         runner = self.counting(wire=b'x')
 
-        def rival_wins(permit):
+        def rival_wins(permit, subject):
+            self.assertEqual(subject, 'subject-demo')
             events.append(('admitted', permit.approval_record_hash))
             # The other caller reserves the same id in this window.
             orchestrator._ledger.reserve(Reservation(
@@ -769,7 +771,7 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         """No execution without its admission on record, and the id stays free."""
         runner = self.counting(wire=b'x')
 
-        def recorder_down(permit):
+        def recorder_down(permit, subject):
             raise ContractError('audit is unavailable')
 
         orchestrator = self.orchestrator_for(
@@ -1092,7 +1094,7 @@ class PersistentLedgerTest(Fixture, unittest.TestCase):
         runner = self.counting(wire=b'x')
         instances = [self.orchestrator_for(
             workers=(WorkerEndpoint('worker-demo', runner),),
-            on_admitted=lambda permit: barrier.wait(), job_ledger=self.ledger())
+            on_admitted=lambda permit, subject: barrier.wait(), job_ledger=self.ledger())
             for _ in range(2)]
         outcomes = []
 

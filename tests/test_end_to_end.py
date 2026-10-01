@@ -479,9 +479,9 @@ class EndToEndTest(Fixture, unittest.TestCase):
                 'handoff', 'handoff_sha256', 'admitted_at', 'approval_record_hash')},
             gateway_id='gateway-1')
         with self.assertRaisesRegex(ContractError, 'gateway-minted DispatchPermit'):
-            record(claimed)
+            record(claimed, 'subject-demo')
         with self.assertRaisesRegex(ContractError, 'did not wire'):
-            record(foreign)
+            record(foreign, 'subject-demo')
         self.assertEqual(self.service.chain.records, ())
 
     def served_anchor(self):

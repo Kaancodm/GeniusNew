@@ -132,17 +132,53 @@ class _AnchoredAudit:
         self.chain = chain
         self.anchor = anchor
         self._lock = Lock()
+        self._failed = False
+
+    def _available(self) -> None:
+        if self._failed:
+            _fail("audit anchor acknowledgement previously failed")
 
     def append(self, event: AuditEvent) -> None:
         with self._lock:
+            self._available()
             with self.chain.anchor_lock():
                 self.chain.append(event)
-                self._commit_locked()
+                try:
+                    self._commit_locked()
+                except BaseException:
+                    self._failed = True
+                    raise
+
+    def atomic(self, mutate: Callable[[Any], Any], event: Callable[[Any], AuditEvent]) -> Any:
+        """Commit one durable mutation with its signed event before anchoring."""
+        from .audit_store import PostgresAuditChain
+
+        if not isinstance(self.chain, PostgresAuditChain):
+            _fail("atomic audit mutation needs a PostgreSQL chain")
+        if not callable(mutate) or not callable(event):
+            _fail("atomic audit mutation needs callbacks")
+        with self._lock:
+            self._available()
+            with self.chain.anchor_lock():
+                with self.chain.transaction() as transaction:
+                    result = mutate(transaction)
+                    self.chain.append(event(result), transaction=transaction)
+                try:
+                    self._commit_locked()
+                except BaseException:
+                    self._failed = True
+                    raise
+                return result
 
     def head(self):
         with self._lock:
+            self._available()
             with self.chain.anchor_lock():
-                return self._commit_locked()
+                try:
+                    return self._commit_locked()
+                except BaseException:
+                    self._failed = True
+                    raise
 
     def _commit_locked(self):
         head, records = self.chain.snapshot(self.audit)
@@ -195,6 +231,7 @@ class Service:
         grant = self.approvals.grant(scope, now=now, ttl_seconds=ttl_seconds)
         _append_event(
             recorder=self._recorder, handoff=waiting.handoff,
+            api_subject=waiting.subject,
             trace_id=waiting.trace_id, component="gateway",
             instance_id=self.gateway.gateway_id, action="APPROVAL_GRANTED",
             decision="ALLOWED", reason_code="OPERATOR_APPROVED", occurred_at=now,
@@ -276,6 +313,11 @@ def build(*, root_secret: bytes, policy: Policy,
     recorder = _AnchoredAudit(audit, chain, anchor)
     if audit_chain_factory is not None:
         try:
+            if database_connection is not None:
+                from .audit_store import PostgresAuditChain
+                if not isinstance(chain, PostgresAuditChain):
+                    _fail("durable service needs a PostgreSQL audit chain")
+                chain.check_core_bindings()
             recorder.head()
         except BaseException:
             if isinstance(anchor, AnchorProcess):
@@ -367,7 +409,7 @@ def build(*, root_secret: bytes, policy: Policy,
 
 
 def _admission_recorder(*, gateway: Gateway,
-                        recorder: _AnchoredAudit) -> Callable[[DispatchPermit], None]:
+                        recorder: _AnchoredAudit) -> Callable[[DispatchPermit, str], None]:
     """Record the gateway's admission from the permit, when it is minted.
 
     The orchestrator calls this, so it must not be able to say anything the
@@ -380,7 +422,7 @@ def _admission_recorder(*, gateway: Gateway,
     does not make the chain durable across process crashes.
     """
 
-    def record(permit: DispatchPermit) -> None:
+    def record(permit: DispatchPermit, subject: str) -> None:
         handoff = handoff_from_permit(permit)
         # One gateway per service. A permit another one minted is not evidence
         # of an admission this service made.
@@ -388,6 +430,7 @@ def _admission_recorder(*, gateway: Gateway,
             _fail("admission names a gateway this service did not wire")
         _append_event(
             recorder=recorder, handoff=handoff,
+            api_subject=subject,
             trace_id=_trace_id(handoff), component="gateway",
             instance_id=permit.gateway_id, action="HANDOFF_ADMITTED",
             decision="ALLOWED", reason_code=ADMISSION_REASON_CODE,
@@ -461,6 +504,7 @@ def _submitter(*, orchestrator: Orchestrator,
         trace_id = _trace_id(handoff)
         _append_event(
             recorder=recorder, handoff=handoff, trace_id=trace_id,
+            api_subject=subject,
             component="orchestrator", instance_id=orchestrator.orchestrator_id,
             action=admission.decision.action,
             decision=admission.decision.decision,
@@ -478,6 +522,7 @@ def _submitter(*, orchestrator: Orchestrator,
         except GatewayRejected as refusal:
             _append_event(
                 recorder=recorder, handoff=handoff, trace_id=trace_id,
+                api_subject=subject,
                 component="gateway", instance_id=refusal.gateway_id,
                 action="HANDOFF_REJECTED", decision="DENIED",
                 reason_code=refusal.reason_code,
@@ -486,6 +531,7 @@ def _submitter(*, orchestrator: Orchestrator,
         except Denied as refusal:
             _append_event(
                 recorder=recorder, handoff=handoff, trace_id=trace_id,
+                api_subject=subject,
                 component="orchestrator", instance_id=orchestrator.orchestrator_id,
                 action=refusal.decision.action,
                 decision=refusal.decision.decision,
@@ -498,6 +544,7 @@ def _submitter(*, orchestrator: Orchestrator,
             # the worker boundary refused or failed. Preserve both of those.
             _append_event(
                 recorder=recorder, handoff=handoff, trace_id=trace_id,
+                api_subject=subject,
                 component="orchestrator", instance_id=orchestrator.orchestrator_id,
                 action=refusal.decision.action,
                 decision=refusal.decision.decision,
@@ -505,6 +552,7 @@ def _submitter(*, orchestrator: Orchestrator,
                 occurred_at=refusal.decision.occurred_at)
             _append_event(
                 recorder=recorder, handoff=handoff, trace_id=trace_id,
+                api_subject=subject,
                 component="worker", instance_id=handoff.worker_agent_id,
                 action="HANDOFF_REJECTED", decision="DENIED",
                 reason_code="EXECUTION_REFUSED", occurred_at=dispatch_at)
@@ -513,6 +561,7 @@ def _submitter(*, orchestrator: Orchestrator,
         for decision in dispatched.decisions:
             _append_event(
                 recorder=recorder, handoff=handoff, trace_id=trace_id,
+                api_subject=subject,
                 component="orchestrator", instance_id=orchestrator.orchestrator_id,
                 action=decision.action, decision=decision.decision,
                 reason_code=decision.reason_code,
@@ -527,6 +576,7 @@ def _submitter(*, orchestrator: Orchestrator,
         except Rejected as refusal:
             _append_event(
                 recorder=recorder, handoff=handoff, trace_id=trace_id,
+                api_subject=subject,
                 component="monitor", instance_id=verifier.verifier_id,
                 action="RESULT_REJECTED", decision="DENIED",
                 reason_code=refusal.reason_code,
@@ -535,11 +585,13 @@ def _submitter(*, orchestrator: Orchestrator,
 
         _append_event(
             recorder=recorder, handoff=handoff, trace_id=trace_id,
+            api_subject=subject,
             component="monitor", instance_id=verifier.verifier_id,
             action=acceptance.action, decision=acceptance.decision,
             reason_code=acceptance.reason_code,
             occurred_at=acceptance.occurred_at,
-            approval_record_hash=acceptance.approval_record_hash)
+            approval_record_hash=acceptance.approval_record_hash,
+            result_sha256=acceptance.result_sha256)
         return {
             "status": acceptance.status,
             "reason_code": acceptance.result.reason_code,
@@ -555,15 +607,17 @@ def _trace_id(handoff) -> str:
     return f"{_TRACE_PREFIX}{handoff_digest(handoff)[:16]}"
 
 
-def _append_event(*, recorder: _AnchoredAudit, handoff,
+def _append_event(*, recorder: _AnchoredAudit, handoff, api_subject: str,
                   trace_id: str, component: str, instance_id: str,
                   action: str, decision: str, reason_code: str,
-                  occurred_at: int, approval_record_hash: str | None = None) -> None:
+                  occurred_at: int, approval_record_hash: str | None = None,
+                  result_sha256: str | None = None) -> None:
     recorder.append(event_from_handoff(
         handoff, trace_id=trace_id,
         actor=recorder.audit.actor(component, instance_id), action=action,
         decision=decision, reason_code=reason_code,
-        occurred_at=occurred_at, approval_record_hash=approval_record_hash))
+        occurred_at=occurred_at, approval_record_hash=approval_record_hash,
+        api_subject=api_subject, result_sha256=result_sha256))
 
 
 def _revalidate(*, policy: Policy, handoff_verifier: HandoffVerifier, wire: bytes, subject: str,
