@@ -19,9 +19,11 @@ import argparse
 import signal
 import sys
 import threading
-from typing import Sequence
+from typing import Callable, Sequence
 
 from .anchor_process import AnchorClient
+from .audit import AuditAuthority
+from .audit_chain import AuditChain
 from .config import ServiceConfig, load_config, read_database_dsn
 from .contracts import ContractError
 from .http_entry import PrincipalRegistry, serve
@@ -35,36 +37,37 @@ def _fail(message: str) -> None:
 
 
 def _refuse_discontinuous_start(service: Service) -> None:
-    """Refuse to start behind an anchor that remembers more than this chain holds.
+    """Check continuity again before publishing the listener.
 
-    The audit chain lives in process memory until it is persisted (gate B5 in
-    `docs/ROADMAP-V02.md`); the anchor's state file survives a restart. After a
-    restart the anchor therefore holds a head this empty chain cannot extend, and
-    every request would be refused one by one. Starting anyway would advertise a
-    service that cannot serve, and resetting the anchor is exactly the rollback
-    it exists to prevent. So the start is refused, and says why.
+    Persistent construction already verified every stored event and signed head
+    against the anchor before creating runners. This also refuses an explicitly
+    injected process-local chain behind a nonempty persistent anchor.
     """
     committed, _ = service.anchor.committed
     held = len(service.chain.records)
     if committed > held:
         _fail(f"the anchor has committed {committed} audit records but this process "
-              f"holds {held}; the audit chain is not persisted yet (gate B5), so a "
-              "restart cannot continue it")
+              f"holds {held}; the service cannot continue the anchored history")
 
 
 def _serve(config_path: str) -> int:
     config = load_config(config_path)
     from .database import PostgresAcceptanceLedger, PostgresJobLedger, open_database
+    from .audit_store import PostgresAuditChain
 
-    # Dedicated connections keep an acceptance transaction separate from
-    # unrelated jobs running concurrently in the request threads.
+    # Acceptance uses a separate connection; the other stores share one lock.
     with open_database(config.database_dsn) as jobs, open_database(config.database_dsn) as results:
         return _run_service(config, job_ledger=PostgresJobLedger(jobs),
-                            acceptance_ledger=PostgresAcceptanceLedger(results))
+                            acceptance_ledger=PostgresAcceptanceLedger(results),
+                            database_connection=jobs,
+                            audit_chain_factory=lambda audit: PostgresAuditChain(
+                                jobs, authority=audit))
 
 
 def _run_service(config: ServiceConfig, *, job_ledger: JobLedger,
-                 acceptance_ledger: AcceptanceLedger) -> int:
+                 acceptance_ledger: AcceptanceLedger,
+                 database_connection=None,
+                 audit_chain_factory: Callable[[AuditAuthority], AuditChain] | None = None) -> int:
     if config.anchor_socket is not None:
         # Served anchor (gate C2): its lifecycle is not ours, so `service.close`
         # leaves it running and `_refuse_discontinuous_start` asks it.
@@ -73,12 +76,16 @@ def _run_service(config: ServiceConfig, *, job_ledger: JobLedger,
         service = build(root_secret=config.root_secret, policy=config.policy,
                         principals=config.principals, workers=config.workers,
                         anchor=anchor, limits=config.limits, job_ledger=job_ledger,
-                        acceptance_ledger=acceptance_ledger)
+                        acceptance_ledger=acceptance_ledger,
+                        database_connection=database_connection,
+                        audit_chain_factory=audit_chain_factory)
     else:
         service = build(root_secret=config.root_secret, policy=config.policy,
                         principals=config.principals, workers=config.workers,
                         anchor_state=config.anchor_state, limits=config.limits,
-                        job_ledger=job_ledger, acceptance_ledger=acceptance_ledger)
+                        job_ledger=job_ledger, acceptance_ledger=acceptance_ledger,
+                        database_connection=database_connection,
+                        audit_chain_factory=audit_chain_factory)
     try:
         _refuse_discontinuous_start(service)
         server = serve(service.entry, host=config.listen_host, port=config.listen_port,

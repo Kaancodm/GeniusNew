@@ -205,7 +205,8 @@ class Gateway:
                     wire, subject=subject, job_id=job_id, policy=policy,
                     verifier=self._handoff_verifier, now=now,
                 )
-                receipt = self._approvals.consume(approval_token, scope, now=now)
+                receipt = self._approvals.consume(approval_token, scope, now=now,
+                                                 subject=subject)
             except ContractError as refusal:
                 raise GatewayRejected(
                     str(refusal), gateway_id=self._gateway_id,

@@ -43,14 +43,14 @@ class DatabaseTest(unittest.TestCase):
         self.assertTrue(connection.closed)
         tables = self.execute("SELECT tablename FROM pg_tables WHERE schemaname='public'")
         self.assertEqual({r[0] for r in tables},
-                         {"schema_migrations", "job_ledger", "acceptance_ledger"})
+                         set(database._CORE_TABLES))
 
     def test_two_migrators_serialize_the_first_installation(self):
         with ThreadPoolExecutor(max_workers=2) as executor:
             futures = [executor.submit(database.migrate, self.db.owner_dsn) for _ in range(2)]
             for future in futures:
                 future.result(timeout=30)
-        self.assertEqual(self.execute("SELECT count(*) FROM schema_migrations"), [(1,)])
+        self.assertEqual(self.execute("SELECT count(*) FROM schema_migrations"), [(len(database.migration_files()),)])
 
     def test_a_missing_history_table_is_refused_without_automatic_migration(self):
         with self.assertRaisesRegex(ContractError, "database connection or operation failed"):
@@ -63,8 +63,8 @@ class DatabaseTest(unittest.TestCase):
         for change, reason in (
             ("DELETE FROM schema_migrations", "required database migration is missing"),
             ("UPDATE schema_migrations SET checksum = repeat('0',64)", "checksum mismatch"),
-            ("INSERT INTO schema_migrations VALUES (2, repeat('a',64), 1)", "unknown"),
-            ("UPDATE schema_migrations SET version = 0", "unknown"),
+            ("INSERT INTO schema_migrations VALUES (999, repeat('a',64), 1)", "unknown"),
+            ("UPDATE schema_migrations SET version = 0 WHERE version = 1", "unknown"),
             ("UPDATE schema_migrations SET applied_at = -1", "timestamp is invalid"),
         ):
             with self.subTest(change=change), self.db.connect() as owner:
@@ -80,8 +80,8 @@ class DatabaseTest(unittest.TestCase):
         self.execute("UPDATE schema_migrations SET checksum = repeat('f',64)")
         with self.assertRaisesRegex(ContractError, "checksum mismatch"):
             database.migrate(self.db.owner_dsn)
-        self.assertEqual(self.execute("SELECT checksum FROM schema_migrations"), [("f" * 64,)])
-        self.execute("UPDATE schema_migrations SET version = 2")
+        self.assertEqual(self.execute("SELECT checksum FROM schema_migrations"), [("f" * 64,)] * len(database.migration_files()))
+        self.execute("UPDATE schema_migrations SET version = 999 WHERE version = 1")
         with self.assertRaisesRegex(ContractError, "unknown"):
             database.migrate(self.db.owner_dsn)
 
@@ -105,6 +105,8 @@ class DatabaseTest(unittest.TestCase):
         self.install()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
+            for _, name in database._MIGRATIONS:
+                (path / name).write_bytes((database._MIGRATION_DIR / name).read_bytes())
             original = database._MIGRATION_DIR / "0001_core_foundation.sql"
             (path / original.name).write_bytes(original.read_bytes() + b"\n")
             with patch.object(database, "_MIGRATION_DIR", path):
@@ -115,6 +117,8 @@ class DatabaseTest(unittest.TestCase):
     def test_a_failed_migration_rolls_back_ddl_and_history_together(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
+            for _, name in database._MIGRATIONS:
+                (path / name).write_bytes((database._MIGRATION_DIR / name).read_bytes())
             original = database._MIGRATION_DIR / "0001_core_foundation.sql"
             (path / original.name).write_bytes(original.read_bytes() + b"\nSELECT 1/0;\n")
             with patch.object(database, "_MIGRATION_DIR", path):

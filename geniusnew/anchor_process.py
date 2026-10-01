@@ -60,7 +60,9 @@ anchor check when the anchor cannot be reached.
 from __future__ import annotations
 
 import argparse
-from contextlib import suppress
+from contextlib import contextmanager, suppress
+import errno
+import hashlib
 import json
 import os
 import re
@@ -232,6 +234,51 @@ def _load(path: str | None, verifier: AuditVerifier) -> AuditAnchor:
     return AuditAnchor.resumed(head, authority=verifier)
 
 
+@contextmanager
+def _state_lease(address: bytes):
+    try:
+        lease = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    except OSError:
+        _fail("anchor state lease cannot be acquired")
+    try:
+        try:
+            lease.bind(address)
+        except OSError as error:
+            if error.errno == errno.EADDRINUSE:
+                _fail("anchor state is already in use")
+            _fail("anchor state lease cannot be acquired")
+        yield
+    finally:
+        lease.close()
+
+
+@contextmanager
+def _state_lock(path: str | None):
+    """Keep one live anchor owner for each durable state file identity."""
+    if path is None:
+        yield
+        return
+    # The path lease orders creation. The inode lease also catches hardlinks
+    # and bind mounts that name an already existing history by another path.
+    digest = hashlib.sha256(os.fsencode(os.path.realpath(path))).hexdigest().encode("ascii")
+    address = b"\x00geniusnew-anchor-state-" + digest
+    with _state_lease(address):
+        try:
+            fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC, 0o600)
+        except OSError:
+            _fail("anchor state file cannot be opened for its lease")
+        try:
+            identity = os.fstat(fd)
+            if not stat.S_ISREG(identity.st_mode):
+                _fail("anchor state file must be regular")
+            inode = f"{identity.st_dev}:{identity.st_ino}".encode("ascii")
+            inode_digest = hashlib.sha256(inode).hexdigest().encode("ascii")
+            with _state_lease(b"\x00geniusnew-anchor-inode-" + inode_digest):
+                yield
+        finally:
+            os.close(fd)
+
+
 def _append(path: str, head: AuditHead) -> None:
     """Durably record a head before the commit is answered."""
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
@@ -267,13 +314,19 @@ def _serve(requests: BinaryIO, replies: BinaryIO, state_path: str | None = None)
     except ContractError:
         return 1
     try:
-        anchor = _load(state_path, verifier)
+        with _state_lock(state_path):
+            return _serve_locked(requests, replies, state_path, verifier)
     except ContractError as refusal:
         # Answered, not just exited: the writer should learn why it has no
         # anchor, and starting at zero instead would be the silent reset.
         replies.write(_frame(_refusal(refusal), _MAX_REPLY_BYTES))
         replies.flush()
         return 1
+
+
+def _serve_locked(requests: BinaryIO, replies: BinaryIO, state_path: str | None,
+                  verifier: AuditVerifier) -> int:
+    anchor = _load(state_path, verifier)
     replies.write(_frame(_committed(anchor.committed), _MAX_REPLY_BYTES))
     replies.flush()
     while (data := _read_frame(requests)) is not None:
@@ -444,6 +497,13 @@ def _run_server(*, socket_path: str, state_path: str, key_path: str,
     """Serve one anchor on a socket until stopped. Refuses before binding."""
     socket_path = _absolute(socket_path, "socket path")
     state_path = _absolute(state_path, "state path")
+    with _state_lock(state_path):
+        return _run_server_locked(socket_path=socket_path, state_path=state_path,
+                                  key_path=key_path, audit_public_key=audit_public_key)
+
+
+def _run_server_locked(*, socket_path: str, state_path: str, key_path: str,
+                       audit_public_key: str) -> int:
     key = _reply_key(_absolute(key_path, "key path"))
     verifier = _verifier_from({"kind": "init", "public_key": audit_public_key})
     anchor = _load(state_path, verifier)
@@ -639,6 +699,15 @@ def _commit_request(head: AuditHead, records: Iterable[AuditRecord]) -> dict[str
         "kind": "commit",
         "records": [record.to_dict() for record in chain],
     }
+
+
+def _check_commit_size(head: AuditHead, records: Iterable[AuditRecord]) -> None:
+    """Keep a committed head usable by both anchor transport and state reload."""
+    request = _commit_request(head, records)
+    _frame({"nonce": "0" * (_NONCE_BYTES * 2), "request": request},
+           _MAX_REQUEST_BYTES)
+    if head.count * len(_head_line(head)) > _MAX_STATE_BYTES:
+        _fail("anchor state would exceed its restart bound")
 
 
 class AnchorClient(AuditAnchor):

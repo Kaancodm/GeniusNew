@@ -5,8 +5,9 @@ B1 installiert das Schema für `schema_migrations`, `job_ledger` und
 Eine neue Instanz kann eine bereits persistierte Job-ID nicht erneut dispatchen.
 B3 bindet auch den Annahme-Ledger an PostgreSQL: Eine angenommene Antwort bleibt
 nach Neustart verbraucht; die gebundene Job-Zeile wechselt atomar zu `COMPLETED`.
-Die Audit-Kette ist noch nicht persistiert; nach verarbeiteten Jobs verweigert
-der Dienst einen Neustart (B5). Die verbleibenden Grenzen stehen in `SECURITY.md`.
+B4 speichert wartende Jobs und Approval-Übergänge dauerhaft. B5 speichert die
+Audit-Kette und jeden signierten Kopf. Die verbleibenden Grenzen stehen in
+`SECURITY.md`.
 
 ## Voraussetzungen und Rollen
 
@@ -24,8 +25,8 @@ Betriebsaufgaben; der Migrationscode legt keine Login-Rollen oder Passwörter an
 - `genius_core` darf weder Superuser noch Datenbank-/Tabelleneigentümerin sein und
   keine Mitgliedschaft in einer privilegierten Rolle haben.
 - Die Migration entzieht `PUBLIC` das Anlegen von Objekten im Schema `public` und
-  Tabellenrechte. `genius_core` erhält Schema-USAGE, SELECT auf `schema_migrations`,
-  SELECT/INSERT/UPDATE auf `job_ledger` und SELECT/INSERT auf `acceptance_ledger`.
+  Tabellenrechte. Die tabellengenauen Rechte für `genius_core` stehen in
+  `docs/DATABASE.md` Abschnitt 10 und werden beim Start geprüft.
 - Die Trigger sind mit Aufruferrechten ausgeführt; die Runtime kann sie nicht
   deaktivieren. Keine Core-Tabelle darf dem Portal Zugriff geben.
 - Der Anker bleibt außerhalb der Core-Datenbank.
@@ -40,7 +41,7 @@ betriebenen Anker. Reservierung und Ausführungs-Commit verwenden die Runtime-DS
 Die Demo und Aufrufer von `build` ohne DB-Ledger verwenden weiterhin den
 prozesslokalen Ledger. Persistierte Job-IDs
 werden nicht freigegeben oder nach TTL gelöscht. Eine abgerissene DB-Verbindung
-verweigert weitere Jobs bis zum Dienstneustart; die B5-Neustartgrenze bleibt bestehen.
+verweigert weitere Jobs bis zum Dienstneustart.
 
 Vor Anker und Listener verweigert der Dienst eine Runtime-Rolle mit privilegierten
 Rollenflags, Tabellenbesitz, überschüssigen Tabellen-/Schema-Rechten oder Zugriff
@@ -71,8 +72,48 @@ Instanz abgelehnt. Ein Datenbankfehler verweigert die Annahme ohne Ersatzspeiche
 Vor dem Listener werden die persistierten Annahmen und `COMPLETED`-Jobs in beide
 Richtungen verglichen und die gespeicherten Wires mit den öffentlichen Schlüsseln
 geprüft. Beschädigte oder nicht mehr zur aktuellen Policy passende Daten verweigern
-den Start. Ein Neustart nach verarbeitetem Job scheitert weiterhin an der noch nicht
-persistierten Audit-Kette (B5); B3 allein hebt diese Grenze nicht auf.
+den Start. B3 allein machte den Neustart nach einem Job noch nicht möglich;
+erst B5 schließt die Audit-Persistenzgrenze.
+
+## B4: wartende Jobs und Approval-Records
+
+Die Migrationen `0002_pending_jobs` und `0003_approval_store` halten wartende
+Handoff-Wires und unverzweigte Token-Historien. Ein verbrauchter Token bleibt
+nach einem Neustart verbraucht. Grant, Consume, Pending-Auflösung und
+Ledger-Übergang folgen den Transaktionen aus `docs/DATABASE.md` §4.4–4.5.
+
+## B5: persistente Audit-Kette
+
+`0004_audit_chain` speichert jedes kanonische Event und seinen bereits
+signierten Kopf in derselben Transaktion. Beim Start prüft der Dienst die ganze
+Kette, alle Köpfe und den getrennten Anker. Ist die DB konsistent voraus,
+reicht er ausschließlich einen gespeicherten gültigen Kopf nach. Ein
+unsignierter SQL-Suffix oder ein Anker-Vorlauf verweigert den Start. Die
+Ledger↔Audit-Transaktionen und der bidirektionale Abgleich folgen erst mit B6.
+
+Ein Kind-Anker mit `anchor_state` belegt den kanonischen Pfad und die Dateiidentität
+seiner Zustandsdatei während seiner Laufzeit exklusiv. Eine zweite Instanz mit
+demselben Pfad, einem Hardlink oder einem Bind-Mount auf diese Datei verweigert
+den Start. Die Sperre nutzt den abstrakten Unix-Socket-Namensraum und gilt nur innerhalb
+desselben Linux-Netzwerk-Namespace ([Linux `network_namespaces(7)`](https://man7.org/linux/man-pages/man7/network_namespaces.7.html)).
+Mehrere Core-Instanzen, insbesondere in
+getrennten Netzwerk-Namespaces, müssen einen einzigen separat betriebenen
+Ankerdienst über `anchor_socket` nutzen und dürfen die Zustandsdatei nicht
+zwischen Kind-Ankern teilen.
+
+### B4 → B5 Übergangsgrenze
+
+Eine laufende B4-Installation mit bereits verankerten Audit-Ereignissen kann **nicht**
+in-place auf B5 migriert werden: B4 hielt die Audit-Records nur im Prozessspeicher,
+während der Anker den alten Kopf bereits dauerhaft kennen kann. Migration `0004`
+erzeugt diese verlorenen Records nicht nachträglich. Nach einem Stop würde B5 deshalb
+eine leere bzw. kürzere Datenbankkette gegen einen vorausliegenden Anker erkennen und
+den Dienststart fail-closed verweigern.
+
+Bis ein ausdrücklich geprüfter Export/Import-Pfad existiert, gilt daher: B5 nur vor dem
+ersten verankerten B4-Workload einführen oder eine frische, zusammengehörige
+Datenbank-/Anker-Installation verwenden. Den Ankerzustand zurückzusetzen, zu löschen
+oder zurückzuschneiden ist **kein** Migrationsverfahren.
 
 ## Konfiguration und Migration
 
@@ -95,7 +136,7 @@ python -m geniusnew serve --config /etc/geniusnew/geniusnew.toml
 ```
 
 `migrate` sperrt konkurrierende Migratoren mit einem transaktionalen Advisory Lock.
-DDL, Grants und Migrationseintrag von `0001_core_foundation` committen gemeinsam.
+DDL, Grants und jeder Migrationseintrag committen gemeinsam.
 Ein Fehler rollt die Transaktion zurück. Ein erneuter Aufruf prüft die vorhandene
 Migration, ohne sie erneut anzuwenden. Fehlende Historie bei bestehenden Tabellen,
 unbekannte Versionen und geänderte Checksums werden nicht repariert.
@@ -103,7 +144,7 @@ unbekannte Versionen und geänderte Checksums werden nicht repariert.
 Checksum ist `sha256(exakte SQL-Dateibytes).hexdigest()`; auch eine zusätzliche
 Leerzeile ändert sie. Bereits angewendete SQL-Dateien dürfen deshalb nicht verändert
 werden. `serve` verlangt die vollständige bekannte Historie, passende Checksums,
-gültige Migrationszeitwerte und vorhandene Foundation-Tabellen/-Spalten. Diese
+gültige Migrationszeitwerte und alle erwarteten Tabellen/-Spalten. Diese
 Prüfung läuft vor Ankerstart und HTTP-Listener. Es gibt keinen automatischen
 Migrationslauf beim Dienststart. libpq-Fehlertexte und DSNs werden nicht ausgegeben.
 
