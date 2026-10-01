@@ -61,7 +61,8 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/orchestrator.py", "geniusnew/verifier.py",
            "geniusnew/http_entry.py", "geniusnew/wiring.py",
            "geniusnew/anchor_process.py", "geniusnew/config.py",
-           "geniusnew/__main__.py", "geniusnew/database.py")
+           "geniusnew/__main__.py", "geniusnew/database.py",
+           "geniusnew/audit_store.py")
 
 # Each module's own way of refusing counts. `_deny` is `orchestrator.py`'s
 # helper, `Rejected` is `verifier.py`'s exception type, `GatewayRejected`
@@ -180,11 +181,20 @@ def _disable(source: str, refusal: Refusal) -> str:
     raise SystemExit(f"could not locate the refusal at {refusal.label()}")
 
 
-def _suite_passes(cwd: Path) -> bool:
+def _suite_passes(cwd: Path, *, failfast: bool = False,
+                  show_failure: bool = False) -> bool:
+    # A mutant is caught by its first failing test. The unmutated baseline
+    # still runs every test so an unrelated failure cannot validate a mutant.
+    command = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"]
+    if failfast:
+        command.append("-f")
     completed = subprocess.run(
-        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"],
+        command,
         cwd=cwd, capture_output=True, text=True,
     )
+    if show_failure and completed.returncode != 0:
+        print(completed.stdout[-4000:], file=sys.stderr)
+        print(completed.stderr[-4000:], file=sys.stderr)
     return completed.returncode == 0
 
 
@@ -200,7 +210,7 @@ def check(paths: list[str]) -> int:
         shutil.copytree(ROOT, workspace, ignore=shutil.ignore_patterns(
             ".git", "__pycache__", "*.pyc", ".venv"))
 
-        if not _suite_passes(workspace):
+        if not _suite_passes(workspace, show_failure=True):
             print("the suite does not pass unmutated — fix that first", file=sys.stderr)
             return 1
 
@@ -213,7 +223,7 @@ def check(paths: list[str]) -> int:
             # not locate the refusal" after ten minutes of work.
             original = target.read_text()
             target.write_text(_disable(original, refusal))
-            survived = _suite_passes(workspace)
+            survived = _suite_passes(workspace, failfast=True)
             target.write_text(original)
 
             mark = "SURVIVED" if survived else "caught  "

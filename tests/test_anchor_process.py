@@ -1,5 +1,6 @@
 """Roadmap step 8: the anchor in a process the writer cannot reach into."""
 
+import errno
 import io
 import json
 import os
@@ -170,6 +171,58 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
         shorter, resigned = self.truncated()
         with self.assertRaisesRegex(ContractError, 'anchor committed 5 records'):
             verify(shorter, resigned, authority=self.authority, anchor=restarted)
+
+    def test_two_child_anchors_cannot_write_the_same_state_file(self):
+        path = self.state_path()
+        first = AnchorProcess(verifier=self.authority.verifier(), state_path=path)
+        second = AnchorProcess(verifier=self.authority.verifier(), state_path=path)
+        self.addCleanup(first.close)
+        self.addCleanup(second.close)
+        self.assertEqual(first.committed, (0, EMPTY))
+        with self.assertRaisesRegex(ContractError, 'already in use'):
+            second.committed
+        first.commit(self.head, self.records, authority=self.authority)
+        first.close()
+        restarted = AnchorProcess(verifier=self.authority.verifier(), state_path=path)
+        self.addCleanup(restarted.close)
+        self.assertEqual(restarted.committed, (5, self.head.head_hash))
+
+    def test_state_lease_rejects_a_hardlink_alias_of_a_live_history(self):
+        path = self.state_path()
+        alias = path + '.alias'
+        with anchor_process._state_lock(path):
+            os.link(path, alias)
+            with self.assertRaisesRegex(ContractError, 'already in use'):
+                with anchor_process._state_lock(alias):
+                    self.fail('entered the same state through a hardlink')
+
+    def test_state_lease_rejects_a_nonregular_state_file(self):
+        path = self.state_path()
+        os.mkfifo(path)
+        with self.assertRaisesRegex(ContractError, 'state file must be regular'):
+            with anchor_process._state_lock(path):
+                self.fail('entered a FIFO state file')
+
+    def test_an_unavailable_state_lease_refuses_before_loading(self):
+        path = self.state_path()
+        with unittest.mock.patch.object(anchor_process.socket, 'socket',
+                                        side_effect=OSError(errno.EMFILE, 'test')):
+            with self.assertRaisesRegex(ContractError, 'state lease cannot be acquired'):
+                with anchor_process._state_lock(path):
+                    self.fail('entered without a lease')
+
+        class UnbindableLease:
+            def bind(self, address):
+                raise OSError(errno.EACCES, 'test')
+
+            def close(self):
+                pass
+
+        with unittest.mock.patch.object(anchor_process.socket, 'socket',
+                                        return_value=UnbindableLease()):
+            with self.assertRaisesRegex(ContractError, 'state lease cannot be acquired'):
+                with anchor_process._state_lock(path):
+                    self.fail('entered without a lease')
 
     def test_a_file_rolled_back_to_an_older_signed_head_is_accepted_and_this_is_the_boundary(self):
         """Held open. Every line is a genuine signed head, so cutting the file back
@@ -448,12 +501,22 @@ class ChildProtocolTest(ChainFixture, unittest.TestCase):
 
     def test_a_head_it_cannot_write_ends_the_child_unanswered(self):
         """Memory moved and the file did not: the file must stay the truth."""
-        path = os.path.join(self.state_path(), 'missing-directory', 'anchor.state')
+        path = self.state_path()
         requests = (frame({'kind': 'init', 'public_key': self.public_hex()})
                     + frame(self.commit_message()))
         out = io.BytesIO()
-        self.assertEqual(anchor_process._serve(io.BytesIO(requests), out, path), 2)
+        with unittest.mock.patch.object(anchor_process, '_append',
+                                        side_effect=OSError(errno.ENOSPC, 'test')):
+            self.assertEqual(anchor_process._serve(io.BytesIO(requests), out, path), 2)
         self.assertEqual([answer['kind'] for answer in replies(out.getvalue())], ['ok'])
+
+    def test_missing_state_directory_refuses_before_announcing_an_anchor(self):
+        path = os.path.join(self.state_path(), 'missing-directory', 'anchor.state')
+        out = io.BytesIO()
+        requests = frame({'kind': 'init', 'public_key': self.public_hex()})
+        self.assertEqual(anchor_process._serve(io.BytesIO(requests), out, path), 1)
+        self.assertEqual(replies(out.getvalue()), [{
+            'kind': 'refused', 'message': 'anchor state file cannot be opened for its lease'}])
 
     def test_resuming_verifies_the_head_first(self):
         other = AuditAuthority(audit_key=OTHER_KEY)
