@@ -344,6 +344,55 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "subject"):
             self.start()
 
+    def test_legacy_job_events_without_api_principal_binding_refuse_start(self):
+        keys = derive_keys(ROOT_SECRET)
+        authority = AuditAuthority(audit_key=keys.audit_key)
+        signer = HandoffSigner(integrity_key=keys.integrity_key)
+        policy = self.policy_for()
+        wire = issue({"text": "legacy audit"}, subject="subject-demo",
+                     job_id="job-legacy", policy=policy, signer=signer, now=100)
+        handoff = validate(wire, subject="subject-demo", job_id="job-legacy",
+                           policy=policy, verifier=signer.verifier(), now=100)
+        digest = sha256(wire).hexdigest()
+        with self.db.connect() as owner:
+            owner.execute(
+                "INSERT INTO public.job_ledger "
+                "(job_id,subject,handoff_sha256,state,created_at,reserved_at,updated_at,expires_at) "
+                "VALUES ('job-legacy','subject-demo',%s,'RESERVED',100,100,100,160)",
+                (digest,))
+        chain = PostgresAuditChain(self.connection, authority=authority)
+        for component, action, reason in (
+                ("orchestrator", "HANDOFF_ISSUED", "POLICY_SATISFIED"),
+                ("gateway", "HANDOFF_ADMITTED", ADMISSION_REASON_CODE)):
+            chain.append(event_from_handoff(
+                handoff, trace_id="trace-" + digest[:16],
+                actor=authority.actor(component, component + "-1"),
+                action=action, decision="ALLOWED", reason_code=reason,
+                occurred_at=100))
+        with self.assertRaisesRegex(ContractError, "signed audit binding"):
+            self.start()
+
+    def test_oversized_approval_scope_refuses_before_python_fetch(self):
+        keys = derive_keys(ROOT_SECRET)
+        authority = AuditAuthority(audit_key=keys.audit_key)
+        signer = HandoffSigner(integrity_key=keys.integrity_key)
+        policy = self.policy_for()
+        wire = issue({"text": "oversized scope"}, subject="subject-demo",
+                     job_id="job-scope", policy=policy, signer=signer, now=100)
+        handoff = validate(wire, subject="subject-demo", job_id="job-scope",
+                           policy=policy, verifier=signer.verifier(), now=100)
+        self.append_issued(handoff, authority)
+        with self.db.connect() as owner:
+            owner.execute("ALTER TABLE public.approval_records "
+                          "DROP CONSTRAINT approval_records_scope_check")
+            owner.execute(
+                "INSERT INTO public.approval_records "
+                "(token_digest,record_hash,scope,issued_at,expires_at,state,changed_at) "
+                "VALUES (%s,%s,%s,101,160,'GRANTED',101)",
+                ("a" * 64, "b" * 64, b"x" * 16385))
+        with self.assertRaisesRegex(ContractError, "stored approval scope exceeds"):
+            self.start()
+
     def test_signed_admission_for_a_valid_unusual_job_id_starts(self):
         keys = derive_keys(ROOT_SECRET)
         authority = AuditAuthority(audit_key=keys.audit_key)

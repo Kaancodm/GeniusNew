@@ -8,7 +8,7 @@ submitting the returned head and records to the independent anchor.
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, defaultdict
 from contextlib import contextmanager
 from hashlib import sha256
 import hmac
@@ -22,7 +22,7 @@ from . import anchor_process
 from .audit_chain import (AuditChain, AuditHead, AuditRecord, _EMPTY_HASH,
                           _MAX_COUNT, _record_hash, _verify_head, sign_head, verify)
 from .contracts import ContractError, _subject_bytes, decode_wire
-from .database import _SCOPE_KEYS, connection_lock
+from .database import _SCOPE_KEYS, _MAX_WIRE_BYTES, connection_lock
 
 _AUDIT_LOCK = 0x47454E4955534235
 _MAX_EVENT_BYTES = 8192
@@ -136,24 +136,25 @@ class PostgresAuditChain(AuditChain):
                 self._connection.execute(
                     "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
                 _, records = self._read(self._connection)
+                if self._connection.execute(
+                        "SELECT count(*) FROM public.job_ledger").fetchone()[0] > len(records):
+                    _fail("job ledger has no audit issuance")
                 jobs = self._connection.execute(
                     "SELECT job_id,subject,handoff_sha256,state,reserved_at,updated_at "
                     "FROM public.job_ledger").fetchall()
-                issued = {
-                    (record.event.job_id, record.event.handoff_sha256)
-                    for record in records if record.event.action == "HANDOFF_ISSUED"
-                }
+                issued = defaultdict(list)
+                for record in records:
+                    event = record.event
+                    if event.action == "HANDOFF_ISSUED":
+                        issued[(event.job_id, event.handoff_sha256)].append(event)
                 for job_id, subject, digest, _, _, _ in jobs:
-                    if (_audit_safe(job_id, "job_id"), digest) not in issued:
+                    matching = issued.get((_audit_safe(job_id, "job_id"), digest), ())
+                    if not matching:
                         _fail("job ledger has no audit issuance")
                     expected_subject = sha256(_subject_bytes(subject)).hexdigest()
-                    matching = [record.event for record in records
-                                if record.event.action == "HANDOFF_ISSUED"
-                                and record.event.job_id == _audit_safe(job_id, "job_id")
-                                and record.event.handoff_sha256 == digest]
-                    if len(matching) != 1 or matching[0].event_version != 2:
-                        _fail("job ledger subject has no signed audit binding")
-                    if matching[0].api_subject_sha256 != expected_subject:
+                    if any(event.event_version != 2
+                           or event.api_subject_sha256 != expected_subject
+                           for event in matching):
                         _fail("job ledger subject has no signed audit binding")
                 admitted = Counter(
                     (record.event.job_id, record.event.handoff_sha256,
@@ -199,16 +200,23 @@ class PostgresAuditChain(AuditChain):
                     "CONSUMED": "HANDOFF_ADMITTED",
                     "REVOKED": "APPROVAL_REVOKED",
                 }
+                if self._connection.execute(
+                        "SELECT count(*) FROM public.approval_records").fetchone()[0] > len(records):
+                    _fail("approval records and audit events do not match")
                 approval_rows = self._connection.execute(
-                    "SELECT record_hash,state,changed_at,scope FROM public.approval_records"
-                ).fetchall()
-                expected_approvals = Counter(
-                    (approval_actions[state], record_hash, changed_at)
-                    for record_hash, state, changed_at, _ in approval_rows)
-                scopes = {
-                    record_hash: decode_wire(raw, keys=_SCOPE_KEYS, noun="approval scope")
-                    for record_hash, _, _, raw in approval_rows
-                }
+                    "SELECT record_hash,state,changed_at,"
+                    "CASE WHEN octet_length(scope) <= %s THEN scope ELSE NULL END "
+                    "FROM public.approval_records", (_MAX_WIRE_BYTES,)).fetchall()
+                expected_approvals = Counter()
+                scopes = {}
+                for record_hash, state, changed_at, raw in approval_rows:
+                    if raw is None:
+                        _fail("stored approval scope exceeds the maximum size")
+                    if state not in approval_actions:
+                        _fail("approval record state is invalid")
+                    expected_approvals[(approval_actions[state], record_hash, changed_at)] += 1
+                    scopes[record_hash] = decode_wire(raw, keys=_SCOPE_KEYS,
+                                                       noun="approval scope")
                 approval_events = tuple(
                     record.event for record in records
                     if record.event.action in ("APPROVAL_GRANTED", "APPROVAL_REVOKED")
@@ -227,6 +235,9 @@ class PostgresAuditChain(AuditChain):
                             or event.policy_version != _audit_safe(
                                 scope["policy_version"], "policy_version")):
                         _fail("approval receipt does not bind the audited job")
+                if self._connection.execute(
+                        "SELECT count(*) FROM public.acceptance_ledger").fetchone()[0] > len(records):
+                    _fail("acceptance ledger and audit result events do not match")
                 acceptances = self._connection.execute(
                     "SELECT job_id,handoff_sha256,result_sha256,accepted_at "
                     "FROM public.acceptance_ledger").fetchall()

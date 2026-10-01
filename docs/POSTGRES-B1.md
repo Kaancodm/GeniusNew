@@ -101,6 +101,26 @@ getrennten Netzwerk-Namespaces, müssen einen einzigen separat betriebenen
 Ankerdienst über `anchor_socket` nutzen und dürfen die Zustandsdatei nicht
 zwischen Kind-Ankern teilen.
 
+## B6: Ledger und Approval gegen die Kette
+
+Der Produktionspfad schreibt jede sicherheitsrelevante Änderung an Job-, Annahme-
+und Approval-Zeilen mit ihrem Audit-Ereignis in **derselben PostgreSQL-Transaktion**.
+Der signierte Kopf wird danach unter dem instanzübergreifenden Advisory Lock beim
+Anker bestätigt, bevor ein Worker den Permit sieht oder eine Annahme beantwortet
+wird. Bleibt die Bestätigung aus, versucht der Dienst zuerst die bereits
+committete, signierte Kette nachzuverankern und führt bis dahin keine weitere
+Mutation aus.
+
+Vor dem Listener vergleicht die Startprüfung in beide Richtungen die Job-Zustände
+mit `HANDOFF_ISSUED`, `HANDOFF_ADMITTED`, `EXECUTION_DISPATCHED` und terminalen
+Ablehnungen, Approval-Records mit ihren Record-Hashes und Annahmen mit
+`RESULT_ACCEPTED`. Neue Audit-Ereignisse der Version 2 enthalten zusätzlich den
+SHA-256-Digest des authentifizierten API-Principals; `RESULT_ACCEPTED` bindet
+auch den Ergebnis-Digest. Audit-Ereignisse der Version 1 bleiben für reine
+historische Ketten lesbar. Eine B5-Installation mit Job-Zeilen und diesen alten
+Ereignissen kann B6 mangels Principal-Bindung nicht beweisen und verweigert den
+Start. Ein Import solcher Installationen ist ein eigener geprüfter Schritt.
+
 ## Konfiguration und Migration
 
 `service.database_dsn_file` in der TOML benennt eine absolute Datei außerhalb des
