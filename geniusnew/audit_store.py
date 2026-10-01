@@ -23,7 +23,6 @@ from .contracts import ContractError
 from .database import connection_lock
 
 _AUDIT_LOCK = 0x47454E4955534235
-_MAX_TIME = 4102444800
 _MAX_EVENT_BYTES = 8192
 
 
@@ -60,8 +59,6 @@ def _stored_snapshot(rows, head_rows, *, verifier: AuditVerifier):
             _fail("stored audit heads are not contiguous")
         if type(signature) is not bytes:
             _fail("stored audit head signature must be bytes")
-        if type(created_at) is not int or not 0 < created_at <= _MAX_TIME:
-            _fail("stored audit head timestamp is invalid")
         if created_at != records[position - 1].event.occurred_at:
             _fail("stored audit head timestamp does not match its record")
         head = _verify_head(AuditHead(version, count, digest, signature.hex()),
