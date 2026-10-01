@@ -91,9 +91,10 @@ reicht er ausschließlich einen gespeicherten gültigen Kopf nach. Ein
 unsignierter SQL-Suffix oder ein Anker-Vorlauf verweigert den Start. Die
 Ledger↔Audit-Transaktionen und der bidirektionale Abgleich folgen erst mit B6.
 
-Ein Kind-Anker mit `anchor_state` belegt seine Zustandsdatei während seiner
-Laufzeit exklusiv; eine zweite Instanz mit demselben Pfad verweigert den Start.
-Diese Sperre nutzt den abstrakten Unix-Socket-Namensraum und gilt nur innerhalb
+Ein Kind-Anker mit `anchor_state` belegt den kanonischen Pfad und die Dateiidentität
+seiner Zustandsdatei während seiner Laufzeit exklusiv. Eine zweite Instanz mit
+demselben Pfad, einem Hardlink oder einem Bind-Mount auf diese Datei verweigert
+den Start. Die Sperre nutzt den abstrakten Unix-Socket-Namensraum und gilt nur innerhalb
 desselben Linux-Netzwerk-Namespace ([Linux `network_namespaces(7)`](https://man7.org/linux/man-pages/man7/network_namespaces.7.html)).
 Mehrere Core-Instanzen, insbesondere in
 getrennten Netzwerk-Namespaces, müssen einen einzigen separat betriebenen

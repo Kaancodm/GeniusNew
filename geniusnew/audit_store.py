@@ -25,8 +25,8 @@ from .contracts import ContractError, _subject_bytes, decode_wire
 from .database import _SCOPE_KEYS, connection_lock
 
 _AUDIT_LOCK = 0x47454E4955534235
-_MAX_TIME = 4102444800
 _MAX_EVENT_BYTES = 8192
+_MAX_HEAD_VERSION_BYTES = 64
 _TERMINAL_PENDING_REFUSALS = frozenset({
     "PENDING_APPROVAL_EXPIRED",
     "PENDING_DISPATCH_REFUSED",
@@ -64,10 +64,12 @@ def _stored_snapshot(rows, head_rows, *, verifier: AuditVerifier):
     for position, (count, version, digest, signature, created_at) in enumerate(head_rows, 1):
         if type(count) is not int or count != position:
             _fail("stored audit heads are not contiguous")
+        if version is None:
+            _fail("stored audit head version exceeds the maximum size")
         if type(signature) is not bytes:
             _fail("stored audit head signature must be bytes")
-        if type(created_at) is not int or not 0 < created_at <= _MAX_TIME:
-            _fail("stored audit head timestamp is invalid")
+        if created_at != records[position - 1].event.occurred_at:
+            _fail("stored audit head timestamp does not match its record")
         head = _verify_head(AuditHead(version, count, digest, signature.hex()),
                             authority=verifier)
         heads.append(head)
@@ -110,11 +112,12 @@ class PostgresAuditChain(AuditChain):
             'FROM public.audit_chain ORDER BY index LIMIT %s',
             (_MAX_EVENT_BYTES, _MAX_COUNT + 1,)).fetchall()
         heads = connection.execute(
-            'SELECT count, version, head_hash, '
+            'SELECT count, '
+            'CASE WHEN octet_length(version) <= %s THEN version ELSE NULL END, head_hash, '
             'CASE WHEN octet_length(signature) = 64 THEN signature ELSE NULL END, '
             'created_at '
             'FROM public.audit_heads ORDER BY count LIMIT %s',
-            (_MAX_COUNT + 1,)).fetchall()
+            (_MAX_HEAD_VERSION_BYTES, _MAX_COUNT + 1,)).fetchall()
         return _stored_snapshot(rows, heads, verifier=self._authority.verifier())
 
     def _snapshot(self):

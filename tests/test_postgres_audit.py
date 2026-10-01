@@ -107,6 +107,13 @@ class PostgresAuditTest(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "event exceeds the maximum size"):
             PostgresAuditChain(self.connection, authority=self.authority)
 
+    def test_owner_inserted_oversized_head_version_refuses_before_fetching_it(self):
+        self.chain.append(self.event)
+        self.owner("UPDATE public.audit_heads SET version=%s WHERE count=1",
+                   ("x" * 100_000,))
+        with self.assertRaisesRegex(ContractError, "head version exceeds the maximum size"):
+            PostgresAuditChain(self.connection, authority=self.authority)
+
     def test_recovery_reuses_the_precrash_signature_and_proves_the_anchor_prefix(self):
         self.chain.append(self.event)
         anchor = AuditAnchor()
@@ -152,6 +159,13 @@ class PostgresAuditTest(unittest.TestCase):
                    (self.event.to_bytes(),))
         self.owner("UPDATE audit_heads SET signature=%s WHERE count=1", (b"x" * 64,))
         with self.assertRaisesRegex(ContractError, "signature"):
+            PostgresAuditChain(self.connection, authority=self.authority)
+
+    def test_owner_changed_head_time_refuses_recovery(self):
+        self.chain.append(self.event)
+        self.owner("UPDATE public.audit_heads SET created_at=%s",
+                   (self.event.occurred_at + 1,))
+        with self.assertRaisesRegex(ContractError, "timestamp does not match"):
             PostgresAuditChain(self.connection, authority=self.authority)
 
     def test_runtime_cannot_update_delete_or_truncate_either_audit_table(self):
