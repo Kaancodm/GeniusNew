@@ -553,6 +553,40 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "execution event"):
             self.start()
 
+    def test_duplicate_valid_issuance_refuses_start(self):
+        # B6 regression: two HANDOFF_ISSUED events for the same (job_id,
+        # handoff_sha256) must be rejected even when every duplicate is
+        # event_version 2 with the correct api_subject_sha256.  Previously the
+        # reconciliation only checked "at least one" and "all valid", so a
+        # replay or double-write of a structurally-valid issuance slipped
+        # through and self.start() succeeded.
+        keys = derive_keys(ROOT_SECRET)
+        authority = AuditAuthority(audit_key=keys.audit_key)
+        signer = HandoffSigner(integrity_key=keys.integrity_key)
+        policy = self.policy_for()
+        wire = issue({"text": "duplicate issuance"}, subject="subject-demo",
+                     job_id="job-dup-issued", policy=policy, signer=signer, now=100)
+        handoff = validate(wire, subject="subject-demo", job_id="job-dup-issued",
+                           policy=policy, verifier=signer.verifier(), now=100)
+        digest = sha256(wire).hexdigest()
+        with self.db.connect() as owner:
+            owner.execute(
+                "INSERT INTO public.job_ledger "
+                "(job_id,subject,handoff_sha256,state,created_at,reserved_at,updated_at,expires_at) "
+                "VALUES ('job-dup-issued','subject-demo',%s,'RESERVED',100,100,100,160)",
+                (digest,))
+        # Append the same valid v2 HANDOFF_ISSUED event twice for the same job.
+        chain = PostgresAuditChain(self.connection, authority=authority)
+        for _ in range(2):
+            chain.append(event_from_handoff(
+                handoff, api_subject="subject-demo",
+                trace_id="trace-" + handoff_digest(handoff)[:16],
+                actor=authority.actor("orchestrator", "orchestrator-1"),
+                action="HANDOFF_ISSUED", decision="ALLOWED",
+                reason_code="POLICY_SATISFIED", occurred_at=100))
+        with self.assertRaisesRegex(ContractError, "duplicate"):
+            self.start()
+
     def test_accepted_result_without_result_event_refuses_start(self):
         keys = derive_keys(ROOT_SECRET)
         authority = AuditAuthority(audit_key=keys.audit_key)

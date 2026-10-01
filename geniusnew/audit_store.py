@@ -156,6 +156,8 @@ class PostgresAuditChain(AuditChain):
                            or event.api_subject_sha256 != expected_subject
                            for event in matching):
                         _fail("job ledger subject has no signed audit binding")
+                    if len(matching) != 1:
+                        _fail("job ledger has duplicate audit issuance")
                 admitted = Counter(
                     (record.event.job_id, record.event.handoff_sha256,
                      record.event.occurred_at,
