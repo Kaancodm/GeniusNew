@@ -313,7 +313,7 @@ def agent_socket() -> str:
 
 
 def agent_session(name: str) -> dict[str, str]:
-    if name not in {"grok-build", "hermes"}:
+    if name != "hermes":
         return _simple("yellow", "Kein Server-Adapter")
     code, out = _run(
         ["tmux", "-S", agent_socket(), "list-panes", "-t", name,
@@ -326,7 +326,7 @@ def agent_session(name: str) -> dict[str, str]:
 
 
 def agent_hub() -> dict[str, Any]:
-    """Inspect installed clients without model calls or credential reads."""
+    """Inspect supported access points without model calls or credential reads."""
     launch = Path(__file__).resolve().parents[2]
     cards = [
         {"id": "grok", "name": "Grok", "status": "yellow",
@@ -336,29 +336,23 @@ def agent_hub() -> dict[str, Any]:
          "detail": "Externer Bot · hier kein unterstützter Steuerungsadapter",
          "note": "Vorhandenen Bot auf deinem Gerät öffnen. SSH-Einrichtung allein ist kein Live-Nachweis.",
          "disabled_label": "Direktstart nicht verfügbar"},
+        {"id": "abacus", "name": "Abacus.AI", "status": "yellow",
+         "detail": "ChatLLM im Browser · Anmeldung wird dort geprüft",
+         "url": "https://apps.abacus.ai/chatllm/", "url_label": "Abacus.AI öffnen",
+         "note": "Vorläufiger Ersatz für Grok Build · kein Server-CLI-, Repo- oder Secret-Zugriff."},
     ]
-    for key, label, binary, session in (
-        ("grok_build", "Grok Build", "grok", "grok-build"),
-        ("hermes", "Hermes", "hermes", "hermes"),
-    ):
-        installed = tool_status(binary)
-        running = agent_session(session)
-        available = installed["status"] == "green"
-        sandbox = bool(_which("bwrap"))
-        status = running["status"] if available else "red"
-        detail = installed["detail"] + " · " + running["detail"]
-        if key == "grok_build" and not sandbox:
-            status, detail = "red", "bubblewrap fehlt · Start gesperrt"
-        command = (
+    installed = tool_status("hermes")
+    running = agent_session("hermes")
+    available = installed["status"] == "green"
+    cards.append({
+        "id": "hermes", "name": "Hermes",
+        "status": running["status"] if available else "red",
+        "detail": installed["detail"] + " · " + running["detail"],
+        "command": (
             f"cd {shlex.quote(str(launch))} && python3 -m tools.control_deck.actions "
-            f"--start-agent {key}"
-        )
-        cards.append({
-            "id": key, "name": label, "status": status, "detail": detail,
-            "command": command if available and (key != "grok_build" or sandbox) else None,
-            "action": key + "_status",
-            "note": ("Begrenzte Sandbox · Projektdateien nur lesen · keine automatische Aufgabe"
-                     if key == "grok_build" else
-                     "Nutzt den in Hermes konfigurierten Modellanbieter; kein eigenes Modellkontingent. Keine automatische Aufgabe."),
-        })
+            "--start-agent hermes"
+        ) if available else None,
+        "action": "hermes_status",
+        "note": "Nutzt den konfigurierten Modellanbieter; kein eigenes Modellkontingent. Keine automatische Aufgabe.",
+    })
     return {"generated_at": int(time.time()), "agents": cards}

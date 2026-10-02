@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tools.control_deck import actions, checks, mail_center, server
+from scripts import refusals
 
 
 class ControlDeckTest(unittest.TestCase):
@@ -55,7 +56,7 @@ class ControlDeckTest(unittest.TestCase):
     def test_action_allowlist_is_fixed(self):
         self.assertEqual(
             set(actions.allowed_actions()),
-            {"git_status", "tests", "demo", "docker_status", "grok_build_status", "hermes_status"},
+            {"git_status", "tests", "demo", "docker_status", "hermes_status"},
         )
 
     def test_unknown_action_is_rejected_before_shell(self):
@@ -269,50 +270,61 @@ class AgentControlTest(unittest.TestCase):
                 actions.run_action(name)
         run.assert_not_called()
 
+    @patch("tools.control_deck.actions._which", return_value="/bin/tool")
     @patch("tools.control_deck.actions.subprocess.run")
-    def test_unknown_terminal_agent_is_refused(self, run):
-        with self.assertRaises(ValueError):
+    def test_unknown_terminal_agent_is_refused(self, run, which):
+        with self.assertRaisesRegex(actions.AgentStartRefused, "allowlisted"):
             actions.start_agent("../../shell", detach=True)
         run.assert_not_called()
+        which.assert_not_called()
 
     @patch("tools.control_deck.actions._which", return_value=None)
     @patch("tools.control_deck.actions.subprocess.run")
     def test_missing_client_is_refused(self, run, which):
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(actions.AgentStartRefused):
             actions.start_agent("hermes", detach=True)
         run.assert_not_called()
 
-    @patch("tools.control_deck.actions._which")
     @patch("tools.control_deck.actions.subprocess.run")
-    def test_grok_never_starts_without_bubblewrap(self, run, which):
-        which.side_effect = lambda name: None if name == "bwrap" else "/bin/" + name
-        with self.assertRaisesRegex(RuntimeError, "bubblewrap"):
+    def test_grok_build_is_paused_and_cannot_start(self, run):
+        with self.assertRaises(actions.AgentStartRefused):
             actions.start_agent("grok_build", detach=True)
         run.assert_not_called()
 
-    @patch("tools.control_deck.checks._run", return_value=(0, "1:grok"))
+    def test_agent_start_refusals_are_mutation_guarded(self):
+        self.assertIn("tools/control_deck/actions.py", refusals.GUARDED)
+        self.assertIn("AgentStartRefused", refusals._REFUSAL_RAISES)
+
+    @patch("tools.control_deck.checks._run", return_value=(0, "1:hermes"))
     def test_dead_terminal_is_not_running(self, run):
-        self.assertEqual(checks.agent_session("grok-build")["status"], "yellow")
+        self.assertEqual(checks.agent_session("hermes")["status"], "yellow")
 
-    @patch("tools.control_deck.checks._run", return_value=(0, "0:grok"))
+    @patch("tools.control_deck.checks._run", return_value=(0, "0:hermes"))
     def test_live_terminal_is_reported(self, run):
-        self.assertEqual(checks.agent_session("grok-build")["status"], "green")
+        self.assertEqual(checks.agent_session("hermes")["status"], "green")
 
-    @patch("tools.control_deck.checks._which", return_value="/bin/bwrap")
     @patch("tools.control_deck.checks.agent_session", return_value={"status": "yellow", "detail": "stopped"})
     @patch("tools.control_deck.checks.tool_status", return_value={"status": "green", "detail": "installed"})
-    def test_installation_does_not_claim_model_or_session_success(self, tool, session, which):
+    def test_abacus_replaces_grok_build_without_a_server_start(self, tool, session):
         cards = checks.agent_hub()["agents"]
-        self.assertEqual([c["id"] for c in cards], ["grok", "grok_bot", "grok_build", "hermes"])
-        self.assertTrue(all(c["status"] == "yellow" for c in cards))
+        self.assertEqual([c["id"] for c in cards], ["grok", "grok_bot", "abacus", "hermes"])
+        abacus = cards[2]
+        self.assertEqual(abacus["url"], "https://apps.abacus.ai/chatllm/")
+        self.assertNotIn("command", abacus)
+        self.assertNotIn("action", abacus)
+        self.assertIn("Browser", abacus["detail"])
         self.assertNotIn("command", cards[1])
         self.assertIn("kein unterstützter", cards[1]["detail"])
 
-    @patch("tools.control_deck.actions.subprocess.run", side_effect=FileNotFoundError)
-    def test_missing_status_program_returns_a_bounded_error(self, run):
-        result = actions.run_action("grok_build_status")
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["output"], "Programm nicht verfügbar.")
+    def test_clipboard_success_is_only_reported_after_success(self):
+        html = (Path(__file__).parents[1] / "tools/control_deck/static/index.html").read_text()
+        self.assertIn("if(await copyCommand(b.dataset.resumeCmd)){", html)
+        self.assertNotIn("await copyCommand(b.dataset.resumeCmd);const old=b.textContent", html)
+
+    def test_control_deck_docs_list_agents_route_and_action_commas(self):
+        text = (Path(__file__).parents[1] / "docs/CONTROL-DECK.md").read_text()
+        self.assertIn("`/`, `/api/status`, `/api/mail` und `/api/agents`", text)
+        self.assertIn("`git_status`, `tests`, `demo`, `docker_status`", text)
 
 
 if __name__ == "__main__":

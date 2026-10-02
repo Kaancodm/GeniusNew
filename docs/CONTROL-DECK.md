@@ -45,10 +45,9 @@ Löschen, Archivieren oder Markieren von E-Mails.
 
 ## Sicherheitsgrenze
 
-- GET-Routen (zusätzlich /api/agents): `/`, `/api/status` und `/api/mail`;
+- GET-Routen: `/`, `/api/status`, `/api/mail` und `/api/agents`;
 - POST ist ausschließlich auf `/api/action` erlaubt;
-- `/api/action` akzeptiert nur die feste Allowlist `git_status`, `tests`, `demo`
-  `docker_status`, `grok_build_status` und `hermes_status`;
+- `/api/action` akzeptiert nur die feste Allowlist `git_status`, `tests`, `demo`, `docker_status` und `hermes_status`;
 - unbekannte Aktionen werden vor Prozessstart abgelehnt;
 - keine freie Shell, kein Merge, kein Deploy und keine Security-Freigabe aus dem Browser;
 - keine Secrets, Remote-URLs oder Environment-Werte werden angezeigt;
@@ -68,9 +67,9 @@ Löschen, Archivieren oder Markieren von E-Mails.
 Das Dashboard ist Beobachter. Ein rotes Gate darf nicht per UI auf grün gesetzt werden.
 Der Status muss aus Repository, Diensten und tatsächlichen Nachweisen folgen.
 
-## Grok und Hermes
+## Grok, Abacus.AI und Hermes
 
-Der eigene Agentenbereich lädt über /api/agents ausschließlich lokale Installations-
+Der Agentenbereich liefert über `/api/agents` feste Webzugänge sowie lokale Installations-
 und Terminalstatusdaten. Es entstehen keine Modellaufträge durch Seitenaufrufe.
 Installiert, Terminal geöffnet, angemeldet und erfolgreicher Modellauftrag sind
 unterschiedliche Zustände; eine offene Terminal-Sitzung beweist keinen Modellzugriff.
@@ -78,9 +77,11 @@ unterschiedliche Zustände; eine offene Terminal-Sitzung beweist keinen Modellzu
 - Grok: direkter Web-Zugang; der Browser prüft die Anmeldung.
 - Grok Bot: externer Zugang, ohne unterstützten direkten Steuerungsadapter.
   Weder ein installierter Skill noch eine frühere SSH-Einrichtung beweisen Live-Zugriff.
-- Grok Build: fest vorgegebener Terminalstart, eigenes tmux-Socket, eigene Arbeitsmappe,
-  explizites Custom-Sandbox-Profil (fail closed), Projektdateien nur lesbar,
-  Shell/Schreiben/MCP/Web/Subagenten für diese Sitzung gesperrt.
+- Abacus.AI: vorläufiger Ersatz für Grok Build. Das Control Deck öffnet ausschließlich
+  ChatLLM im Browser; es gibt keinen lokalen Abacus-Start, keinen Repo-Zugriff und keine
+  Secret-Weitergabe aus dem Control Deck.
+- Grok Build bleibt pausiert, bis sein unterstützter Zugriffs- und Sandbox-Umfang neu
+  geprüft und als eigenes Gate freigegeben ist.
 - Hermes-Status liest nur Programmpfad und tmux-Zustand; der Paket-Launcher wird
   nicht ausgeführt, da bereits seine Versionsabfrage eine Installationssperre schreibt.
 - Hermes: fest vorgegebener Terminalstart mit bestehendem Modellanbieter und bestehender
@@ -95,7 +96,6 @@ Ein Clipboard-Fallback unterstützt das private HTTP-Dashboard auf iPad/iPhone.
 Server-Terminal, aus dem Repository-Root:
 
 ```sh
-python3 -m tools.control_deck.actions --start-agent grok_build
 python3 -m tools.control_deck.actions --start-agent hermes
 ```
 
