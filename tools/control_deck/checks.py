@@ -325,9 +325,9 @@ def agent_session(name: str) -> dict[str, str]:
                    "Terminal geöffnet · Eingabe/Anmeldung in TERM" if active else "Sitzung nicht gestartet")
 
 
-def agent_hub() -> dict[str, Any]:
+def agent_hub(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
     """Inspect supported access points without model calls or credential reads."""
-    launch = Path(__file__).resolve().parents[2]
+    launch = repo
     cards = [
         {"id": "grok", "name": "Grok", "status": "yellow",
          "detail": "Web-App · Anmeldung wird im Browser geprüft",

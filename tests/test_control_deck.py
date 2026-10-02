@@ -192,6 +192,12 @@ class HostCheckTest(unittest.TestCase):
                 self.assertEqual(status, 200)
                 self.assertIn(b"MAIL-CANARY", body)
 
+    def test_agents_route_uses_the_selected_repository(self):
+        with patch.object(server, "agent_hub", return_value={"agents": []}) as hub:
+            status, _ = self.request("GET", "/api/agents", f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        hub.assert_called_once_with(self.deck.repo)
+
     def test_foreign_host_is_refused_before_any_route(self):
         for path in ("/", "/api/status", "/api/mail", "/api/agents"):
             with self.subTest(path=path):

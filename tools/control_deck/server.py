@@ -37,7 +37,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(snapshot(self.server.repo))
             return
         if path == "/api/agents":
-            self._json(agent_hub())
+            self._json(agent_hub(self.server.repo))
             return
         if path == "/api/mail":
             self._json(mail_snapshot())
