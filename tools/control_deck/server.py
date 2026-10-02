@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from .actions import allowed_actions, run_action
-from .checks import DEFAULT_REPO, snapshot
+from .checks import DEFAULT_REPO, snapshot, agent_hub
 from .mail_center import snapshot as mail_snapshot
 
 STATIC = Path(__file__).with_name("static")
@@ -35,6 +35,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/status":
             self._json(snapshot(self.server.repo))
+            return
+        if path == "/api/agents":
+            self._json(agent_hub(self.server.repo))
             return
         if path == "/api/mail":
             self._json(mail_snapshot())

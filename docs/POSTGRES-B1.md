@@ -101,6 +101,20 @@ getrennten Netzwerk-Namespaces, müssen einen einzigen separat betriebenen
 Ankerdienst über `anchor_socket` nutzen und dürfen die Zustandsdatei nicht
 zwischen Kind-Ankern teilen.
 
+### B4 → B5 Übergangsgrenze
+
+Eine laufende B4-Installation mit bereits verankerten Audit-Ereignissen kann **nicht**
+in-place auf B5 migriert werden: B4 hielt die Audit-Records nur im Prozessspeicher,
+während der Anker den alten Kopf bereits dauerhaft kennen kann. Migration `0004`
+erzeugt diese verlorenen Records nicht nachträglich. Nach einem Stop würde B5 deshalb
+eine leere bzw. kürzere Datenbankkette gegen einen vorausliegenden Anker erkennen und
+den Dienststart fail-closed verweigern.
+
+Bis ein ausdrücklich geprüfter Export/Import-Pfad existiert, gilt daher: B5 nur vor dem
+ersten verankerten B4-Workload einführen oder eine frische, zusammengehörige
+Datenbank-/Anker-Installation verwenden. Den Ankerzustand zurückzusetzen, zu löschen
+oder zurückzuschneiden ist **kein** Migrationsverfahren.
+
 ## B6: Ledger und Approval gegen die Kette
 
 Der Produktionspfad schreibt jede sicherheitsrelevante Änderung an Job-, Annahme-

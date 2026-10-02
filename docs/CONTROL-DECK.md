@@ -45,10 +45,9 @@ Löschen, Archivieren oder Markieren von E-Mails.
 
 ## Sicherheitsgrenze
 
-- GET-Routen: `/`, `/api/status` und `/api/mail`;
+- GET-Routen: `/`, `/api/status`, `/api/mail` und `/api/agents`;
 - POST ist ausschließlich auf `/api/action` erlaubt;
-- `/api/action` akzeptiert nur die feste Allowlist `git_status`, `tests`, `demo`
-  und `docker_status`;
+- `/api/action` akzeptiert nur die feste Allowlist `git_status`, `tests`, `demo`, `docker_status` und `hermes_status`;
 - unbekannte Aktionen werden vor Prozessstart abgelehnt;
 - keine freie Shell, kein Merge, kein Deploy und keine Security-Freigabe aus dem Browser;
 - keine Secrets, Remote-URLs oder Environment-Werte werden angezeigt;
@@ -67,3 +66,39 @@ Löschen, Archivieren oder Markieren von E-Mails.
 
 Das Dashboard ist Beobachter. Ein rotes Gate darf nicht per UI auf grün gesetzt werden.
 Der Status muss aus Repository, Diensten und tatsächlichen Nachweisen folgen.
+
+## Grok, Abacus.AI und Hermes
+
+Der Agentenbereich liefert über `/api/agents` feste Webzugänge sowie lokale Installations-
+und Terminalstatusdaten. Es entstehen keine Modellaufträge durch Seitenaufrufe.
+Installiert, Terminal geöffnet, angemeldet und erfolgreicher Modellauftrag sind
+unterschiedliche Zustände; eine offene Terminal-Sitzung beweist keinen Modellzugriff.
+
+- Grok: direkter Web-Zugang; der Browser prüft die Anmeldung.
+- Grok Bot: externer Zugang, ohne unterstützten direkten Steuerungsadapter.
+  Weder ein installierter Skill noch eine frühere SSH-Einrichtung beweisen Live-Zugriff.
+- Abacus.AI: vorläufiger Ersatz für Grok Build. Das Control Deck öffnet ausschließlich
+  ChatLLM im Browser; es gibt keinen lokalen Abacus-Start, keinen Repo-Zugriff und keine
+  Secret-Weitergabe aus dem Control Deck.
+- Grok Build bleibt pausiert, bis sein unterstützter Zugriffs- und Sandbox-Umfang neu
+  geprüft und als eigenes Gate freigegeben ist.
+- Hermes-Status liest nur Programmpfad und tmux-Zustand; der Paket-Launcher wird
+  nicht ausgeführt, da bereits seine Versionsabfrage eine Installationssperre schreibt.
+- Hermes: fest vorgegebener Terminalstart mit bestehendem Modellanbieter und bestehender
+  Werkzeugkonfiguration, maximal acht Turns und 120 Sekunden pro Auftrag.
+  Hermes hat kein eigenes Modellkontingent; ein Codex-Anbieter verbraucht Codex-Kontingent.
+
+„Start / Öffnen · TERM“ kopiert einen festen Befehl. Er startet oder öffnet die
+Sitzung erst nach Ausführung im angemeldeten Server-Terminal. Die HTTP-API kann
+keine Agenten starten, keine Prompts senden und keine freien Befehle ausführen.
+Ein Clipboard-Fallback unterstützt das private HTTP-Dashboard auf iPad/iPhone.
+
+Server-Terminal, aus dem Repository-Root:
+
+```sh
+python3 -m tools.control_deck.actions --start-agent hermes
+```
+
+Mit --detach wird nur gestartet. Mehrfacher Start verwendet dieselbe Sitzung;
+andere tmux-Sitzungen bleiben unberührt. Starts erfolgen ohne initialen Modellauftrag.
+Die Diensthärtung (u. a. NoNewPrivileges und schreibgeschütztes Home) bleibt erhalten.

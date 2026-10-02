@@ -107,6 +107,23 @@ class PostgresAuditTest(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "event exceeds the maximum size"):
             PostgresAuditChain(self.connection, authority=self.authority)
 
+    def test_aggregate_event_bytes_refuse_before_bulk_fetch(self):
+        self.chain.append(self.event)
+        self.chain.append(self.event)
+        event_bytes = len(self.event.to_bytes())
+        with patch.object(anchor_process, "_MAX_REQUEST_BYTES", event_bytes * 2 - 1):
+            with self.assertRaisesRegex(
+                    ContractError, "stored audit chain exceeds the supported byte bound"):
+                PostgresAuditChain(self.connection, authority=self.authority)
+
+    def test_record_count_refuses_before_bulk_fetch(self):
+        self.chain.append(self.event)
+        self.chain.append(self.event)
+        with patch("geniusnew.audit_store._MAX_STORED_RECORDS", 1, create=True):
+            with self.assertRaisesRegex(
+                    ContractError, "stored audit chain exceeds the supported record bound"):
+                PostgresAuditChain(self.connection, authority=self.authority)
+
     def test_owner_inserted_oversized_head_version_refuses_before_fetching_it(self):
         self.chain.append(self.event)
         self.owner("UPDATE public.audit_heads SET version=%s WHERE count=1",
