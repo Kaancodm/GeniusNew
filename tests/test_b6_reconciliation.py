@@ -5,12 +5,12 @@ from hashlib import sha256
 from unittest import mock
 
 from geniusnew import database
-from geniusnew.approvals import create_scope
+from geniusnew.approvals import ApprovalStore, create_scope
 from geniusnew.audit import AuditAuthority, event_from_handoff
 from geniusnew.audit_chain import AuditAnchor
 from geniusnew.audit_store import PostgresAuditChain
 from geniusnew.contracts import ContractError, HandoffSigner, issue, validate, validate_pending
-from geniusnew.gateway import ADMISSION_REASON_CODE
+from geniusnew.gateway import ADMISSION_REASON_CODE, Gateway
 from geniusnew.keys import derive_keys
 from geniusnew.orchestrator import Reservation
 from geniusnew.results import WorkerAuthority, handoff_digest, produce
@@ -73,6 +73,58 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
         self.addCleanup(service.close)
         with self.assertRaisesRegex(ContractError, "needs callbacks"):
             service._recorder.atomic(None, lambda result: None)
+
+    def test_atomic_admission_rejects_permits_from_other_gateways(self):
+        signer = HandoffSigner(integrity_key=derive_keys(ROOT_SECRET).integrity_key)
+        policy = self.policy_for()
+        wire = issue({"text": "foreign gateway"}, subject="subject-demo",
+                     job_id="job-foreign", policy=policy, signer=signer, now=100)
+        foreign = Gateway(gateway_id="gateway-other", handoff_verifier=signer.verifier(),
+                          approval_store=ApprovalStore()).admit(
+            wire, subject="subject-demo", job_id="job-foreign", policy=policy, now=100)
+        service = self.start()
+        self.addCleanup(service.close)
+        with self.assertRaisesRegex(ContractError, "did not wire"):
+            service.orchestrator._atomic_admitted(
+                lambda transaction: (foreign, None), "subject-demo")
+
+    def test_build_rejects_an_acceptance_ledger_on_another_connection(self):
+        foreign = self.db.connect(runtime=True)
+        self.addCleanup(foreign.close)
+        keys = derive_keys(ROOT_SECRET)
+        worker_authority = WorkerAuthority(result_key=keys.result_key,
+                                           integrity_key=keys.integrity_key)
+        with self.assertRaisesRegex(ContractError, "durable acceptance storage"):
+            build(
+                root_secret=ROOT_SECRET, policy=self.policy_for(),
+                api_keys={API_KEY: "subject-demo"},
+                workers=(DeterministicSummarizer(),), anchor=AuditAnchor(),
+                runner_factory=lambda worker: WorkerRunner(
+                    worker, authority=worker_authority),
+                job_ledger=database.PostgresJobLedger(self.connection),
+                acceptance_ledger=database.PostgresAcceptanceLedger(foreign),
+                database_connection=self.connection,
+                audit_chain_factory=lambda audit: PostgresAuditChain(
+                    self.connection, authority=audit))
+
+    def test_build_rejects_an_audit_chain_on_another_connection(self):
+        foreign = self.db.connect(runtime=True)
+        self.addCleanup(foreign.close)
+        keys = derive_keys(ROOT_SECRET)
+        worker_authority = WorkerAuthority(result_key=keys.result_key,
+                                           integrity_key=keys.integrity_key)
+        with self.assertRaisesRegex(ContractError, "durable service needs"):
+            build(
+                root_secret=ROOT_SECRET, policy=self.policy_for(),
+                api_keys={API_KEY: "subject-demo"},
+                workers=(DeterministicSummarizer(),), anchor=AuditAnchor(),
+                runner_factory=lambda worker: WorkerRunner(
+                    worker, authority=worker_authority),
+                job_ledger=database.PostgresJobLedger(self.connection),
+                acceptance_ledger=database.PostgresAcceptanceLedger(self.connection),
+                database_connection=self.connection,
+                audit_chain_factory=lambda audit: PostgresAuditChain(
+                    foreign, authority=audit))
 
     def test_reservation_and_signed_admission_roll_back_together(self):
         service = self.start()
