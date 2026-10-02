@@ -154,12 +154,14 @@ class PostgresAuditChain(AuditChain):
                 self._connection.execute(
                     "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
                 _, records = self._read(self._connection)
-                if self._connection.execute(
-                        "SELECT count(*) FROM public.job_ledger").fetchone()[0] > len(records):
-                    _fail("job ledger has no audit issuance")
+                # Every durable row needs its own signed event, so a table with
+                # more rows than the chain has records cannot reconcile. The
+                # reads below stop one row past that bound instead of loading a
+                # tampered table whole; the comparisons refuse the surplus row.
+                bound = len(records) + 1
                 jobs = self._connection.execute(
                     "SELECT job_id,subject,handoff_sha256,state,reserved_at,updated_at "
-                    "FROM public.job_ledger").fetchall()
+                    "FROM public.job_ledger LIMIT %s", (bound,)).fetchall()
                 issued = defaultdict(list)
                 for record in records:
                     event = record.event
@@ -220,13 +222,11 @@ class PostgresAuditChain(AuditChain):
                     "CONSUMED": "HANDOFF_ADMITTED",
                     "REVOKED": "APPROVAL_REVOKED",
                 }
-                if self._connection.execute(
-                        "SELECT count(*) FROM public.approval_records").fetchone()[0] > len(records):
-                    _fail("approval records and audit events do not match")
                 approval_rows = self._connection.execute(
                     "SELECT record_hash,state,changed_at,"
                     "CASE WHEN octet_length(scope) <= %s THEN scope ELSE NULL END "
-                    "FROM public.approval_records", (_MAX_WIRE_BYTES,)).fetchall()
+                    "FROM public.approval_records LIMIT %s",
+                    (_MAX_WIRE_BYTES, bound)).fetchall()
                 expected_approvals = Counter()
                 scopes = {}
                 for record_hash, state, changed_at, raw in approval_rows:
@@ -255,12 +255,9 @@ class PostgresAuditChain(AuditChain):
                             or event.policy_version != _audit_safe(
                                 scope["policy_version"], "policy_version")):
                         _fail("approval receipt does not bind the audited job")
-                if self._connection.execute(
-                        "SELECT count(*) FROM public.acceptance_ledger").fetchone()[0] > len(records):
-                    _fail("acceptance ledger and audit result events do not match")
                 acceptances = self._connection.execute(
                     "SELECT job_id,handoff_sha256,result_sha256,accepted_at "
-                    "FROM public.acceptance_ledger").fetchall()
+                    "FROM public.acceptance_ledger LIMIT %s", (bound,)).fetchall()
                 expected_results = Counter(
                     (_audit_safe(job_id, "job_id"), digest, result_digest, accepted_at)
                     for job_id, digest, result_digest, accepted_at in acceptances)

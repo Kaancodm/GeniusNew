@@ -5,12 +5,13 @@ from hashlib import sha256
 from unittest import mock
 
 from geniusnew import database
-from geniusnew.approvals import create_scope
+from geniusnew.approvals import ApprovalStore, create_scope
 from geniusnew.audit import AuditAuthority, event_from_handoff
 from geniusnew.audit_chain import AuditAnchor
 from geniusnew.audit_store import PostgresAuditChain
-from geniusnew.contracts import ContractError, HandoffSigner, issue, validate, validate_pending
-from geniusnew.gateway import ADMISSION_REASON_CODE
+from geniusnew.contracts import (ContractError, HandoffSigner, canonical, issue, validate,
+                                  validate_pending)
+from geniusnew.gateway import ADMISSION_REASON_CODE, Gateway
 from geniusnew.keys import derive_keys
 from geniusnew.orchestrator import Reservation
 from geniusnew.results import WorkerAuthority, handoff_digest, produce
@@ -73,6 +74,21 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
         self.addCleanup(service.close)
         with self.assertRaisesRegex(ContractError, "needs callbacks"):
             service._recorder.atomic(None, lambda result: None)
+
+    def test_atomic_admission_evidence_comes_only_from_this_gateways_permit(self):
+        signer = HandoffSigner(integrity_key=derive_keys(ROOT_SECRET).integrity_key)
+        policy = self.policy_for()
+        wire = issue({"text": "foreign gateway"}, subject="subject-demo",
+                     job_id="job-foreign", policy=policy, signer=signer, now=100)
+        foreign = Gateway(gateway_id="gateway-other", handoff_verifier=signer.verifier(),
+                          approval_store=ApprovalStore()).admit(
+            wire, subject="subject-demo", job_id="job-foreign", policy=policy, now=100)
+        service = self.start()
+        self.addCleanup(service.close)
+        with self.assertRaisesRegex(ContractError, "did not wire"):
+            service.orchestrator._atomic_admitted(
+                lambda transaction: (foreign, None), "subject-demo")
+        self.assertEqual(len(service.chain), 0)
 
     def test_reservation_and_signed_admission_roll_back_together(self):
         service = self.start()
@@ -620,6 +636,107 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
                 reason_code="POLICY_SATISFIED", occurred_at=100))
         with self.assertRaisesRegex(ContractError, "duplicate"):
             self.start()
+
+    def test_an_identical_duplicate_admission_event_refuses_start(self):
+        # Two byte-identical HANDOFF_ADMITTED events collapse into one key when
+        # admissions are compared as a set of distinct events, so only the
+        # multiplicity check notices the replayed admission.
+        keys = derive_keys(ROOT_SECRET)
+        authority = AuditAuthority(audit_key=keys.audit_key)
+        signer = HandoffSigner(integrity_key=keys.integrity_key)
+        policy = self.policy_for()
+        wire = issue({"text": "duplicate admission"}, subject="subject-demo",
+                     job_id="job-dup-admitted", policy=policy, signer=signer, now=100)
+        handoff = validate(wire, subject="subject-demo", job_id="job-dup-admitted",
+                           policy=policy, verifier=signer.verifier(), now=100)
+        digest = sha256(wire).hexdigest()
+        with self.db.connect() as owner:
+            owner.execute(
+                "INSERT INTO public.job_ledger "
+                "(job_id,subject,handoff_sha256,state,created_at,reserved_at,updated_at,expires_at) "
+                "VALUES ('job-dup-admitted','subject-demo',%s,'RESERVED',100,100,100,160)",
+                (digest,))
+        admission = event_from_handoff(
+            handoff, api_subject="subject-demo", trace_id="trace-" + digest[:16],
+            actor=authority.actor("gateway", "gateway-1"),
+            action="HANDOFF_ADMITTED", decision="ALLOWED",
+            reason_code=ADMISSION_REASON_CODE, occurred_at=100)
+        self.append_issued(handoff, authority)
+        chain = PostgresAuditChain(self.connection, authority=authority)
+        chain.append(admission)
+        chain.append(admission)
+        with self.assertRaisesRegex(ContractError, "audit admissions"):
+            self.start()
+
+    def test_an_approval_record_in_an_unknown_state_refuses_start(self):
+        # The schema only allows three states. An owner who drops that check and
+        # its transition trigger can plant any state, and startup must still
+        # refuse it rather than fail on a missing mapping.
+        keys = derive_keys(ROOT_SECRET)
+        authority = AuditAuthority(audit_key=keys.audit_key)
+        signer = HandoffSigner(integrity_key=keys.integrity_key)
+        policy = self.policy_for()
+        wire = issue({"text": "unknown state"}, subject="subject-demo",
+                     job_id="job-state", policy=policy, signer=signer, now=100)
+        handoff = validate(wire, subject="subject-demo", job_id="job-state",
+                           policy=policy, verifier=signer.verifier(), now=100)
+        self.append_issued(handoff, authority)
+        with self.db.connect() as owner:
+            owner.execute("ALTER TABLE public.approval_records "
+                          "DROP CONSTRAINT approval_records_state_check")
+            owner.execute("ALTER TABLE public.approval_records "
+                          "DISABLE TRIGGER approval_record")
+            owner.execute(
+                "INSERT INTO public.approval_records "
+                "(token_digest,record_hash,scope,issued_at,expires_at,state,changed_at) "
+                "VALUES (%s,%s,%s,101,160,'FORGED',101)",
+                ("a" * 64, "b" * 64, b"{}"))
+        with self.assertRaisesRegex(ContractError, "approval record state is invalid"):
+            self.start()
+
+    def test_a_surplus_approval_row_beyond_the_chain_is_not_cut_off(self):
+        # The reads stop one row past the number of chain records. An empty chain
+        # makes that bound one row, so a bound of zero would read nothing and
+        # accept a row no signed event accounts for.
+        keys = derive_keys(ROOT_SECRET)
+        authority = AuditAuthority(audit_key=keys.audit_key)
+        signer = HandoffSigner(integrity_key=keys.integrity_key)
+        policy = self.policy_for(requires_approval=True)
+        wire = issue({"text": "surplus approval"}, subject="subject-demo",
+                     job_id="job-surplus", policy=policy, signer=signer, now=100)
+        scope = create_scope(wire, subject="subject-demo", job_id="job-surplus",
+                             policy=policy, verifier=signer.verifier(), now=101)
+        with self.db.connect() as owner:
+            owner.execute(
+                "INSERT INTO public.approval_records "
+                "(token_digest,record_hash,scope,issued_at,expires_at,state,changed_at) "
+                "VALUES (%s,%s,%s,101,160,'GRANTED',101)",
+                ("a" * 64, "b" * 64, canonical(scope.to_dict())))
+        chain = PostgresAuditChain(self.connection, authority=authority)
+        with self.assertRaisesRegex(ContractError,
+                                    "approval records and audit events do not match"):
+            chain.check_core_bindings()
+
+    def test_a_surplus_acceptance_row_beyond_the_chain_is_not_cut_off(self):
+        # Same bound as above, for a ledger row planted after the owner dropped
+        # the job reference and the acceptance triggers.
+        authority = AuditAuthority(audit_key=derive_keys(ROOT_SECRET).audit_key)
+        with self.db.connect() as owner:
+            owner.execute("ALTER TABLE public.acceptance_ledger DROP CONSTRAINT "
+                          "acceptance_ledger_job_id_handoff_sha256_fkey")
+            owner.execute("ALTER TABLE public.acceptance_ledger "
+                          "DISABLE TRIGGER acceptance_job")
+            owner.execute("ALTER TABLE public.acceptance_ledger "
+                          "DISABLE TRIGGER acceptance_complete")
+            owner.execute(
+                "INSERT INTO public.acceptance_ledger (handoff_sha256,job_id,"
+                "handoff_wire,result_sha256,result_wire,accepted_at) "
+                "VALUES (%s,'job-surplus',%s,%s,%s,100)",
+                ("c" * 64, b"handoff", "d" * 64, b"result"))
+        chain = PostgresAuditChain(self.connection, authority=authority)
+        with self.assertRaisesRegex(ContractError,
+                                    "acceptance ledger and audit result events do not match"):
+            chain.check_core_bindings()
 
     def test_accepted_result_without_result_event_refuses_start(self):
         keys = derive_keys(ROOT_SECRET)
