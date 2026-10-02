@@ -62,7 +62,7 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/http_entry.py", "geniusnew/wiring.py",
            "geniusnew/anchor_process.py", "geniusnew/config.py",
            "geniusnew/__main__.py", "geniusnew/database.py",
-           "geniusnew/audit_store.py")
+           "geniusnew/audit_store.py", "tools/control_deck/actions.py")
 
 # Each module's own way of refusing counts. `_deny` is `orchestrator.py`'s
 # helper, `Rejected` is `verifier.py`'s exception type, `GatewayRejected`
@@ -71,10 +71,10 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
 # one. Leaving any of them out would have hidden that module's decisions from
 # this check while it sat in the guarded list looking covered.
 #
-# Three additions in three modules is a pattern: whatever a module refuses
-# with belongs here the same day the module joins GUARDED.
+# The pattern is explicit: whatever a guarded module refuses with belongs here
+# the same day the module joins GUARDED.
 _REFUSAL_CALLS = {"_fail", "_deny"}
-_REFUSAL_RAISES = {"ContractError", "Rejected", "GatewayRejected"}
+_REFUSAL_RAISES = {"ContractError", "Rejected", "GatewayRejected", "AgentStartRefused"}
 _REFUSAL_RETURNS = {"_refusal"}
 
 

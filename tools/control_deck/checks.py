@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import time
@@ -139,6 +140,9 @@ def tool_status(name: str) -> dict[str, str]:
     exe = _which(name)
     if not exe:
         return _simple("red", "missing")
+
+    if name == "hermes":
+        return _simple("green", "CLI installiert · Modellzugriff ungeprüft")
 
     if name == "claude":
         code, out = _run([exe, "auth", "status"], cwd=Path.home())
@@ -303,3 +307,52 @@ def snapshot(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
         "gates": gates,
         "commands": COMMANDS,
     }
+
+def agent_socket() -> str:
+    return f"/run/user/{os.getuid()}/genius-deck-agents.sock"
+
+
+def agent_session(name: str) -> dict[str, str]:
+    if name != "hermes":
+        return _simple("yellow", "Kein Server-Adapter")
+    code, out = _run(
+        ["tmux", "-S", agent_socket(), "list-panes", "-t", name,
+         "-F", "#{pane_dead}:#{pane_current_command}"],
+        cwd=Path.home(),
+    )
+    active = code == 0 and any(line.startswith("0:") for line in out.splitlines())
+    return _simple("green" if active else "yellow",
+                   "Terminal geöffnet · Eingabe/Anmeldung in TERM" if active else "Sitzung nicht gestartet")
+
+
+def agent_hub(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
+    """Inspect supported access points without model calls or credential reads."""
+    launch = repo
+    cards = [
+        {"id": "grok", "name": "Grok", "status": "yellow",
+         "detail": "Web-App · Anmeldung wird im Browser geprüft",
+         "url": "https://grok.com/", "url_label": "Grok öffnen"},
+        {"id": "grok_bot", "name": "Grok Bot", "status": "yellow",
+         "detail": "Externer Bot · hier kein unterstützter Steuerungsadapter",
+         "note": "Vorhandenen Bot auf deinem Gerät öffnen. SSH-Einrichtung allein ist kein Live-Nachweis.",
+         "disabled_label": "Direktstart nicht verfügbar"},
+        {"id": "abacus", "name": "Abacus.AI", "status": "yellow",
+         "detail": "ChatLLM im Browser · Anmeldung wird dort geprüft",
+         "url": "https://apps.abacus.ai/chatllm/", "url_label": "Abacus.AI öffnen",
+         "note": "Vorläufiger Ersatz für Grok Build · kein Server-CLI-, Repo- oder Secret-Zugriff."},
+    ]
+    installed = tool_status("hermes")
+    running = agent_session("hermes")
+    available = installed["status"] == "green"
+    cards.append({
+        "id": "hermes", "name": "Hermes",
+        "status": running["status"] if available else "red",
+        "detail": installed["detail"] + " · " + running["detail"],
+        "command": (
+            f"cd {shlex.quote(str(launch))} && python3 -m tools.control_deck.actions "
+            "--start-agent hermes"
+        ) if available else None,
+        "action": "hermes_status",
+        "note": "Nutzt den konfigurierten Modellanbieter; kein eigenes Modellkontingent. Keine automatische Aufgabe.",
+    })
+    return {"generated_at": int(time.time()), "agents": cards}
