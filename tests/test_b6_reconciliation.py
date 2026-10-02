@@ -29,7 +29,7 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
         self.addCleanup(self.connection.close)
         self.acceptance_connection = self.connection
 
-    def start(self, *, requires_approval=False):
+    def start(self, *, requires_approval=False, anchor=None):
         keys = derive_keys(ROOT_SECRET)
         worker_authority = WorkerAuthority(result_key=keys.result_key,
                                            integrity_key=keys.integrity_key)
@@ -37,7 +37,7 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
             root_secret=ROOT_SECRET,
             policy=self.policy_for(requires_approval=requires_approval),
             api_keys={API_KEY: "subject-demo"}, workers=(DeterministicSummarizer(),),
-            anchor=AuditAnchor(), clock=lambda: 1_700_000_000,
+            anchor=AuditAnchor() if anchor is None else anchor, clock=lambda: 1_700_000_000,
             job_ledger=database.PostgresJobLedger(self.connection),
             acceptance_ledger=database.PostgresAcceptanceLedger(self.acceptance_connection),
             database_connection=self.connection,
@@ -215,6 +215,40 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
         records = service.chain.records
         self.assertEqual(service.anchor.committed,
                          (len(records), records[-1].record_hash))
+
+    def test_restart_refuses_database_ahead_of_unavailable_anchor_until_reanchored(self):
+        anchor = AuditAnchor()
+        service = self.start(anchor=anchor)
+        signer = HandoffSigner(integrity_key=derive_keys(ROOT_SECRET).integrity_key)
+        policy = self.policy_for()
+        wire = issue({"text": "restart anchor"}, subject="subject-demo",
+                     job_id="job-restart-anchor", policy=policy, signer=signer, now=100)
+        handoff = validate(wire, subject="subject-demo", job_id="job-restart-anchor",
+                           policy=policy, verifier=signer.verifier(), now=100)
+        event = event_from_handoff(
+            handoff, api_subject="subject-demo",
+            trace_id="trace-" + sha256(wire).hexdigest()[:16],
+            actor=service.audit.actor("orchestrator", "orchestrator-1"),
+            action="HANDOFF_ISSUED", decision="ALLOWED",
+            reason_code="POLICY_SATISFIED", occurred_at=100)
+        with mock.patch.object(anchor, "commit",
+                               side_effect=ContractError("anchor unavailable")):
+            with self.assertRaisesRegex(ContractError, "anchor unavailable"):
+                service._recorder.append(event)
+        service.close()
+        self.assertEqual(len(PostgresAuditChain(
+            self.connection, authority=AuditAuthority(
+                audit_key=derive_keys(ROOT_SECRET).audit_key))), 1)
+
+        with mock.patch.object(anchor, "commit",
+                               side_effect=ContractError("anchor unavailable")):
+            with self.assertRaisesRegex(ContractError, "anchor unavailable"):
+                self.start(anchor=anchor)
+
+        restarted = self.start(anchor=anchor)
+        self.addCleanup(restarted.close)
+        records = restarted.chain.records
+        self.assertEqual(anchor.committed, (len(records), records[-1].record_hash))
 
     def test_durable_stores_refuse_a_foreign_transaction_connection(self):
         service = self.start(requires_approval=True)
