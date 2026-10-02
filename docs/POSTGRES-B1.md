@@ -135,6 +135,42 @@ historische Ketten lesbar. Eine B5-Installation mit Job-Zeilen und diesen alten
 Ereignissen kann B6 mangels Principal-Bindung nicht beweisen und verweigert den
 Start. Ein Import solcher Installationen ist ein eigener geprüfter Schritt.
 
+## B7: Absturz an jeder Zustandsgrenze
+
+`tests/test_b7_crash_recovery.py` startet über `tests/crash_service.py` den
+durablen Dienst (PostgreSQL-Ledger und -Kette, Anker mit Zustandsdatei) als
+Kindprozess, lässt ihn einen Job ausführen und beendet ihn mit `SIGKILL`. Danach
+startet der Test den Dienst auf dem Hinterlassenen neu.
+
+Die Kill-Punkte stehen nicht in einer Liste. Ein Trockenlauf zeichnet jede
+Grenzüberschreitung auf (vor und nach jedem Audit-Append, in der Transaktion nach
+der Mutation, vor und nach jeder Anker-Bestätigung, vor und nach dem Worker) und
+dazu den **committeten** Zustand, den eine zweite Verbindung in diesem Moment sieht.
+Nur dieser Zustand bleibt nach einem Absturz übrig; jeder verschiedene Zustand wird
+deshalb einmal getroffen. Eine später hinzukommende Grenze wird ohne Änderung des
+Tests erfasst. Drei Abläufe: ein Job ohne Approval, ein Job mit Approval
+(Antrag, Freigabe, Verbrauch, Ausführung) und ein wartender Job, der abläuft und
+dauerhaft abgelehnt wird.
+
+Nach jedem Kill verlangt der Test: Der Neustart gelingt, der Anker steht danach auf
+dem Kettenkopf (ohne dass erst ein Aufrufer ihn nachzieht), und die Kette
+verifiziert gegen ihn. Der Job lief höchstens einmal und nie ohne seine
+`EXECUTION_COMMITTED`-Zeile, auch nicht, wenn dieselbe Job-ID nach dem Neustart
+erneut angesteuert wird: Eine verbrannte ID wird mit `JOB_ID_REUSED` abgelehnt, ein
+angenommenes Ergebnis ein zweites Mal nicht angenommen, ein Approval-Token nicht
+zweimal verbraucht. Admission, Dispatch und Annahme des Jobs stehen höchstens einmal in
+der Kette, ein abgelaufener Job endet genau einmal als `REFUSED`, und der Dienst nimmt danach einen neuen Job an
+und führt ihn aus.
+
+Grenzen dieses Nachweises: Getötet wird der Dienstprozess, nicht der Rechner und
+nicht PostgreSQL; die Dauerhaftigkeit eines `COMMIT` bleibt Sache von PostgreSQL.
+Die Grenzen werden im Kindprozess durch Umhüllen der bestehenden Nähte beobachtet,
+der Produktionscode enthält keinen Absturz-Haken. Der Worker läuft im Testaufbau im
+Dienstprozess; seine Isolation prüft `tests/test_isolation.py`. Es läuft ein Job je
+Ablauf ohne Parallelität; Rennen zwischen Instanzen prüft `PersistentLedgerTest`.
+Der Anker wird vom Dienst gestartet und endet mit ihm; ein separat betriebener
+Anker (`anchor_process serve`) wird hier nicht beendet.
+
 ## Konfiguration und Migration
 
 `service.database_dsn_file` in der TOML benennt eine absolute Datei außerhalb des
