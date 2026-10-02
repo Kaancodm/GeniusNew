@@ -11,6 +11,7 @@ import psycopg
 from geniusnew import database
 from geniusnew.approvals import ApprovalScope, ApprovalStore, _record_hash
 from geniusnew.audit_chain import AuditAnchor
+from geniusnew.audit_store import PostgresAuditChain
 from geniusnew.contracts import ContractError, canonical, validate_pending
 from geniusnew.wiring import _Waiting, build
 from geniusnew.workers import DeterministicSummarizer
@@ -76,6 +77,31 @@ class DurablePendingTest(ApprovalFixture, unittest.TestCase):
                           api_keys={API_KEY: "subject-demo"},
                           workers=(DeterministicSummarizer(),), anchor=AuditAnchor(),
                           database_connection=self.connection, job_ledger=ledger)
+
+    def test_durable_wiring_requires_the_same_acceptance_ledger_connection(self):
+        with self.db.connect(runtime=True) as other_connection:
+            for ledger in (None, database.PostgresAcceptanceLedger(other_connection)):
+                with self.subTest(ledger=ledger), self.assertRaisesRegex(
+                        ContractError, "acceptance storage needs the audit database connection"):
+                    build(root_secret=ROOT_SECRET, policy=self.policy,
+                          api_keys={API_KEY: "subject-demo"},
+                          workers=(DeterministicSummarizer(),), anchor=AuditAnchor(),
+                          database_connection=self.connection,
+                          job_ledger=database.PostgresJobLedger(self.connection),
+                          acceptance_ledger=ledger)
+
+    def test_durable_wiring_requires_the_same_postgres_audit_chain_connection(self):
+        with self.db.connect(runtime=True) as other_connection:
+            with self.assertRaisesRegex(
+                    ContractError, "PostgreSQL audit chain on the same connection"):
+                build(root_secret=ROOT_SECRET, policy=self.policy,
+                      api_keys={API_KEY: "subject-demo"},
+                      workers=(DeterministicSummarizer(),), anchor=AuditAnchor(),
+                      database_connection=self.connection,
+                      job_ledger=database.PostgresJobLedger(self.connection),
+                      acceptance_ledger=database.PostgresAcceptanceLedger(self.connection),
+                      audit_chain_factory=lambda audit: PostgresAuditChain(
+                          other_connection, authority=audit))
 
     def test_consume_refuses_an_outer_uncommitted_transaction(self):
         pending, approvals = self.stores()

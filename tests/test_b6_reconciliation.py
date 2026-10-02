@@ -10,11 +10,11 @@ from geniusnew.audit import AuditAuthority, event_from_handoff
 from geniusnew.audit_chain import AuditAnchor
 from geniusnew.audit_store import PostgresAuditChain
 from geniusnew.contracts import ContractError, HandoffSigner, issue, validate, validate_pending
-from geniusnew.gateway import ADMISSION_REASON_CODE
+from geniusnew.gateway import ADMISSION_REASON_CODE, Gateway
 from geniusnew.keys import derive_keys
 from geniusnew.orchestrator import Reservation
 from geniusnew.results import WorkerAuthority, handoff_digest, produce
-from geniusnew.wiring import _Waiting, build
+from geniusnew.wiring import _Waiting, _atomic_admission_recorder, build
 from geniusnew.workers import DeterministicSummarizer, WorkerRunner
 from postgres_support import PostgresDatabase
 from test_end_to_end import API_KEY, ROOT_SECRET, Fixture
@@ -452,6 +452,58 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
         self.append_issued(handoff, authority)
         PostgresAuditChain(self.connection, authority=authority).append(event)
         self.start().close()
+
+    def test_atomic_admission_recorder_refuses_a_permit_from_another_gateway(self):
+        service = self.start()
+        self.addCleanup(service.close)
+        signer = HandoffSigner(integrity_key=derive_keys(ROOT_SECRET).integrity_key)
+        policy = self.policy_for()
+        foreign_gateway = Gateway(
+            gateway_id="gateway-foreign",
+            handoff_verifier=signer.verifier(),
+            approval_store=service.approvals)
+        wire = issue({"text": "forged gateway"}, subject="subject-demo", job_id="job-forged",
+                     policy=policy, signer=signer, now=100)
+        permit = foreign_gateway.admit(
+            wire, subject="subject-demo", job_id="job-forged", policy=policy, now=100)
+        record = _atomic_admission_recorder(gateway=service.gateway, recorder=service._recorder)
+        with self.assertRaisesRegex(ContractError, "gateway this service did not wire"):
+            record(lambda transaction: (permit, object()), "subject-demo")
+
+    def test_invalid_approval_record_state_refuses_recovery(self):
+        keys = derive_keys(ROOT_SECRET)
+        authority = AuditAuthority(audit_key=keys.audit_key)
+        signer = HandoffSigner(integrity_key=keys.integrity_key)
+        policy = self.policy_for()
+        wire = issue({"text": "invalid approval state"}, subject="subject-demo",
+                     job_id="job-approval-invalid", policy=policy, signer=signer, now=100)
+        handoff = validate(wire, subject="subject-demo", job_id="job-approval-invalid",
+                           policy=policy, verifier=signer.verifier(), now=100)
+        self.append_issued(handoff, authority)
+        with self.db.connect() as owner:
+            owner.execute("ALTER TABLE public.approval_records "
+                          "DROP CONSTRAINT approval_records_state_check")
+            owner.execute(
+                "INSERT INTO public.approval_records "
+                "(token_digest,record_hash,scope,issued_at,expires_at,state,changed_at,previous_hash) "
+                "VALUES (%s,%s,%s,101,160,'GRANTED',101,NULL)",
+                ("a" * 64, "b" * 64, b"{}"))
+            owner.execute(
+                "UPDATE public.approval_records SET state='INVALID' WHERE record_hash=%s",
+                ("b" * 64,))
+        with self.assertRaisesRegex(ContractError, "approval record state is invalid"):
+            self.start()
+
+    def test_more_acceptance_rows_than_audit_records_refuse_recovery(self):
+        with self.db.connect() as owner:
+            owner.execute("ALTER TABLE public.acceptance_ledger DISABLE TRIGGER ALL")
+            owner.execute(
+                "INSERT INTO public.acceptance_ledger "
+                "(handoff_sha256,job_id,handoff_wire,result_sha256,result_wire,accepted_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s)",
+                ("a" * 64, "job-orphan", b"{}", "b" * 64, b"{}", 123))
+        with self.assertRaisesRegex(ContractError, "acceptance ledger and audit result events do not match"):
+            self.start()
 
     def test_valid_approval_flow_reconciles_at_each_restart(self):
         headers = {"Content-Type": "application/json",
