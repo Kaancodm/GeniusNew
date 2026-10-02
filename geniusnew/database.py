@@ -633,8 +633,11 @@ class PostgresPendingJobs(PendingJobs):
             # Serializes admission against the global queue bound across replicas.
             # Expiry is not swept here: changing an existing job to REFUSED
             # without its audit event would violate the B6 atomicity boundary.
+            # Expired rows stay but hold no slot, so abandoned jobs cannot fill
+            # the bound for good.
             connection.execute("SELECT pg_advisory_xact_lock(513812742)")
-            if connection.execute("SELECT count(*) FROM public.pending_jobs").fetchone()[0] >= _MAX_PENDING:
+            if connection.execute("SELECT count(*) FROM public.pending_jobs WHERE expires_at > %s",
+                                  (now,)).fetchone()[0] >= _MAX_PENDING:
                 _fail("too many jobs are waiting for approval")
             inserted = connection.execute(
                 "INSERT INTO public.job_ledger (job_id,subject,handoff_sha256,state,"
