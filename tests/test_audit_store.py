@@ -1,7 +1,10 @@
 """Pure snapshot validation catches corruption even when the final signature is valid."""
 
+from contextlib import nullcontext
 from dataclasses import replace
+from hashlib import sha256
 import json
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -151,3 +154,137 @@ class StoredAuditSnapshotTest(unittest.TestCase):
             with self.subTest(reason=reason):
                 with self.assertRaisesRegex(ContractError, reason):
                     chain._read(Connection(stats))
+
+
+class CoreAuditBindingsRefusalTest(unittest.TestCase):
+    class _Cursor:
+        def __init__(self, *, one=None, many=()):
+            self._one = one
+            self._many = tuple(many)
+
+        def fetchone(self):
+            return self._one
+
+        def fetchall(self):
+            return self._many
+
+    class _Connection:
+        def __init__(self, *, job_count=0, jobs=(),
+                     approval_count=0, approval_rows=(),
+                     acceptance_count=0, acceptance_rows=()):
+            self.job_count = job_count
+            self.jobs = tuple(jobs)
+            self.approval_count = approval_count
+            self.approval_rows = tuple(approval_rows)
+            self.acceptance_count = acceptance_count
+            self.acceptance_rows = tuple(acceptance_rows)
+
+        def transaction(self):
+            return nullcontext()
+
+        def execute(self, query, parameters=None):
+            if query.startswith("SET TRANSACTION ISOLATION LEVEL"):
+                return CoreAuditBindingsRefusalTest._Cursor()
+            if "SELECT count(*) FROM public.job_ledger" in query:
+                return CoreAuditBindingsRefusalTest._Cursor(one=(self.job_count,))
+            if "FROM public.job_ledger" in query:
+                return CoreAuditBindingsRefusalTest._Cursor(many=self.jobs)
+            if "SELECT count(*) FROM public.approval_records" in query:
+                return CoreAuditBindingsRefusalTest._Cursor(one=(self.approval_count,))
+            if "FROM public.approval_records" in query:
+                return CoreAuditBindingsRefusalTest._Cursor(many=self.approval_rows)
+            if "SELECT count(*) FROM public.acceptance_ledger" in query:
+                return CoreAuditBindingsRefusalTest._Cursor(one=(self.acceptance_count,))
+            if "FROM public.acceptance_ledger" in query:
+                return CoreAuditBindingsRefusalTest._Cursor(many=self.acceptance_rows)
+            raise AssertionError(f"unexpected query: {query}")
+
+    def setUp(self):
+        self.authority = AuditAuthority(audit_key=b"test-only-audit-key" * 3)
+        subject = "subject-demo"
+        self.job_id = "job-demo"
+        self.digest = "a" * 64
+        self.when = 100
+        self.subject_digest = sha256(subject.encode("utf-8")).hexdigest()
+        self.base_job = (self.job_id, subject, self.digest, "PENDING_APPROVAL", self.when, self.when)
+
+    def _event(self, action, *, job_id=None, occurred_at=None, approval_record_hash=None):
+        return AuditEvent(
+            trace_id=f"trace-{action.lower()}",
+            job_id=self.job_id if job_id is None else job_id,
+            actor=self.authority.actor("gateway", "gateway-1"),
+            subject="subject-demo",
+            action=action,
+            decision="ALLOWED",
+            reason_code="TEST_ONLY",
+            policy_version="p",
+            constitution_version="c",
+            handoff_sha256=self.digest,
+            payload_sha256="b" * 64,
+            occurred_at=self.when if occurred_at is None else occurred_at,
+            approval_record_hash=approval_record_hash,
+            event_version=2,
+            api_subject_sha256=self.subject_digest,
+        )
+
+    def _chain(self, connection, records):
+        chain = object.__new__(PostgresAuditChain)
+        chain._lock = threading.Lock()
+        chain._connection = connection
+        chain._read = lambda _: (None, tuple(records))
+        return chain
+
+    def test_refuses_when_job_count_exceeds_audited_records(self):
+        chain = self._chain(self._Connection(job_count=1), records=())
+        with self.assertRaisesRegex(ContractError, "job ledger has no audit issuance"):
+            chain.check_core_bindings()
+
+    def test_refuses_job_without_issued_audit_event(self):
+        unrelated_issuance = self._event("HANDOFF_ISSUED", job_id="job-other")
+        chain = self._chain(
+            self._Connection(job_count=1, jobs=(self.base_job,)),
+            records=(type("R", (), {"event": unrelated_issuance})(),),
+        )
+        with self.assertRaisesRegex(ContractError, "job ledger has no audit issuance"):
+            chain.check_core_bindings()
+
+    def test_refuses_duplicate_admission_bindings_even_when_totals_match(self):
+        issued = self._event("HANDOFF_ISSUED")
+        admitted = self._event("HANDOFF_ADMITTED")
+        duplicated_job = (self.job_id, "subject-demo", self.digest, "RESERVED", self.when, self.when)
+        chain = self._chain(
+            self._Connection(job_count=2, jobs=(duplicated_job, duplicated_job)),
+            records=(type("R", (), {"event": issued})(),
+                     type("R", (), {"event": admitted})(),
+                     type("R", (), {"event": admitted})()),
+        )
+        with self.assertRaisesRegex(ContractError, "job ledger and audit admissions do not match"):
+            chain.check_core_bindings()
+
+    def test_refuses_when_approval_count_exceeds_audited_events(self):
+        chain = self._chain(
+            self._Connection(job_count=0, approval_count=1),
+            records=(),
+        )
+        with self.assertRaisesRegex(ContractError, "approval records and audit events do not match"):
+            chain.check_core_bindings()
+
+    def test_refuses_invalid_approval_state_before_mapping(self):
+        issued = self._event("HANDOFF_ISSUED")
+        chain = self._chain(
+            self._Connection(
+                approval_count=1,
+                approval_rows=(("c" * 64, "INVALID", self.when, b"{\"handoff_sha256\":\"a\"}"),),
+            ),
+            records=(type("R", (), {"event": issued})(),),
+        )
+        with self.assertRaisesRegex(ContractError, "approval record state is invalid"):
+            chain.check_core_bindings()
+
+    def test_refuses_when_acceptance_count_exceeds_audited_results(self):
+        chain = self._chain(
+            self._Connection(job_count=0, acceptance_count=1),
+            records=(),
+        )
+        with self.assertRaisesRegex(ContractError, "acceptance ledger and audit result events do not match"):
+            chain.check_core_bindings()
