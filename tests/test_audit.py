@@ -1,3 +1,4 @@
+import hashlib
 import unittest
 from dataclasses import replace
 
@@ -61,6 +62,46 @@ class AuditEventTest(EventFixture, unittest.TestCase):
         self.assertEqual(recorded['occurred_at'], 101)
         self.assertEqual(len(recorded['handoff_sha256']), 64)
         self.assertEqual(len(recorded['payload_sha256']), 64)
+
+    def test_version_two_binds_api_subject_and_accepted_result(self):
+        original = self.event(action='RESULT_ACCEPTED')
+        modern = self.event(action='RESULT_ACCEPTED', api_subject='subject-demo',
+                            result_sha256='c' * 64)
+        self.assertNotIn('event_version', original.to_dict())
+        self.assertEqual(modern.to_dict()['event_version'], 2)
+        self.assertEqual(modern.to_dict()['api_subject_sha256'],
+                         hashlib.sha256(b'subject-demo').hexdigest())
+        self.assertEqual(modern.to_dict()['result_sha256'], 'c' * 64)
+        self.assertNotIn(b'subject-demo', modern.to_bytes())
+        self.assertEqual(rehydrate_event(modern.to_dict()), modern)
+        self.assertNotEqual(modern.event_sha256(), original.event_sha256())
+
+    def test_version_two_rejects_missing_or_malformed_bindings(self):
+        modern = self.event(action='RESULT_ACCEPTED', api_subject='subject-demo',
+                            result_sha256='c' * 64)
+        for field, value in (('api_subject_sha256', None),
+                             ('api_subject_sha256', 'wrong'),
+                             ('result_sha256', None),
+                             ('result_sha256', 'wrong'),
+                             ('event_version', 3)):
+            with self.subTest(field=field), self.assertRaises(ContractError):
+                replace(modern, **{field: value})
+
+    def test_legacy_event_rejects_version_two_bindings(self):
+        legacy = self.event(action='HANDOFF_ADMITTED')
+        with self.assertRaisesRegex(ContractError, 'legacy'):
+            replace(legacy, api_subject_sha256='a' * 64)
+        with self.assertRaisesRegex(ContractError, 'legacy'):
+            replace(legacy, result_sha256='b' * 64)
+
+    def test_version_two_rejects_result_digest_on_non_result_action(self):
+        modern = self.event(action='HANDOFF_ADMITTED', api_subject='subject-demo')
+        with self.assertRaisesRegex(ContractError, 'accepted result'):
+            replace(modern, result_sha256='c' * 64)
+
+    def test_event_factory_rejects_result_digest_without_api_subject(self):
+        with self.assertRaisesRegex(ContractError, 'bound API subject'):
+            self.event(action='RESULT_ACCEPTED', result_sha256='d' * 64)
 
     def test_free_text_cannot_be_smuggled_into_a_reason_code(self):
         for code in (f'LEAKED {PAYLOAD_CANARY}', PAYLOAD_CANARY, 'lowercase', 'HAS SPACE',

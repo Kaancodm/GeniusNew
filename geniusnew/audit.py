@@ -42,7 +42,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (Ed25519PrivateKey,
                                                               Ed25519PublicKey)
 
-from .contracts import ContractError, Handoff, canonical
+from .contracts import ContractError, Handoff, _subject_bytes, canonical
 
 CONSTITUTION_VERSION = "constitution-v1-draft"
 
@@ -70,6 +70,9 @@ _EVENT_KEYS = frozenset({
     "action", "actor", "approval_record_hash", "constitution_version", "decision",
     "handoff_sha256", "job_id", "occurred_at", "payload_sha256", "policy_version",
     "reason_code", "subject", "trace_id",
+})
+_EVENT_V2_KEYS = _EVENT_KEYS | frozenset({
+    "event_version", "api_subject_sha256", "result_sha256",
 })
 # The handoff state that marks an approval-bound job. Only such a handoff can
 # have an approval record behind a decision about it.
@@ -244,6 +247,9 @@ class AuditEvent:
     payload_sha256: str
     occurred_at: int
     approval_record_hash: str | None = None
+    event_version: int = 1
+    api_subject_sha256: str | None = None
+    result_sha256: str | None = None
 
     def __post_init__(self) -> None:
         for field in ("trace_id", "job_id", "subject", "policy_version", "constitution_version"):
@@ -258,13 +264,24 @@ class AuditEvent:
             _fail("action is not an allowed audit action")
         if type(self.decision) is not str or self.decision not in _DECISIONS:
             _fail("decision is not an allowed audit decision")
+        if type(self.event_version) is not int or self.event_version not in (1, 2):
+            _fail("event_version is not supported")
+        if self.event_version == 1:
+            if self.api_subject_sha256 is not None or self.result_sha256 is not None:
+                _fail("legacy audit event cannot carry version two bindings")
+        else:
+            _digest(self.api_subject_sha256, "api_subject_sha256")
+            if self.action == "RESULT_ACCEPTED":
+                _digest(self.result_sha256, "result_sha256")
+            elif self.result_sha256 is not None:
+                _fail("result_sha256 is only allowed for an accepted result")
         if type(self.reason_code) is not str or not _REASON_CODE.match(self.reason_code):
             _fail("reason_code must be an uppercase code of at most 64 characters")
         if not 0 < _integer(self.occurred_at, "occurred_at") <= _MAX_OCCURRED_AT:
             _fail(f"occurred_at must be between 1 and {_MAX_OCCURRED_AT}")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        value = {
             "action": self.action,
             "actor": self.actor.identifier(),
             "approval_record_hash": self.approval_record_hash,
@@ -279,6 +296,13 @@ class AuditEvent:
             "subject": self.subject,
             "trace_id": self.trace_id,
         }
+        if self.event_version == 2:
+            value.update({
+                "event_version": 2,
+                "api_subject_sha256": self.api_subject_sha256,
+                "result_sha256": self.result_sha256,
+            })
+        return value
 
     def to_bytes(self) -> bytes:
         return canonical(self.to_dict())
@@ -289,7 +313,9 @@ class AuditEvent:
 
 def event_from_handoff(handoff: Handoff, *, trace_id: str, actor: ComponentActor, action: str,
                        decision: str, reason_code: str, occurred_at: int,
-                       approval_record_hash: str | None = None) -> AuditEvent:
+                       approval_record_hash: str | None = None,
+                       api_subject: str | None = None,
+                       result_sha256: str | None = None) -> AuditEvent:
     """Derive an event from a handoff without copying its payload.
 
     The job, subject and policy version come from the handoff itself, and the
@@ -307,6 +333,8 @@ def event_from_handoff(handoff: Handoff, *, trace_id: str, actor: ComponentActor
     # needed one. The result verifier refuses the same mismatch.
     if approval_record_hash is not None and handoff.approval_state != _PENDING_APPROVAL:
         _fail("approval_record_hash is not allowed for a handoff that needs no approval")
+    if api_subject is None and result_sha256 is not None:
+        _fail("result digest needs a bound API subject")
     return AuditEvent(
         trace_id=_identifier(trace_id, "trace_id"),
         job_id=_audit_safe(handoff.job_id, "job_id"),
@@ -321,6 +349,10 @@ def event_from_handoff(handoff: Handoff, *, trace_id: str, actor: ComponentActor
         payload_sha256=handoff.payload_sha256,
         occurred_at=_integer(occurred_at, "occurred_at"),
         approval_record_hash=approval_record_hash,
+        event_version=2 if api_subject is not None else 1,
+        api_subject_sha256=(hashlib.sha256(_subject_bytes(api_subject)).hexdigest()
+                            if api_subject is not None else None),
+        result_sha256=result_sha256,
     )
 
 
@@ -334,12 +366,12 @@ def rehydrate_event(value: Any) -> AuditEvent:
     the signing key: nothing rebuilt here counts until `audit_chain.verify` has
     checked the chain against a head signed by the authority.
     """
-    if not isinstance(value, dict) or set(value) != _EVENT_KEYS:
+    if not isinstance(value, dict) or set(value) not in (_EVENT_KEYS, _EVENT_V2_KEYS):
         _fail("record carries a malformed event")
     actor = value["actor"]
     if type(actor) is not str or actor.count(":") != 1:
         _fail("record carries a malformed actor")
     component, instance_id = actor.split(":")
-    fields = {name: value[name] for name in _EVENT_KEYS - {"actor"}}
+    fields = {name: value[name] for name in set(value) - {"actor"}}
     return AuditEvent(actor=ComponentActor(component, instance_id, _ACTOR_PROVENANCE),
                       **fields)

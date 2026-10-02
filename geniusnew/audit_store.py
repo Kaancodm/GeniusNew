@@ -8,20 +8,22 @@ submitting the returned head and records to the independent anchor.
 
 from __future__ import annotations
 
+from collections import Counter, defaultdict
 from contextlib import contextmanager
+from hashlib import sha256
 import hmac
 import json
 
 import psycopg
 from psycopg.pq import TransactionStatus
 
-from .audit import AuditAuthority, AuditEvent, AuditVerifier, rehydrate_event
+from .audit import AuditAuthority, AuditEvent, AuditVerifier, _audit_safe, rehydrate_event
 from . import anchor_process
 from .audit_chain import (AuditChain, AuditHead, AuditRecord, _EMPTY_HASH,
                           _HEAD_VERSION, _MAX_COUNT, _record_hash, _verify_head,
                           sign_head, verify)
-from .contracts import ContractError
-from .database import connection_lock
+from .contracts import ContractError, _subject_bytes, decode_wire
+from .database import _SCOPE_KEYS, _MAX_WIRE_BYTES, connection_lock
 
 _AUDIT_LOCK = 0x47454E4955534235
 _MAX_EVENT_BYTES = 8192
@@ -30,6 +32,10 @@ _MIN_HEAD_LINE_BYTES = len(anchor_process._head_line(
     AuditHead(_HEAD_VERSION, 0, "0" * 64, "0" * 128)))
 _MAX_STORED_RECORDS = min(
     _MAX_COUNT, anchor_process._MAX_STATE_BYTES // _MIN_HEAD_LINE_BYTES)
+_TERMINAL_PENDING_REFUSALS = frozenset({
+    "PENDING_APPROVAL_EXPIRED",
+    "PENDING_DISPATCH_REFUSED",
+})
 
 
 def _fail(message: str) -> None:
@@ -140,6 +146,133 @@ class PostgresAuditChain(AuditChain):
                 return self._read(self._connection)
         except psycopg.Error:
             raise ContractError("audit chain is unavailable") from None
+
+    def check_core_bindings(self) -> None:
+        """Compare committed admission decisions with burned job ids at startup."""
+        try:
+            with self._lock, self._connection.transaction():
+                self._connection.execute(
+                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                _, records = self._read(self._connection)
+                if self._connection.execute(
+                        "SELECT count(*) FROM public.job_ledger").fetchone()[0] > len(records):
+                    _fail("job ledger has no audit issuance")
+                jobs = self._connection.execute(
+                    "SELECT job_id,subject,handoff_sha256,state,reserved_at,updated_at "
+                    "FROM public.job_ledger").fetchall()
+                issued = defaultdict(list)
+                for record in records:
+                    event = record.event
+                    if event.action == "HANDOFF_ISSUED":
+                        issued[(event.job_id, event.handoff_sha256)].append(event)
+                for job_id, subject, digest, _, _, _ in jobs:
+                    matching = issued.get((_audit_safe(job_id, "job_id"), digest), ())
+                    if not matching:
+                        _fail("job ledger has no audit issuance")
+                    expected_subject = sha256(_subject_bytes(subject)).hexdigest()
+                    if any(event.event_version != 2
+                           or event.api_subject_sha256 != expected_subject
+                           for event in matching):
+                        _fail("job ledger subject has no signed audit binding")
+                    if len(matching) != 1:
+                        _fail("job ledger has duplicate audit issuance")
+                admitted = Counter(
+                    (record.event.job_id, record.event.handoff_sha256,
+                     record.event.occurred_at,
+                     record.event.approval_record_hash)
+                    for record in records if record.event.action == "HANDOFF_ADMITTED")
+                expected = Counter()
+                for job_id, subject, digest, state, reserved_at, _ in jobs:
+                    if state in ("RESERVED", "EXECUTION_COMMITTED", "COMPLETED"):
+                        expected[(_audit_safe(job_id, "job_id"), digest, reserved_at, None)] += 1
+                if any(count != 1 for count in admitted.values()) or any(
+                        count != 1 for count in expected.values()):
+                    _fail("job ledger and audit admissions do not match")
+                # Approval-bound admissions carry a receipt hash in the event.
+                # The remaining fields still bind the exact reserved job.
+                actual = Counter(key[:3] for key in admitted)
+                wanted = Counter(key[:3] for key in expected)
+                if actual != wanted:
+                    _fail("job ledger and audit admissions do not match")
+                expected_executions = Counter(
+                    (_audit_safe(job_id, "job_id"), digest, reserved_at)
+                    for job_id, subject, digest, state, reserved_at, _ in jobs
+                    if state in ("EXECUTION_COMMITTED", "COMPLETED"))
+                actual_executions = Counter(
+                    (event.job_id, event.handoff_sha256, event.occurred_at)
+                    for event in (record.event for record in records)
+                    if event.action == "EXECUTION_DISPATCHED")
+                if actual_executions != expected_executions:
+                    _fail("job ledger and audit execution events do not match")
+                expected_refusals = Counter(
+                    (_audit_safe(job_id, "job_id"), digest, updated_at)
+                    for job_id, subject, digest, state, _, updated_at in jobs
+                    if state == "REFUSED")
+                actual_refusals = Counter(
+                    (event.job_id, event.handoff_sha256, event.occurred_at)
+                    for event in (record.event for record in records)
+                    if event.action == "HANDOFF_REJECTED"
+                    and event.reason_code in _TERMINAL_PENDING_REFUSALS)
+                if actual_refusals != expected_refusals:
+                    _fail("refused jobs and terminal audit events do not match")
+                approval_actions = {
+                    "GRANTED": "APPROVAL_GRANTED",
+                    "CONSUMED": "HANDOFF_ADMITTED",
+                    "REVOKED": "APPROVAL_REVOKED",
+                }
+                if self._connection.execute(
+                        "SELECT count(*) FROM public.approval_records").fetchone()[0] > len(records):
+                    _fail("approval records and audit events do not match")
+                approval_rows = self._connection.execute(
+                    "SELECT record_hash,state,changed_at,"
+                    "CASE WHEN octet_length(scope) <= %s THEN scope ELSE NULL END "
+                    "FROM public.approval_records", (_MAX_WIRE_BYTES,)).fetchall()
+                expected_approvals = Counter()
+                scopes = {}
+                for record_hash, state, changed_at, raw in approval_rows:
+                    if raw is None:
+                        _fail("stored approval scope exceeds the maximum size")
+                    if state not in approval_actions:
+                        _fail("approval record state is invalid")
+                    expected_approvals[(approval_actions[state], record_hash, changed_at)] += 1
+                    scopes[record_hash] = decode_wire(raw, keys=_SCOPE_KEYS,
+                                                       noun="approval scope")
+                approval_events = tuple(
+                    record.event for record in records
+                    if record.event.action in ("APPROVAL_GRANTED", "APPROVAL_REVOKED")
+                    or (record.event.action == "HANDOFF_ADMITTED"
+                        and record.event.approval_record_hash is not None))
+                actual_approvals = Counter(
+                    (event.action, event.approval_record_hash, event.occurred_at)
+                    for event in approval_events)
+                if actual_approvals != expected_approvals:
+                    _fail("approval records and audit events do not match")
+                for event in approval_events:
+                    scope = scopes[event.approval_record_hash]
+                    if (event.job_id != _audit_safe(scope["job_id"], "job_id")
+                            or event.handoff_sha256 != scope["handoff_sha256"]
+                            or event.subject != _audit_safe(scope["user_id"], "subject")
+                            or event.policy_version != _audit_safe(
+                                scope["policy_version"], "policy_version")):
+                        _fail("approval receipt does not bind the audited job")
+                if self._connection.execute(
+                        "SELECT count(*) FROM public.acceptance_ledger").fetchone()[0] > len(records):
+                    _fail("acceptance ledger and audit result events do not match")
+                acceptances = self._connection.execute(
+                    "SELECT job_id,handoff_sha256,result_sha256,accepted_at "
+                    "FROM public.acceptance_ledger").fetchall()
+                expected_results = Counter(
+                    (_audit_safe(job_id, "job_id"), digest, result_digest, accepted_at)
+                    for job_id, digest, result_digest, accepted_at in acceptances)
+                actual_results = Counter(
+                    (event.job_id, event.handoff_sha256, event.result_sha256,
+                     event.occurred_at)
+                    for event in (record.event for record in records)
+                    if event.action == "RESULT_ACCEPTED")
+                if actual_results != expected_results:
+                    _fail("acceptance ledger and audit result events do not match")
+        except psycopg.Error:
+            raise ContractError("core audit reconciliation is unavailable") from None
 
     def __len__(self) -> int:
         return len(self._snapshot()[1])

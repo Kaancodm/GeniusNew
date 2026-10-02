@@ -158,6 +158,26 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         self.assertEqual(handoff.tools, ('summarize',))
         self.assertEqual(handoff.orchestrator_id, 'orchestrator-demo')
 
+    def test_process_local_job_ledger_refuses_database_transactions(self):
+        ledger = ProcessLocalJobLedger()
+        item = Reservation('job-tx', 'subject-demo', 'a' * 64, 160, 100)
+        with self.assertRaisesRegex(ContractError, 'cannot join'):
+            ledger.reserve(item, transaction=object())
+        self.assertTrue(ledger.reserve(item))
+        with self.assertRaisesRegex(ContractError, 'cannot join'):
+            ledger.commit_execution(item, now=110, transaction=object())
+
+    def test_atomic_dispatch_callbacks_are_callable_and_configured_as_a_pair(self):
+        base = dict(orchestrator_id='orchestrator-demo', signer=self.key, gateway=self.gateway,
+                    workers=(self.endpoint,))
+        for field in ('on_dispatched', 'atomic_admitted', 'atomic_dispatched'):
+            with self.subTest(field=field), self.assertRaisesRegex(ContractError, 'callable'):
+                Orchestrator(**base, **{field: object()})
+        with self.assertRaisesRegex(ContractError, 'both boundaries'):
+            Orchestrator(**base, atomic_admitted=lambda *args: None)
+        with self.assertRaisesRegex(ContractError, 'both boundaries'):
+            Orchestrator(**base, atomic_dispatched=lambda *args: None)
+
     def test_non_approval_job_runs_through_gateway_and_selected_worker(self):
         dispatched = self.dispatch(self.wire())
         self.assertIsInstance(dispatched, Dispatch)
@@ -726,9 +746,10 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         runner = self.counting(wire=b'x')
         orchestrator = self.orchestrator_for(
             workers=(WorkerEndpoint('worker-demo', runner),),
-            on_admitted=lambda permit: seen.append((permit, len(runner.calls))))
+            on_admitted=lambda permit, subject: seen.append((permit, subject, len(runner.calls))))
         self.dispatch(self.wire(), orchestrator=orchestrator, now=110)
-        [(permit, calls_before)] = seen
+        [(permit, subject, calls_before)] = seen
+        self.assertEqual(subject, 'subject-demo')
         self.assertIsInstance(permit, DispatchPermit)
         self.assertEqual(calls_before, 0)
         self.assertIs(runner.calls[0][0], permit)
@@ -748,7 +769,8 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         events = []
         runner = self.counting(wire=b'x')
 
-        def rival_wins(permit):
+        def rival_wins(permit, subject):
+            self.assertEqual(subject, 'subject-demo')
             events.append(('admitted', permit.approval_record_hash))
             # The other caller reserves the same id in this window.
             orchestrator._ledger.reserve(Reservation(
@@ -769,7 +791,7 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         """No execution without its admission on record, and the id stays free."""
         runner = self.counting(wire=b'x')
 
-        def recorder_down(permit):
+        def recorder_down(permit, subject):
             raise ContractError('audit is unavailable')
 
         orchestrator = self.orchestrator_for(
@@ -909,7 +931,9 @@ class RacingLedger(ProcessLocalJobLedger):
     def is_burned(self, job_id):
         return False
 
-    def reserve(self, reservation):
+    def reserve(self, reservation, *, transaction=None):
+        if transaction is not None:
+            raise AssertionError('the process-local race must not join a transaction')
         return False
 
 
@@ -1092,7 +1116,7 @@ class PersistentLedgerTest(Fixture, unittest.TestCase):
         runner = self.counting(wire=b'x')
         instances = [self.orchestrator_for(
             workers=(WorkerEndpoint('worker-demo', runner),),
-            on_admitted=lambda permit: barrier.wait(), job_ledger=self.ledger())
+            on_admitted=lambda permit, subject: barrier.wait(), job_ledger=self.ledger())
             for _ in range(2)]
         outcomes = []
 

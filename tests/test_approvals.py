@@ -192,6 +192,18 @@ class UncoveredApprovalRefusalsTest(ApprovalFixture, unittest.TestCase):
         self.assertTrue(store.grant(scope, now=scope.handoff_expires_at - 1,
                                     ttl_seconds=60).token)
 
+    def test_process_local_store_refuses_database_transactions_for_every_mutation(self):
+        scope = self.scope()
+        store = ApprovalStore(token_source=lambda: b't' * 32)
+        transaction = object()
+        with self.assertRaisesRegex(ContractError, 'cannot join'):
+            store.grant(scope, now=101, ttl_seconds=60, transaction=transaction)
+        grant = store.grant(scope, now=101, ttl_seconds=60)
+        with self.assertRaisesRegex(ContractError, 'cannot join'):
+            store.consume(grant.token, scope, now=102, transaction=transaction)
+        with self.assertRaisesRegex(ContractError, 'cannot join'):
+            store.revoke(grant.token, scope, now=102, transaction=transaction)
+
     def test_a_repeated_token_is_refused_rather_than_overwriting_a_record(self):
         """A token source that repeats itself must not silently replace a grant."""
         fixed = b'the-same-token-bytes-every-time!!'
