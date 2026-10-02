@@ -5,12 +5,13 @@ from hashlib import sha256
 from unittest import mock
 
 from geniusnew import database
-from geniusnew.approvals import create_scope
+from geniusnew.approvals import ApprovalStore, create_scope
 from geniusnew.audit import AuditAuthority, event_from_handoff
 from geniusnew.audit_chain import AuditAnchor
 from geniusnew.audit_store import PostgresAuditChain
-from geniusnew.contracts import ContractError, HandoffSigner, issue, validate, validate_pending
-from geniusnew.gateway import ADMISSION_REASON_CODE
+from geniusnew.contracts import (ContractError, HandoffSigner, canonical, issue, validate,
+                                 validate_pending)
+from geniusnew.gateway import ADMISSION_REASON_CODE, Gateway
 from geniusnew.keys import derive_keys
 from geniusnew.orchestrator import Reservation
 from geniusnew.results import WorkerAuthority, handoff_digest, produce
@@ -29,20 +30,25 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
         self.addCleanup(self.connection.close)
         self.acceptance_connection = self.connection
 
-    def start(self, *, requires_approval=False, anchor=None):
+    def start(self, *, requires_approval=False, anchor=None,
+              acceptance_connection=None, audit_connection=None):
         keys = derive_keys(ROOT_SECRET)
         worker_authority = WorkerAuthority(result_key=keys.result_key,
                                            integrity_key=keys.integrity_key)
+        acceptance_connection = (
+            self.acceptance_connection if acceptance_connection is None
+            else acceptance_connection)
+        audit_connection = self.connection if audit_connection is None else audit_connection
         return build(
             root_secret=ROOT_SECRET,
             policy=self.policy_for(requires_approval=requires_approval),
             api_keys={API_KEY: "subject-demo"}, workers=(DeterministicSummarizer(),),
             anchor=AuditAnchor() if anchor is None else anchor, clock=lambda: 1_700_000_000,
             job_ledger=database.PostgresJobLedger(self.connection),
-            acceptance_ledger=database.PostgresAcceptanceLedger(self.acceptance_connection),
+            acceptance_ledger=database.PostgresAcceptanceLedger(acceptance_connection),
             database_connection=self.connection,
             audit_chain_factory=lambda audit: PostgresAuditChain(
-                self.connection, authority=audit),
+                audit_connection, authority=audit),
             runner_factory=lambda worker: WorkerRunner(worker, authority=worker_authority),
         )
 
@@ -67,6 +73,35 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
         self.addCleanup(service.close)
         with self.assertRaisesRegex(ContractError, "PostgreSQL chain"):
             service._recorder.atomic(lambda transaction: None, lambda result: None)
+
+    def test_durable_acceptance_ledger_requires_the_audit_connection(self):
+        foreign = self.db.connect(runtime=True)
+        self.addCleanup(foreign.close)
+        with self.assertRaisesRegex(ContractError, "durable acceptance storage"):
+            self.start(acceptance_connection=foreign)
+
+    def test_durable_audit_chain_requires_the_database_connection(self):
+        foreign = self.db.connect(runtime=True)
+        self.addCleanup(foreign.close)
+        with self.assertRaisesRegex(ContractError, "durable service needs"):
+            self.start(audit_connection=foreign)
+
+    def test_atomic_admission_refuses_a_permit_from_another_gateway(self):
+        service = self.start()
+        self.addCleanup(service.close)
+        admission = service.orchestrator.admit(
+            {"text": "foreign gateway"}, subject="subject-demo",
+            job_id="job-foreign-gateway", policy=service.policy, now=1_700_000_000)
+        foreign_gateway = Gateway(
+            gateway_id="gateway-other", handoff_verifier=service.handoff_verifier,
+            approval_store=ApprovalStore())
+        permit = foreign_gateway.admit(
+            admission.wire, subject="subject-demo", job_id="job-foreign-gateway",
+            policy=service.policy, now=1_700_000_000)
+
+        with self.assertRaisesRegex(ContractError, "service did not wire"):
+            service.orchestrator._atomic_admitted(
+                lambda transaction: (permit, None), "subject-demo")
 
     def test_atomic_audit_rejects_missing_mutation_callback(self):
         service = self.start()
@@ -307,17 +342,127 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
         database.PostgresPendingJobs(
             self.connection, policy=policy, verifier=signer.verifier()).add(
                 job_id, waiting, now=100)
+        unrelated_wire = issue(
+            {"text": "unrelated issuance"}, subject="subject-demo",
+            job_id="job-unrelated-issuance", policy=policy, signer=signer, now=100)
+        unrelated = validate_pending(
+            unrelated_wire, subject="subject-demo", job_id="job-unrelated-issuance",
+            policy=policy, verifier=signer.verifier(), now=100)
+        self.append_issued(
+            unrelated, AuditAuthority(audit_key=derive_keys(ROOT_SECRET).audit_key))
         with self.assertRaisesRegex(ContractError, "audit issuance"):
             self.start(requires_approval=True)
 
     def test_refused_job_without_issuance_event_refuses_start(self):
+        keys = derive_keys(ROOT_SECRET)
+        authority = AuditAuthority(audit_key=keys.audit_key)
+        signer = HandoffSigner(integrity_key=keys.integrity_key)
+        policy = self.policy_for()
+        wire = issue({"text": "unrelated issuance"}, subject="subject-demo",
+                     job_id="job-unrelated-refused", policy=policy,
+                     signer=signer, now=100)
+        handoff = validate(
+            wire, subject="subject-demo", job_id="job-unrelated-refused",
+            policy=policy, verifier=signer.verifier(), now=100)
+        self.append_issued(handoff, authority)
         with self.db.connect() as owner:
             owner.execute(
                 "INSERT INTO public.job_ledger "
                 "(job_id,subject,handoff_sha256,state,created_at,reserved_at,updated_at,expires_at) "
                 "VALUES ('job-unaudited-refused','subject-demo',%s,'REFUSED',100,NULL,110,160)",
                 ("e" * 64,))
-        with self.assertRaisesRegex(ContractError, "audit issuance"):
+        with self.assertRaisesRegex(ContractError, "matching audit issuance"):
+            self.start()
+
+    def test_job_count_exceeding_audit_records_refuses_at_the_count_bound(self):
+        with self.db.connect() as owner:
+            owner.execute(
+                "INSERT INTO public.job_ledger "
+                "(job_id,subject,handoff_sha256,state,created_at,reserved_at,updated_at,expires_at) "
+                "VALUES ('job-without-record','subject-demo',%s,'REFUSED',100,NULL,110,160)",
+                ("f" * 64,))
+        with self.assertRaisesRegex(ContractError, "record-count bound"):
+            self.start()
+
+    def test_approval_count_exceeding_audit_records_refuses_at_the_count_bound(self):
+        signer = HandoffSigner(integrity_key=derive_keys(ROOT_SECRET).integrity_key)
+        policy = self.policy_for(requires_approval=True)
+        wire = issue({"text": "orphan approval"}, subject="subject-demo",
+                     job_id="job-orphan-approval", policy=policy, signer=signer, now=100)
+        scope = create_scope(wire, subject="subject-demo", job_id="job-orphan-approval",
+                             policy=policy, verifier=signer.verifier(), now=100)
+        with self.db.connect() as owner:
+            owner.execute("ALTER TABLE public.approval_records DISABLE TRIGGER ALL")
+            owner.execute(
+                "INSERT INTO public.approval_records "
+                "(token_digest,record_hash,scope,issued_at,expires_at,state,changed_at) "
+                "VALUES (%s,%s,%s,100,160,'GRANTED',100)",
+                ("a" * 64, "b" * 64, canonical(scope.to_dict())))
+        with self.assertRaisesRegex(ContractError, "approval records exceed"):
+            self.start(requires_approval=True)
+
+    def test_acceptance_count_exceeding_audit_records_refuses_at_the_count_bound(self):
+        with self.db.connect() as owner:
+            owner.execute("ALTER TABLE public.acceptance_ledger DISABLE TRIGGER ALL")
+            owner.execute(
+                "INSERT INTO public.acceptance_ledger "
+                "(handoff_sha256,job_id,handoff_wire,result_sha256,result_wire,accepted_at) "
+                "VALUES (%s,'job-without-record',%s,%s,%s,100)",
+                ("a" * 64, b"wire", "b" * 64, b"result"))
+        with self.assertRaisesRegex(ContractError, "acceptance ledger exceeds"):
+            self.start()
+
+    def test_invalid_approval_state_refuses_start(self):
+        keys = derive_keys(ROOT_SECRET)
+        authority = AuditAuthority(audit_key=keys.audit_key)
+        signer = HandoffSigner(integrity_key=keys.integrity_key)
+        wire = issue({"text": "invalid approval state"}, subject="subject-demo",
+                     job_id="job-invalid-approval-state", policy=self.policy_for(),
+                     signer=signer, now=100)
+        handoff = validate(
+            wire, subject="subject-demo", job_id="job-invalid-approval-state",
+            policy=self.policy_for(), verifier=signer.verifier(), now=100)
+        self.append_issued(handoff, authority)
+        with self.db.connect() as owner:
+            owner.execute(
+                "ALTER TABLE public.approval_records "
+                "DROP CONSTRAINT approval_records_state_check")
+            owner.execute("ALTER TABLE public.approval_records DISABLE TRIGGER ALL")
+            owner.execute(
+                "INSERT INTO public.approval_records "
+                "(token_digest,record_hash,scope,issued_at,expires_at,state,changed_at) "
+                "VALUES (%s,%s,%s,100,160,'INVALID',100)",
+                ("c" * 64, "d" * 64, b"{}"))
+        with self.assertRaisesRegex(ContractError, "approval record state is invalid"):
+            self.start()
+
+    def test_duplicate_admission_events_refuse_start(self):
+        keys = derive_keys(ROOT_SECRET)
+        authority = AuditAuthority(audit_key=keys.audit_key)
+        signer = HandoffSigner(integrity_key=keys.integrity_key)
+        policy = self.policy_for()
+        wire = issue({"text": "duplicate admission"}, subject="subject-demo",
+                     job_id="job-duplicate-admission", policy=policy,
+                     signer=signer, now=100)
+        handoff = validate(
+            wire, subject="subject-demo", job_id="job-duplicate-admission",
+            policy=policy, verifier=signer.verifier(), now=100)
+        with self.db.connect() as owner:
+            owner.execute(
+                "INSERT INTO public.job_ledger "
+                "(job_id,subject,handoff_sha256,state,created_at,reserved_at,updated_at,expires_at) "
+                "VALUES ('job-duplicate-admission','subject-demo',%s,'RESERVED',100,100,100,160)",
+                (sha256(wire).hexdigest(),))
+        self.append_issued(handoff, authority)
+        admission = event_from_handoff(
+            handoff, api_subject="subject-demo", trace_id="trace-" + handoff_digest(handoff)[:16],
+            actor=authority.actor("gateway", "gateway-1"),
+            action="HANDOFF_ADMITTED", decision="ALLOWED",
+            reason_code=ADMISSION_REASON_CODE, occurred_at=100)
+        chain = PostgresAuditChain(self.connection, authority=authority)
+        chain.append(admission)
+        chain.append(admission)
+        with self.assertRaisesRegex(ContractError, "audit admissions do not match"):
             self.start()
 
     def test_refused_job_needs_its_terminal_audit_event(self):

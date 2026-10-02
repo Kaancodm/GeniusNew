@@ -156,7 +156,7 @@ class PostgresAuditChain(AuditChain):
                 _, records = self._read(self._connection)
                 if self._connection.execute(
                         "SELECT count(*) FROM public.job_ledger").fetchone()[0] > len(records):
-                    _fail("job ledger has no audit issuance")
+                    _fail("job ledger has no audit issuance (record-count bound exceeded)")
                 jobs = self._connection.execute(
                     "SELECT job_id,subject,handoff_sha256,state,reserved_at,updated_at "
                     "FROM public.job_ledger").fetchall()
@@ -168,7 +168,7 @@ class PostgresAuditChain(AuditChain):
                 for job_id, subject, digest, _, _, _ in jobs:
                     matching = issued.get((_audit_safe(job_id, "job_id"), digest), ())
                     if not matching:
-                        _fail("job ledger has no audit issuance")
+                        _fail("job ledger job has no matching audit issuance")
                     expected_subject = sha256(_subject_bytes(subject)).hexdigest()
                     if any(event.event_version != 2
                            or event.api_subject_sha256 != expected_subject
@@ -222,7 +222,7 @@ class PostgresAuditChain(AuditChain):
                 }
                 if self._connection.execute(
                         "SELECT count(*) FROM public.approval_records").fetchone()[0] > len(records):
-                    _fail("approval records and audit events do not match")
+                    _fail("approval records exceed the audit record-count bound")
                 approval_rows = self._connection.execute(
                     "SELECT record_hash,state,changed_at,"
                     "CASE WHEN octet_length(scope) <= %s THEN scope ELSE NULL END "
@@ -257,7 +257,7 @@ class PostgresAuditChain(AuditChain):
                         _fail("approval receipt does not bind the audited job")
                 if self._connection.execute(
                         "SELECT count(*) FROM public.acceptance_ledger").fetchone()[0] > len(records):
-                    _fail("acceptance ledger and audit result events do not match")
+                    _fail("acceptance ledger exceeds the audit record-count bound")
                 acceptances = self._connection.execute(
                     "SELECT job_id,handoff_sha256,result_sha256,accepted_at "
                     "FROM public.acceptance_ledger").fetchall()
