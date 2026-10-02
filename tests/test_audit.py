@@ -87,6 +87,22 @@ class AuditEventTest(EventFixture, unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ContractError):
                 replace(modern, **{field: value})
 
+    def test_legacy_event_rejects_version_two_bindings(self):
+        legacy = self.event(action='HANDOFF_ADMITTED')
+        with self.assertRaisesRegex(ContractError, 'legacy'):
+            replace(legacy, api_subject_sha256='a' * 64)
+        with self.assertRaisesRegex(ContractError, 'legacy'):
+            replace(legacy, result_sha256='b' * 64)
+
+    def test_version_two_rejects_result_digest_on_non_result_action(self):
+        modern = self.event(action='HANDOFF_ADMITTED', api_subject='subject-demo')
+        with self.assertRaisesRegex(ContractError, 'accepted result'):
+            replace(modern, result_sha256='c' * 64)
+
+    def test_event_factory_rejects_result_digest_without_api_subject(self):
+        with self.assertRaisesRegex(ContractError, 'bound API subject'):
+            self.event(action='RESULT_ACCEPTED', result_sha256='d' * 64)
+
     def test_free_text_cannot_be_smuggled_into_a_reason_code(self):
         for code in (f'LEAKED {PAYLOAD_CANARY}', PAYLOAD_CANARY, 'lowercase', 'HAS SPACE',
                      'TRAILING-DASH', 'A' * 65, '', 1, None):
