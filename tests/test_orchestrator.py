@@ -158,6 +158,26 @@ class OrchestratorTest(Fixture, unittest.TestCase):
         self.assertEqual(handoff.tools, ('summarize',))
         self.assertEqual(handoff.orchestrator_id, 'orchestrator-demo')
 
+    def test_process_local_job_ledger_refuses_database_transactions(self):
+        ledger = ProcessLocalJobLedger()
+        item = Reservation('job-tx', 'subject-demo', 'a' * 64, 160, 100)
+        with self.assertRaisesRegex(ContractError, 'cannot join'):
+            ledger.reserve(item, transaction=object())
+        self.assertTrue(ledger.reserve(item))
+        with self.assertRaisesRegex(ContractError, 'cannot join'):
+            ledger.commit_execution(item, now=110, transaction=object())
+
+    def test_atomic_dispatch_callbacks_are_callable_and_configured_as_a_pair(self):
+        base = dict(orchestrator_id='orchestrator-demo', signer=self.key, gateway=self.gateway,
+                    workers=(self.endpoint,))
+        for field in ('on_dispatched', 'atomic_admitted', 'atomic_dispatched'):
+            with self.subTest(field=field), self.assertRaisesRegex(ContractError, 'callable'):
+                Orchestrator(**base, **{field: object()})
+        with self.assertRaisesRegex(ContractError, 'both boundaries'):
+            Orchestrator(**base, atomic_admitted=lambda *args: None)
+        with self.assertRaisesRegex(ContractError, 'both boundaries'):
+            Orchestrator(**base, atomic_dispatched=lambda *args: None)
+
     def test_non_approval_job_runs_through_gateway_and_selected_worker(self):
         dispatched = self.dispatch(self.wire())
         self.assertIsInstance(dispatched, Dispatch)

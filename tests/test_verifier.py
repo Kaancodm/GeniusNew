@@ -10,7 +10,8 @@ from geniusnew.contracts import (ContractError, Grant, HandoffSigner, Policy, is
 from geniusnew.gateway import Gateway
 from geniusnew.keys import derive_keys
 from geniusnew.results import WorkerAuthority, accept, produce
-from geniusnew.verifier import ACTIONS, REJECTIONS, Acceptance, Rejected, ResultVerifier
+from geniusnew.verifier import (ACTIONS, REJECTIONS, Acceptance, ProcessLocalAcceptanceLedger,
+                                Rejected, ResultVerifier)
 from geniusnew.workers import DeterministicSummarizer, WorkerRunner
 
 ROOT_SECRET = b'a-verifier-test-root-secret-32b!!!!!'
@@ -112,6 +113,12 @@ class Fixture:
 
 class ResultVerifierTest(Fixture, unittest.TestCase):
     """Roadmap step 14: the instance that takes results and ran none of them."""
+
+    def test_process_local_acceptance_ledger_refuses_database_transaction(self):
+        ledger = ProcessLocalAcceptanceLedger()
+        with self.assertRaisesRegex(ContractError, 'cannot join'):
+            ledger.reserve(job_id='job-demo', handoff_wire=self.wire,
+                           result_wire=self.result_for(), now=120, transaction=object())
 
     # --- the path it exists for ---------------------------------------------
 

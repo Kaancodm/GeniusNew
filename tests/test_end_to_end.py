@@ -735,6 +735,11 @@ class PendingJobsTest(unittest.TestCase):
         handoff = type('Handoff', (), {'expires_at': expires_at})()
         return wiring._Waiting('subject-demo', b'wire', handoff, 'trace-x')
 
+    def test_process_local_pending_store_refuses_database_transaction(self):
+        jobs = wiring.PendingJobs()
+        with self.assertRaisesRegex(ContractError, 'cannot join'):
+            jobs.add('job-tx', self.waiting(), now=10, transaction=object())
+
     def test_a_job_id_waits_once(self):
         jobs = wiring.PendingJobs()
         jobs.add('job-1', self.waiting(), now=10)
