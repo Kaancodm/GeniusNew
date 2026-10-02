@@ -1,15 +1,21 @@
 # AGENTS.md — Arbeitsanweisungen für KI-Assistenten
 
-Gilt für jeden Assistenten, der in diesem Repository arbeitet: Claude Code, ChatGPT /
-Codex, GitHub Copilot, Gemini. **Wer was macht, steht in `docs/COLLABORATION.md`:**
-Codex setzt Kerncode um und mergt, Gemini Pro und NotebookLM pflegen `docs/STATUS.md`,
-Kaan entscheidet Ziele und Architektur, ChatGPT übernimmt neue Werkzeuge, Server-Pflege,
-Infrastruktur und erstellt die Datenbank-Dokumentation (`docs/DATABASE.md`) in Kaans
-Auftrag, Claude Code besitzt `docs/COLLABORATION.md` und `docs/DECISIONS.md`, reviewt
-den DB-Entwurf und DB-Code sicherheitstechnisch, sorgt für Ordnung und Struktur, löst
-Konflikte zwischen den Plattformen (mit Überschreibrecht) und hilft bei einem Hilferuf.
-Kurzfassung für Copilot: `.github/copilot-instructions.md`. Aktueller Projektstand:
-`docs/STATUS.md`.
+Gilt für jeden Assistenten, der in diesem Repository arbeitet: ChatGPT, Cursor, Kiro,
+Claude Code, Grok, Gemini, GitHub Copilot und jedes weitere Werkzeug. **Wer was macht,
+steht in `docs/COLLABORATION.md`** (Rollenmodell vom 02.10.2026, `docs/DECISIONS.md`):
+Kaan ist die einzige finale Entscheidungsinstanz. ChatGPT ist Lead Architect und
+Dispatcher, zerlegt Aufgaben und weist je Branch genau einen schreibenden
+Implementierer zu; außerdem Server, Infrastruktur, Integrationen und `docs/DATABASE.md`
+in Kaans Auftrag. Cursor ist Default-Implementierer für normale Code-Aufgaben, Codex
+(ChatGPT Pro) bleibt voll nutzbarer Implementierer, bevorzugt für komplexen Kerncode,
+repo-weite Refactors und schwierige TDD-/Debugging-Aufgaben oder wenn Cursor belegt
+ist; Kiro schreibt Specs und übernimmt schwierige Bugfixes. Claude Code reviewt Security, Datenbank und Architektur
+am exakten Head, besitzt `docs/COLLABORATION.md` und `docs/DECISIONS.md` und löst
+Konflikte zwischen den Plattformen (mit Überschreibrecht). Grok prüft adversarial,
+Gemini prüft Evidenz und Konsistenz und pflegt mit NotebookLM `docs/STATUS.md`, Copilot
+reviewt jeden PR. **Ein Task = ein Branch/Worktree = ein schreibender Implementierer**;
+Reviewer prüfen read-only. Kurzfassung für Copilot: `.github/copilot-instructions.md`.
+Aktueller Projektstand: `docs/STATUS.md`.
 
 ## Was das ist
 
@@ -43,8 +49,13 @@ bestanden melden.
 
 ## Evidenz
 
-- Vor Änderungen Remote, Branch, vollen SHA und lokale Änderungen prüfen. Pro Aufgabe
-  ein eigener Branch, kein Direkt-Push auf `main`, **ein Implementierer je Branch**.
+- Vor Änderungen Remote, Branch, vollen SHA und lokale Änderungen prüfen. Kein
+  Direkt-Push auf `main`. **1 Task = 1 Branch/Worktree = 1 schreibender
+  Implementierer**, zugewiesen im GitHub-Issue oder PR; ohne Zuweisung schreibt
+  niemand. Beliebig viele Reviewer dürfen denselben exakten Head read-only prüfen.
+- Kein Werkzeug wird nur eingesetzt, um ein Abo auszulasten; jeder Einsatz braucht eine
+  Rolle aus `docs/COLLABORATION.md` und einen Evidenznutzen. Keine zweite Roadmap, kein
+  eigenes Task-System, keine Runtime-Orchestrierung nur für die Werkzeuge.
 - Code, tatsächlicher Diff, Tests und CI am angegebenen Commit belegen den Stand.
   Roadmaps, Notebooks, Prompts und Quellenexporte sind Kontext und können veraltet sein.
 - Übergaben und Reviews an volle Commit-SHAs binden; nicht Prüfbares als `UNKNOWN`.
@@ -83,14 +94,23 @@ bestanden melden.
 - Klein schneiden: ein Thema pro PR, als Draft. Ein PR, der älter als etwa zwei Tage
   wird, ist zu groß.
 - Vor dem Push: Tests, Demo und Refusal-Guard für die geänderten Module lokal grün.
-- Mergen: Codex mergt eigene PRs selbst, sobald `contracts` grün ist und kein
-  blockierender Review-Befund offen ist. Ausnahmen mit Kaans ausdrücklichem OK: neue
-  Abhängigkeit, eine Grenze aus `SECURITY.md` wird geändert, Tags. Gemini mergt seinen
-  Wissens-PR (`gemini/wissen-*`, nur `docs/STATUS.md`) selbst bei grüner CI.
-  **DB-Code-PRs** (Codex) brauchen zusätzlich `Claude DB Review: APPROVED` am exakten
-  Head-SHA; `docs/DATABASE.md` erstellt ChatGPT im Auftrag von Kaan, Claude reviewt den
-  Entwurf sicherheitstechnisch, Kaan entscheidet offene Punkte und gibt frei. ChatGPT-
-  und Claude-eigene PRs mergt Kaan; keines der beiden mergt selbst.
+- **Ein Task = ein Branch/Worktree = ein schreibender Implementierer.** ChatGPT weist
+  ihn zu, an Cursor (Default) oder Codex (komplexer Kerncode, repo-weite Refactors,
+  schwierige TDD-/Debugging-Aufgaben, oder Cursor ist belegt); die Zuweisung an Codex
+  ist keine Selbstfreigabe. Ein zweites Werkzeug arbeitet nie parallel am selben Task
+  oder Branch; Cursor und Codex bauen nie denselben Task. Kein Twin-/A-B-Bau vor der
+  Beta, auch nicht zur Qualitätssteigerung. Beliebig viele Reviewer dürfen denselben
+  exakten Head read-only prüfen.
+- Mergen: Kaan mergt, sobald `contracts` grün ist, der Wissensblock ausgefüllt ist und
+  kein blockierender Review-Befund offen ist. Kein Werkzeug mergt eigene oder
+  zugewiesene PRs selbst, auch Codex nicht mehr; einzige Ausnahme: Gemini mergt
+  seinen Wissens-PR (`gemini/wissen-*`, nur `docs/STATUS.md`) selbst bei grüner CI.
+  Ausnahmen mit Kaans
+  ausdrücklichem OK und vorherigem Gemini-Sicherheits-Review: neue Abhängigkeit, eine
+  Grenze aus `SECURITY.md` wird geändert, Tags. **DB-Code-PRs** brauchen zusätzlich
+  `Claude DB Review: APPROVED` am exakten Head-SHA, gleich welcher Implementierer sie
+  schreibt; `docs/DATABASE.md` erstellt ChatGPT im Auftrag von Kaan, Claude reviewt den
+  Entwurf sicherheitstechnisch, Kaan entscheidet offene Punkte und gibt frei.
 - `docs/STATUS.md` schreibt nur Gemini, `docs/COLLABORATION.md` und
   `docs/DECISIONS.md` nur Claude Code (Ausnahme bei Konflikten: siehe
   `docs/COLLABORATION.md`). Wer etwas zum Stand beiträgt, schreibt es in den
@@ -105,7 +125,7 @@ bestanden melden.
 | Projektstand und nächste Schritte (Wissensdatenbank) | `docs/STATUS.md` |
 | Entscheidungen mit Datum und Begründung (Wissensdatenbank) | `docs/DECISIONS.md` |
 | Datenbank im Code: Design, Schema, Vorgaben (Entwurf: ChatGPT im Auftrag von Kaan) | `docs/DATABASE.md` (entsteht), `docs/COLLABORATION.md` |
-| Wer macht was, Ablauf, Konflikte und Hilferuf an Claude | `docs/COLLABORATION.md` |
+| Wer macht was (Rollenmodell), Ablauf, Konflikte und Hilferuf an Claude | `docs/COLLABORATION.md` |
 | Gemini: Kontext und Review-Maßstab | `GEMINI.md`, `.gemini/styleguide.md` |
 | Übergabe-Prompts zwischen Werkzeugen | `docs/HANDOVER.md` |
 | Roadmap v0.1 mit Status je Schritt | `docs/ROADMAP-V01.md` |
