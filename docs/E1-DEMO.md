@@ -8,7 +8,8 @@ keine produktiven Zugangsdaten und keinen öffentlich erreichbaren Endpunkt.
 Dienst. `./scripts/demo.sh` bleibt die kurze HTTP-Demo ohne Datenbank:
 
 1. Ein abgeschlossener Job wird nach Neustart mit derselben Kennung erneut
-   eingereicht. Der Dienst lehnt ihn ab und führt den Worker nicht nochmals aus.
+   eingereicht; zusätzlich wird sein tatsächlich signiertes Ergebnis erneut
+   vorgelegt. Der Dienst lehnt beides ab und führt den Worker nicht nochmals aus.
 2. Ein wartender Job wird durch SQL als Datenbank-Owner aus `pending_jobs` und
    `job_ledger` entfernt. Beim Neustart verweigert der Dienst den Zustand, weil
    das signierte `HANDOFF_ISSUED`-Event keine Ledger-Zeile mehr hat.
