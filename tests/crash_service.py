@@ -9,7 +9,8 @@ A boundary is any point where the process could die between two durable effects:
 around each audit append, around each anchor acknowledgement, inside the
 transaction after its mutation, and either side of the worker. A dry run
 (`GENIUSNEW_CRASH_AT=0`) records every crossing together with the state a
-second connection can see at that moment. That committed state is exactly what
+second connection can see at that moment and whether the operator already holds
+the approval token. That committed state is exactly what
 a crash leaves behind, so the test needs one kill per distinct state, and
 a boundary added to the flow later is found without editing a list here.
 
@@ -42,6 +43,9 @@ CRASH_JOB_ID = "job-" + "b7" * 16
 FRESH_JOB_ID = "job-" + "f0" * 16
 CRASH_TEXT = "b7 crash job"
 FRESH_TEXT = "b7 fresh job"
+# Information that left the process. Two crashes in the same committed state are
+# still different if the operator did or did not receive the approval token.
+DELIVERED = {"token": 0}
 
 
 class Clock:
@@ -171,7 +175,8 @@ def observer(dsn: str, log_path: str, anchor):
             "(SELECT coalesce(string_agg(state, ',' ORDER BY job_id), '') FROM job_ledger), "
             "(SELECT count(*) FROM approval_records), (SELECT count(*) FROM pending_jobs), "
             "(SELECT count(*) FROM acceptance_ledger)").fetchone()
-        return [*row, anchor.committed[0], executions(log_path, CRASH_TEXT)]
+        return [*row, anchor.committed[0], executions(log_path, CRASH_TEXT),
+                DELIVERED["token"]]
 
     return observe, connection
 
@@ -240,6 +245,8 @@ def main() -> int:
     dsn = environment["GENIUSNEW_CRASH_DSN"]
 
     def announce(event: dict) -> None:
+        if event["event"] == "token":
+            DELIVERED["token"] = 1
         print(json.dumps(event), flush=True)
 
     service, connection = build_service(

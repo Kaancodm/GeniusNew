@@ -145,9 +145,9 @@ startet der Test den Dienst auf dem Hinterlassenen neu.
 Die Kill-Punkte stehen nicht in einer Liste. Ein Trockenlauf zeichnet jede
 Grenzüberschreitung auf (vor und nach jedem Audit-Append, in der Transaktion nach
 der Mutation, vor und nach jeder Anker-Bestätigung, vor und nach dem Worker) und
-dazu den **committeten** Zustand, den eine zweite Verbindung in diesem Moment sieht.
-Nur dieser Zustand bleibt nach einem Absturz übrig; jeder verschiedene Zustand wird
-deshalb einmal getroffen. Eine später hinzukommende Grenze wird ohne Änderung des
+dazu den **committeten** Zustand, den eine zweite Verbindung in diesem Moment sieht,
+und ob der Betreiber den Approval-Token schon erhalten hat. Nur das bleibt nach einem
+Absturz übrig; jede verschiedene Kombination wird deshalb einmal getroffen. Eine später hinzukommende Grenze wird ohne Änderung des
 Tests erfasst. Drei Abläufe: ein Job ohne Approval, ein Job mit Approval
 (Antrag, Freigabe, Verbrauch, Ausführung) und ein wartender Job, der abläuft und
 dauerhaft abgelehnt wird.
@@ -159,8 +159,26 @@ verifiziert gegen ihn. Der Job lief höchstens einmal und nie ohne seine
 erneut angesteuert wird: Eine verbrannte ID wird mit `JOB_ID_REUSED` abgelehnt, ein
 angenommenes Ergebnis ein zweites Mal nicht angenommen, ein Approval-Token nicht
 zweimal verbraucht. Admission, Dispatch und Annahme des Jobs stehen höchstens einmal in
-der Kette, ein abgelaufener Job endet genau einmal als `REFUSED`, und der Dienst nimmt danach einen neuen Job an
+der Kette, ein abgelaufener Job endet genau einmal als `REFUSED`, ein noch wartender
+Job bleibt abschließbar (siehe unten), und der Dienst nimmt danach einen neuen Job an
 und führt ihn aus.
+
+**Verlorener Token.** Stirbt der Dienst nach dem committeten `APPROVAL_GRANTED`, bevor
+der Betreiber den Token erhält, ist der Token verloren: Gespeichert ist nur sein
+Digest. Die Recovery-Regel lautet, den wartenden Job erneut mit `Service.approve`
+freizugeben. Das stellt einen zweiten Token für denselben Job aus; der erste Record
+bleibt bis zum Ablauf `GRANTED`, kann aber nie abgeschlossen werden, weil niemand
+seinen Token kennt. Hielte ihn doch jemand, entscheidet der atomare Verbrauch des Jobs:
+Der Token, der zuerst kommt, schließt den Job einmal ab, der andere wird abgelehnt
+(`RegrantTest`, beide Reihenfolgen). Der Test belegt an jedem Kill-Punkt, dass ein
+wartender Job auf diesem Weg abgeschlossen wird.
+
+**Offene Grenze.** Pro Job können mehrere `GRANTED`-Records nebeneinander bestehen.
+„Genau eine Entscheidung“ gilt für den Verbrauch des Jobs, nicht für das Ausstellen von
+Tokens. Eine Sperre „ein Grant je Job“, etwa in C3 (Freigebenden-Route), würde diese
+Recovery verhindern. Sie braucht dann einen eigenen Weg, einen verlorenen Token zu
+ersetzen, zum Beispiel den alten Record atomar zu widerrufen und einen neuen
+auszustellen. Das ist eine Entscheidung für C3 und kein Nebeneffekt.
 
 Grenzen dieses Nachweises: Getötet wird der Dienstprozess, nicht der Rechner und
 nicht PostgreSQL; die Dauerhaftigkeit eines `COMMIT` bleibt Sache von PostgreSQL.

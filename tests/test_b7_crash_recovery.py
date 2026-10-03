@@ -10,12 +10,23 @@ behind and requires, at every boundary:
   row, even when the same id is driven again after the restart;
 - a result is accepted at most once, an approval token is spent at most once,
   and no audit event of the job appears twice;
+- a job that was still waiting can still be completed: with the token the operator
+  already holds, or, if the crash cost the operator the token, by approving the
+  job again;
 - the service still takes and completes a new job.
 
 The boundaries are not listed here. A dry run records every crossing with the
-state a second connection sees, and each distinct committed state is killed once,
-because that state is all a crash leaves behind. A boundary added to the flow
+state a second connection sees and whether the operator already holds the approval
+token, and each distinct combination is killed once: the committed state, and what
+reached the outside, is all a crash leaves behind. A boundary added to the flow
 later is therefore covered without touching this file.
+
+Recovery rule for a lost token: the operator approves the waiting job again. That
+issues a second token for the same job and leaves the first record GRANTED until
+it expires. The decision is made when the job is consumed, so whichever token
+comes first completes the job once and the other is refused
+(`RegrantTest`). Allowing a second grant is a property C3 has to keep or replace
+deliberately; it is not a side effect.
 """
 
 import json
@@ -42,7 +53,7 @@ BURNED = ("RESERVED", "EXECUTION_COMMITTED", "COMPLETED")
 ONCE_PER_JOB = ("HANDOFF_ADMITTED", "EXECUTION_DISPATCHED", "RESULT_ACCEPTED")
 WORKERS = max(1, min(4, os.cpu_count() or 1))
 # state = [chain records, signed heads, job states, approval records, pending
-# rows, acceptances, anchored count, executions]
+# rows, acceptances, anchored count, executions, approval token delivered]
 DB_AHEAD = {"ahead of the anchor": lambda state: state[0] > state[6]}
 REACHED = {
     "direct": {
@@ -56,8 +67,10 @@ REACHED = {
     },
     "approval": {
         **DB_AHEAD,
-        "PENDING_APPROVAL with a grant":
-            lambda state: state[2] == "PENDING_APPROVAL" and state[3] == 1,
+        "PENDING_APPROVAL with a grant the operator never received":
+            lambda state: state[2] == "PENDING_APPROVAL" and state[3] == 1 and state[8] == 0,
+        "PENDING_APPROVAL with a grant the operator holds":
+            lambda state: state[2] == "PENDING_APPROVAL" and state[3] == 1 and state[8] == 1,
         "RESERVED": lambda state: state[2] == "RESERVED",
         "EXECUTION_COMMITTED after the worker ran":
             lambda state: state[2] == "EXECUTION_COMMITTED" and state[7] == 1,
@@ -265,14 +278,28 @@ def check(service, db, log_path, events, mode):
         if actions()["HANDOFF_REJECTED"] != 1:
             problems.append(f"the expired job has {actions()['HANDOFF_REJECTED']} "
                             "rejection events instead of one")
-    if mode == "approval" and "token" in announced:
-        token = bytes.fromhex(announced["token"]["token"])
-        first = harness.complete(service, harness.CRASH_JOB_ID, token)
-        second = harness.complete(service, harness.CRASH_JOB_ID, token)
-        if before in BURNED and first.status == 202:
-            problems.append(f"a token was spent again for a job that was already {before}")
-        if second.status == 202:
-            problems.append("the same approval token completed a job twice")
+    if mode == "approval":
+        token = None
+        if "token" in announced:
+            token = bytes.fromhex(announced["token"]["token"])
+        elif before == "PENDING_APPROVAL":
+            # The crash cost the operator the token. The recovery rule is to
+            # approve the waiting job again, so no waiting job is lost.
+            try:
+                token = service.approve(harness.CRASH_JOB_ID)
+            except ContractError as refusal:
+                problems.append(f"a waiting job could not be approved again: {refusal}")
+        if token is not None:
+            first = harness.complete(service, harness.CRASH_JOB_ID, token)
+            second = harness.complete(service, harness.CRASH_JOB_ID, token)
+            if before in BURNED and first.status == 202:
+                problems.append(f"a token was spent again for a job that was already {before}")
+            if before == "PENDING_APPROVAL" and (
+                    first.status != 202 or first.body.get("status") != "SUCCEEDED"
+                    or ran() != 1):
+                problems.append("a waiting job was lost: its approval did not complete it")
+            if second.status == 202:
+                problems.append("the same approval token completed a job twice")
     problems += safe()
 
     try:
@@ -315,6 +342,48 @@ class CrashRecoveryTest(unittest.TestCase):
 
     def test_a_pending_job_that_expires_is_refused_once_whatever_the_kill(self):
         self.exercise("expired")
+
+
+class RegrantTest(unittest.TestCase):
+    """A waiting job with two live tokens is decided once, whichever token comes first."""
+
+    def run_order(self, new_token_first):
+        db = PostgresDatabase()
+        try:
+            database.migrate(db.owner_dsn)
+            with tempfile.TemporaryDirectory() as directory:
+                log_path = os.path.join(directory, "exec.log")
+                service, connection = harness.build_service(
+                    db.runtime_dsn, os.path.join(directory, "anchor.state"), log_path,
+                    requires_approval=True, job_id=harness.CRASH_JOB_ID)
+                try:
+                    body = json.dumps({"text": harness.CRASH_TEXT}).encode()
+                    waiting = service.entry.handle(
+                        method="POST", path="/jobs", headers=harness.headers(), body=body)
+                    self.assertEqual(waiting.body["status"], "PENDING_APPROVAL")
+                    lost = service.approve(harness.CRASH_JOB_ID)
+                    again = service.approve(harness.CRASH_JOB_ID)
+                    self.assertNotEqual(lost, again)
+                    first, second = (again, lost) if new_token_first else (lost, again)
+                    won = harness.complete(service, harness.CRASH_JOB_ID, first)
+                    refused = harness.complete(service, harness.CRASH_JOB_ID, second)
+                    self.assertEqual((won.status, won.body["status"]), (202, "SUCCEEDED"))
+                    self.assertEqual(refused.status, 409)
+                    self.assertEqual(harness.executions(log_path, harness.CRASH_TEXT), 1)
+                    records = service.chain.records
+                    self.assertEqual(verify(records, service.head(), authority=service.audit,
+                                            anchor=service.anchor), len(records))
+                finally:
+                    service.close()
+                    connection.close()
+        finally:
+            db.close()
+
+    def test_the_new_token_first_completes_the_job_and_the_lost_one_is_refused(self):
+        self.run_order(new_token_first=True)
+
+    def test_the_old_token_first_completes_the_job_and_the_new_one_is_refused(self):
+        self.run_order(new_token_first=False)
 
 
 if __name__ == "__main__":
