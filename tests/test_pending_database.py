@@ -168,23 +168,37 @@ class DurablePendingTest(ApprovalFixture, unittest.TestCase):
         self.add(pending)
         scope = self.scope()
         first = approvals.grant(scope, now=101, ttl_seconds=60)
-        second = approvals.grant(scope, now=101, ttl_seconds=60)
+        # The runtime now refuses a second active grant. An owner can still
+        # fabricate the old corruption pattern, which startup must catch.
+        second_token = b"second-owner-inserted-approval-token"
+        second_digest = hashlib.sha256(second_token).hexdigest()
+        second_hash = _record_hash(
+            token_digest=bytes.fromhex(second_digest), scope=scope,
+            issued_at=101, expires_at=160, state="GRANTED", changed_at=101,
+            previous_hash=None)
+        with self.db.connect() as owner:
+            owner.execute(
+                "INSERT INTO public.approval_records "
+                "(token_digest,record_hash,scope,issued_at,expires_at,state,"
+                "changed_at,previous_hash) VALUES (%s,%s,%s,101,160,'GRANTED',101,NULL)",
+                (second_digest, second_hash, canonical(scope.to_dict())))
+            owner.execute("INSERT INTO public.approval_tokens VALUES (%s,%s)",
+                          (second_digest, second_hash))
         approvals.consume(first.token, scope, now=102, subject="subject-demo")
-        digest = hashlib.sha256(second.token).hexdigest()
         record_hash = _record_hash(
-            token_digest=bytes.fromhex(digest), scope=scope,
-            issued_at=second.issued_at, expires_at=second.expires_at,
+            token_digest=bytes.fromhex(second_digest), scope=scope,
+            issued_at=101, expires_at=160,
             state="CONSUMED", changed_at=102,
-            previous_hash=second.record_hash)
+            previous_hash=second_hash)
         with self.db.connect() as owner:
             owner.execute(
                 "INSERT INTO public.approval_records "
                 "(token_digest,record_hash,scope,issued_at,expires_at,state,"
                 "changed_at,previous_hash) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                (digest, record_hash, canonical(scope.to_dict()), second.issued_at,
-                 second.expires_at, "CONSUMED", 102, second.record_hash))
+                (second_digest, record_hash, canonical(scope.to_dict()), 101,
+                 160, "CONSUMED", 102, second_hash))
             owner.execute("UPDATE public.approval_tokens SET current_record_hash=%s "
-                          "WHERE token_digest=%s", (record_hash, digest))
+                          "WHERE token_digest=%s", (record_hash, second_digest))
         with self.assertRaisesRegex(ContractError, "consumed approval.*reserved job"):
             database.PostgresApprovalStore(self.connection)
 
