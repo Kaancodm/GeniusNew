@@ -38,10 +38,11 @@ service to a job it does not own, or replay a name. The entrance mints one from
 
 ## Approval travels as a header, not as a field
 
-An approval-bound job takes two requests, because a one-time approval is bound
+An approval-bound job takes three requests, because a one-time approval is bound
 to one signed wire and that wire has to exist before anyone can approve it.
-`POST /jobs` answers `PENDING_APPROVAL`; the token is granted server-side and
-handed to the client out of band; `POST /jobs/<job_id>/approve` presents it in
+`POST /jobs` answers `PENDING_APPROVAL`; a server-configured approver obtains
+the token via `POST /approvals/<job_id>/grant` and passes it to the job owner.
+`POST /jobs/<job_id>/approve` presents it in
 `X-Approval-Token` with a body of exactly `{}`. The token is a capability, not
 payload, so it stays out of the one-field body — and an approval request that
 carries anything else in its body is refused like any other extra field.
@@ -95,6 +96,7 @@ _MIN_KEY_BYTES = 16
 _CONTENT_TYPE = "application/json"
 _PATH = "/jobs"
 _APPROVE_PATH = re.compile(r"\A/jobs/([A-Za-z0-9-]{1,64})/approve\Z")
+_GRANT_PATH = re.compile(r"\A/approvals/([A-Za-z0-9-]{1,64})/grant\Z")
 _APPROVAL_TOKEN = re.compile(r"\A[0-9a-f]{64}\Z")
 _METHOD = "POST"
 _AUTH_SCHEME = "Bearer "
@@ -206,6 +208,10 @@ class PrincipalRegistry:
             return None
         return self._table.get(digest)
 
+    @property
+    def subjects(self) -> frozenset[str]:
+        return frozenset(principal.subject for principal in self._table.values())
+
     def __len__(self) -> int:
         return len(self._table)
 
@@ -289,6 +295,7 @@ class HttpEntry:
                  job_ids: Callable[[], str] | None = None,
                  max_body_bytes: int = _MAX_BODY_BYTES,
                  complete: Callable[..., Mapping[str, Any]] | None = None,
+                 grant_approval: Callable[..., Mapping[str, Any]] | None = None,
                  rate_per_minute: int = _RATE_PER_MINUTE, burst: int = _BURST,
                  max_in_flight: int = _MAX_IN_FLIGHT,
                  clock: Callable[[], float] | None = None) -> None:
@@ -298,6 +305,8 @@ class HttpEntry:
             _fail("submit must be callable")
         if complete is not None and not callable(complete):
             _fail("complete must be callable")
+        if grant_approval is not None and not callable(grant_approval):
+            _fail("grant_approval must be callable")
         if job_ids is not None and not callable(job_ids):
             _fail("job_ids must be callable")
         if type(max_body_bytes) is not int or not 0 < max_body_bytes <= _MAX_BODY_BYTES:
@@ -314,6 +323,7 @@ class HttpEntry:
         self._registry = registry
         self._submit = submit
         self._complete = complete
+        self._grant_approval = grant_approval
         self._job_ids = job_ids or (lambda: f"job-{secrets.token_hex(16)}")
         self._max_body_bytes = max_body_bytes
 
@@ -324,11 +334,14 @@ class HttpEntry:
         if not isinstance(headers, Mapping):
             return _refusal(400, "MALFORMED_REQUEST")
         approving = _APPROVE_PATH.match(path)
+        granting = _GRANT_PATH.match(path)
         # Without a completion callback the route does not exist, and says so
         # the same way any other unknown path does.
         if approving is not None and self._complete is None:
             return _refusal(404, "NOT_FOUND")
-        if path != _PATH and approving is None:
+        if granting is not None and self._grant_approval is None:
+            return _refusal(404, "NOT_FOUND")
+        if path != _PATH and approving is None and granting is None:
             return _refusal(404, "NOT_FOUND")
         if method != _METHOD:
             return _refusal(405, "METHOD_NOT_ALLOWED")
@@ -354,6 +367,9 @@ class HttpEntry:
         # this caller's budget, not everyone's.
         if not self._buckets.take(principal.subject):
             return _refusal(429, "TOO_MANY_REQUESTS")
+
+        if granting is not None:
+            return self._grant(principal, granting.group(1), body)
 
         if approving is not None:
             return self._approve(principal, approving.group(1), body,
@@ -413,6 +429,16 @@ class HttpEntry:
             return _refusal(400, "MALFORMED_REQUEST")
         return self._call(self._complete, job_id, subject=principal.subject,
                           job_id=job_id, approval_token=bytes.fromhex(token))
+
+    def _grant(self, principal: Principal, job_id: str, body: bytes) -> Response:
+        try:
+            empty = json.loads(body.decode("utf-8")) == {}
+        except (UnicodeDecodeError, ValueError, RecursionError):
+            empty = False
+        if not empty:
+            return _refusal(400, "MALFORMED_REQUEST")
+        return self._call(self._grant_approval, job_id, subject=principal.subject,
+                          job_id=job_id)
 
     def _call(self, target: Callable[..., Any], minted: str, **arguments: Any) -> Response:
         if not self._in_flight.acquire(blocking=False):

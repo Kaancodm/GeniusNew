@@ -44,12 +44,12 @@ a decision it can make itself.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from threading import Lock
 from typing import Any, Callable, Iterable, Mapping
 
 from .anchor_process import AnchorProcess
-from .approvals import ApprovalStore, create_scope
+from .approvals import ApprovalStore, ApproverPolicy, create_scope
 from .audit import AuditAuthority, AuditEvent, event_from_handoff
 from .audit_chain import AuditAnchor, AuditChain
 from .contracts import (ContractError, HandoffSigner, HandoffVerifier, Policy, validate,
@@ -66,7 +66,7 @@ from .workers import Worker, WorkerRunner
 
 _TRACE_PREFIX = "trace-"
 _MAX_PENDING = 1000
-_APPROVAL_TTL_SECONDS = 60
+_APPROVAL_TTL_SECONDS = 30
 _PENDING_EXPIRED = "PENDING_APPROVAL_EXPIRED"
 _PENDING_DISPATCH_REFUSED = "PENDING_DISPATCH_REFUSED"
 
@@ -81,6 +81,7 @@ class _Waiting:
     wire: bytes
     handoff: Any
     trace_id: str
+    decision_expires_at: int = 0
 
 
 class PendingJobs:
@@ -115,6 +116,25 @@ class PendingJobs:
         if waiting is None:
             _fail("no job is waiting for approval under this id")
         return waiting
+
+    def decide(self, job_id: str, *, approver_user_id: str,
+               grant: Callable[[_Waiting], bytes], now: int,
+               ttl_seconds: int) -> bytes:
+        if type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 600:
+            _fail("ttl_seconds must be between 1 and 600")
+        with self._lock:
+            waiting = self._jobs.get(job_id)
+            if waiting is None:
+                _fail("no job is waiting for approval under this id")
+            if waiting.handoff.user_id == approver_user_id:
+                _fail("an approver cannot grant its own job")
+            if waiting.decision_expires_at > now:
+                _fail("this job already has an active approval decision")
+            # A lost response cannot be replayed; an expired capability may be
+            # replaced while the handoff is still valid.
+            self._jobs[job_id] = replace(
+                waiting, decision_expires_at=min(now + ttl_seconds, waiting.handoff.expires_at))
+            return grant(waiting)
 
     def take(self, job_id: str, subject: str) -> _Waiting:
         """Remove the job for its own subject. Anyone else gets the same refusal."""
@@ -210,48 +230,53 @@ class Service:
     keys: ServiceKeys
     handoff_verifier: HandoffVerifier
     approvals: ApprovalStore
+    approver_policy: ApproverPolicy
     pending: PendingJobs
     clock: Callable[[], int]
     _recorder: _AnchoredAudit
 
-    def approve(self, job_id: str, *, ttl_seconds: int = _APPROVAL_TTL_SECONDS) -> bytes:
-        """Grant the one-time approval for a job waiting over HTTP.
+    def approve(self, job_id: str, *, approver_subject: str | None = None,
+                ttl_seconds: int = _APPROVAL_TTL_SECONDS) -> bytes:
+        """Grant a waiting job only to a configured, distinct approver identity."""
+        approver_user_id = self.approver_policy.user_id(approver_subject)
 
-        Server-side only, and deliberately without an HTTP route: who may
-        approve is a decision about people, and v0.1 has no principal type for
-        an approver. The token reaches the client out of band and comes back on
-        `POST /jobs/<job_id>/approve`, where the gateway consumes it once.
-        """
-        waiting = self.pending.peek(job_id)
-        now = self.clock()
-        if getattr(self.pending, "durable", False) and now >= waiting.handoff.expires_at:
-            _atomic_pending_refusal(
-                recorder=self._recorder, pending=self.pending, waiting=waiting,
-                job_id=job_id, subject=waiting.subject, now=now,
-                component="gateway", instance_id=self.gateway.gateway_id,
-                reason_code=_PENDING_EXPIRED)
-        scope = create_scope(waiting.wire, subject=waiting.subject, job_id=job_id,
-                             policy=self.policy, verifier=self.handoff_verifier,
-                             now=now)
-        def grant_event(grant):
-            return event_from_handoff(
-                waiting.handoff, trace_id=waiting.trace_id,
-                actor=self.audit.actor("gateway", self.gateway.gateway_id),
-                action="APPROVAL_GRANTED", decision="ALLOWED",
-                reason_code="OPERATOR_APPROVED", occurred_at=now,
-                approval_record_hash=grant.record_hash,
-                api_subject=waiting.subject)
+        def grant(waiting: _Waiting) -> bytes:
+            if waiting.handoff.user_id == approver_user_id:
+                _fail("an approver cannot grant its own job")
+            now = self.clock()
+            if getattr(self.pending, "durable", False) and now >= waiting.handoff.expires_at:
+                _atomic_pending_refusal(
+                    recorder=self._recorder, pending=self.pending, waiting=waiting,
+                    job_id=job_id, subject=waiting.subject, now=now,
+                    component="gateway", instance_id=self.gateway.gateway_id,
+                    reason_code=_PENDING_EXPIRED)
+            scope = create_scope(waiting.wire, subject=waiting.subject, job_id=job_id,
+                                 policy=self.policy, verifier=self.handoff_verifier,
+                                 now=now)
+
+            def grant_event(issued):
+                return event_from_handoff(
+                    waiting.handoff, trace_id=waiting.trace_id,
+                    actor=self.audit.actor("gateway", self.gateway.gateway_id),
+                    action="APPROVAL_GRANTED", decision="ALLOWED",
+                    reason_code="OPERATOR_APPROVED", occurred_at=now,
+                    approval_record_hash=issued.record_hash,
+                    api_subject=approver_subject)
+
+            if getattr(self.pending, "durable", False):
+                issued = self._recorder.atomic(
+                    lambda transaction: self.approvals.grant(
+                        scope, now=now, ttl_seconds=ttl_seconds,
+                        transaction=transaction), grant_event)
+            else:
+                issued = self.approvals.grant(scope, now=now, ttl_seconds=ttl_seconds)
+                self._recorder.append(grant_event(issued))
+            return issued.token
 
         if getattr(self.pending, "durable", False):
-            grant = self._recorder.atomic(
-                lambda transaction: self.approvals.grant(
-                    scope, now=now, ttl_seconds=ttl_seconds,
-                    transaction=transaction),
-                grant_event)
-        else:
-            grant = self.approvals.grant(scope, now=now, ttl_seconds=ttl_seconds)
-            self._recorder.append(grant_event(grant))
-        return grant.token
+            return grant(self.pending.peek(job_id))
+        return self.pending.decide(job_id, approver_user_id=approver_user_id,
+                                   grant=grant, now=self.clock(), ttl_seconds=ttl_seconds)
 
     def head(self):
         """The signed chain head, committed to the anchor."""
@@ -266,6 +291,7 @@ class Service:
 def build(*, root_secret: bytes, policy: Policy,
           workers: Iterable[Worker], api_keys: Mapping[bytes, str] | None = None,
           principals: Mapping[str, str] | None = None,
+          approvers: Mapping[str, str] | None = None,
           clock: Callable[[], int] | None = None,
           gateway_id: str = "gateway-1", verifier_id: str = "verifier-1",
           job_ids: Callable[[], str] | None = None,
@@ -312,6 +338,11 @@ def build(*, root_secret: bytes, policy: Policy,
     limits = limits or HttpLimits()
     if not isinstance(policy, Policy):
         _fail("policy is invalid")
+    registry = (PrincipalRegistry.from_api_keys(api_keys) if api_keys is not None
+                else PrincipalRegistry(principals))
+    approver_policy = ApproverPolicy(
+        {} if approvers is None else approvers, policy=policy,
+        principal_subjects=registry.subjects)
     keys = derive_keys(root_secret)
     if clock is not None and not callable(clock):
         _fail("clock must be callable")
@@ -419,20 +450,26 @@ def build(*, root_secret: bytes, policy: Policy,
             recorder=recorder, policy=policy,
             handoff_verifier=handoff_verifier, now=now, pending=pending,
             durable=durable_dispatch)
+
+        def grant_approval(*, subject: str, job_id: str) -> dict[str, str]:
+            token = service.approve(job_id, approver_subject=subject)
+            return {"status": "APPROVAL_GRANTED", "approval_token": token.hex()}
+
         entry = HttpEntry(
-            registry=(PrincipalRegistry.from_api_keys(api_keys) if api_keys is not None
-                      else PrincipalRegistry(principals)),
+            registry=registry,
             submit=submit, complete=complete, job_ids=job_ids,
+            grant_approval=grant_approval if len(approver_policy) else None,
             rate_per_minute=limits.rate_per_minute, burst=limits.burst,
             max_in_flight=limits.max_in_flight,
         )
-        return Service(
+        service = Service(
             entry=entry, orchestrator=orchestrator, gateway=gateway,
             verifier=verifier, audit=audit, chain=chain, anchor=anchor,
             policy=policy, keys=keys, handoff_verifier=handoff_verifier,
-            approvals=approvals, pending=pending,
+            approvals=approvals, approver_policy=approver_policy, pending=pending,
             clock=now, _recorder=recorder,
         )
+        return service
     except BaseException:
         if isinstance(anchor, AnchorProcess):
             anchor.close()
