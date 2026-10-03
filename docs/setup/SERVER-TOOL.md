@@ -97,6 +97,8 @@ Aufruf: `bash genius-server <befehl>`. Beispiele unten nutzen `bash ops/server/g
 
 ## Was das Werkzeug nicht tut
 
+- Es richtet **keinen Laptop** ein. Unter WSL brechen `setup` und `lockdown` ab: Auf dem
+  Laptop gehört Tailscale zu Windows, nicht in WSL, und `ufw` hat in WSL keine Wirkung.
 - Es legt keinen Benutzer an und erzeugt keine Schlüssel (der Schlüssel entsteht in Termius).
 - Es installiert keine GeniusNew-Dienste, keine Datenbank, keinen Reverse-Proxy, keine TLS-Zertifikate.
 - Es ändert keine Zugangsdaten und speichert keine Geheimnisse.
@@ -108,6 +110,7 @@ Aufruf: `bash genius-server <befehl>`. Beispiele unten nutzen `bash ops/server/g
 | Meldung | Bedeutung |
 | --- | --- |
 | `als root gestartet` | Als normaler Benutzer mit sudo starten, oder `GENIUS_USER=<benutzer>` setzen |
+| `Das ist WSL (Laptop), kein Server` | Auf dem Server ausführen, nicht im Laptop-WSL |
 | `nur Debian oder Ubuntu` | Andere Systeme sind nicht unterstützt (fail closed) |
 | `ÜBERSPRUNGEN … kein gültiger Schlüssel` | Erst `add-key`, dann `setup --apply` erneut |
 | `'…' gilt nicht` | Eine andere sshd-Datei überstimmt die Härtung; zurückgenommen, nichts geändert |

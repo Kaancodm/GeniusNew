@@ -17,6 +17,7 @@ SSHD_CONFIG="${GENIUS_SSHD_CONFIG:-/etc/ssh/sshd_config}"
 LOCKDOWN_SESSION="${GENIUS_LOCKDOWN_SESSION:-/run/geniusnew-lockdown-session}"
 UFW_CONF="${GENIUS_UFW_CONF:-/etc/ufw/ufw.conf}"
 OS_RELEASE="${GENIUS_OS_RELEASE:-/etc/os-release}"
+KERNEL_RELEASE="${GENIUS_KERNEL_RELEASE:-/proc/sys/kernel/osrelease}"
 TS_HOSTNAME="${GENIUS_HOSTNAME:-geniusnew-server}"
 TS_AUTHKEY_FILE="${GENIUS_TS_AUTHKEY_FILE:-}"
 TARGET_USER="${GENIUS_USER:-${SUDO_USER:-$(id -un)}}"
@@ -95,6 +96,19 @@ load_os() {
 }
 
 have() { command -v "$1" >/dev/null 2>&1; }
+
+on_wsl() {
+  [ -n "${WSL_DISTRO_NAME:-}" ] || [ -n "${WSL_INTEROP:-}" ] \
+    || grep -qiE 'microsoft|wsl' "$KERNEL_RELEASE" 2>/dev/null
+}
+
+# refuse_wsl: on the laptop, Tailscale belongs to Windows; a second one inside
+# WSL and a ufw there would only confuse the network both depend on.
+refuse_wsl() {
+  if on_wsl; then
+    die "Das ist WSL (Laptop), kein Server. Tailscale gehört dort zu Windows, nicht in WSL, und ufw hat in WSL keine Wirkung. Dieses Werkzeug richtet nur einen Debian/Ubuntu-Server ein; nichts geändert."
+  fi
+}
 
 # Fingerprints of the keys in authorized_keys; empty when there is none.
 key_fingerprints() {
@@ -374,6 +388,7 @@ print_termius() {
 }
 
 cmd_setup() {
+  refuse_wsl
   resolve_user; load_os
   have systemctl || die "systemd wird gebraucht"
   TOTAL=6
@@ -454,6 +469,7 @@ require_tailscale_session() {
 }
 
 cmd_lockdown() {
+  refuse_wsl
   have ufw || die "ufw fehlt; '$SELF setup --apply' installiert es"
   have tailscale || die "Tailscale fehlt; erst '$SELF setup --apply'"
   [ -n "$(tailscale_ip)" ] || die "Tailscale ist nicht verbunden (kein 'tailscale ip -4'); erst setup"

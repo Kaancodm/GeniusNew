@@ -198,6 +198,9 @@ class Sandbox:
         (tmp / "run").mkdir()
         self.lockdown_session = tmp / "run" / "lockdown-session"
         self.sshd_config = tmp / "sshd_config"
+        # The host's own kernel would make the result depend on where the tests run.
+        self.kernel_release = tmp / "osrelease"
+        self.kernel_release.write_text("6.8.0-45-generic\n")
         self.sshd_config.write_text("Include /etc/ssh/sshd_config.d/*.conf\n#Match User anoncvs\n")
 
     def env(self, **extra: str) -> dict[str, str]:
@@ -215,6 +218,7 @@ class Sandbox:
             "GENIUS_UFW_CONF": str(self.ufw_conf),
             "GENIUS_SSHD_CONFIG": str(self.sshd_config),
             "GENIUS_LOCKDOWN_SESSION": str(self.lockdown_session),
+            "GENIUS_KERNEL_RELEASE": str(self.kernel_release),
         }
         env.update(extra)
         return env
@@ -338,6 +342,26 @@ class BasicsTest(ServerToolTestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("systemd wird gebraucht", result.stderr)
         self.assertNotIn("[1/6]", result.stdout)
+
+    def test_wsl_is_refused_before_any_step(self):
+        wsl = {
+            "kernel": ({}, "5.15.153.1-microsoft-standard-WSL2\n"),
+            "distro variable": ({"WSL_DISTRO_NAME": "Ubuntu"}, None),
+            "interop variable": ({"WSL_INTEROP": "/run/WSL/1_interop"}, None),
+        }
+        for name, (env, kernel) in wsl.items():
+            for args in (("setup",), ("setup", "--apply"), ("lockdown", "--apply")):
+                with self.subTest(name, args=args):
+                    if kernel:
+                        self.sb.kernel_release.write_text(kernel)
+                    self.sb.connect_tailscale()
+                    result = self.sb.run(*args, SSH_CONNECTION=TAILSCALE_SESSION, **env)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn("Das ist WSL", result.stderr)
+                    self.assertNotIn("[1/", result.stdout)
+                    self.sb.kernel_release.write_text("6.8.0-45-generic\n")
+        self.assertNothingChanged()
+        self.assertFalse(self.sb.called("ufw"))
 
     def test_a_missing_codename_is_refused(self):
         self.sb.os_release.write_text("ID=debian\n")
