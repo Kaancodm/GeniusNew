@@ -63,10 +63,10 @@ anpassen.
 | B0 | `docs/DATABASE.md` gemergt, inklusive der Review-Befunde aus #56 (Vereinigungsmenge dort) | Doku; Claude-Security-Review, Freigabe durch Kaan | erledigt: #70 gemergt (Claude DB Review APPROVED an `dc0e825`, Freigabe Kaan 29.09.2026) |
 | B1 | `0001_core_foundation`: PostgreSQL-Dienst in der CI, `psycopg` hash-gepinnt, Migrationen mit Checksum, Start verweigert bei fehlender DB oder falscher Migration | Start-Refusal-Tests gegen echtes PostgreSQL | erledigt: #78 (Codex) gemergt `706e76d`, Claude DB Review APPROVED an `99ef6e3`; Auflagen für B2 im Review auf #78 |
 | B2 | Job-Ledger persistent: Tests A–C aus Konflikt 4, Runtime ohne DELETE, nur Vorwärtsübergänge | Ledger-Grenztest in `test_orchestrator.py` umgekehrt | erledigt: #90 (Codex, auf Claudes Übergabe #83) gemergt (`9a797b1`), Claude DB Review APPROVED an `ec64894`; Runtime-Rechteprüfung E1/E2 beim Start |
-| B3 | Annahme-Ledger persistent, Annahme nur aus `EXECUTION_COMMITTED` | Ledger-Grenztest in `test_verifier.py` umgekehrt | offen |
-| B4 | Wartende Jobs und Approval-Speicher persistent, append-only, verzweigungsfrei | Neustart verliert keinen wartenden Job; verbrauchter Token bleibt verbraucht | offen |
-| B5 | Audit-Kette persistent; signierter Kopf in derselben Transaktion; Neustart verankert nur bereits signierte Köpfe nach | Per SQL angehängtes Event → Start verweigert | offen |
-| B6 | Ledger und Approval-Speicher **manipulationssichtbar**: jede sicherheitsrelevante Zeile und ihr Audit-Event in derselben Transaktion; die Startprüfung gleicht beide Richtungen gegen die verankerte Kette ab (`acceptance_ledger` ↔ `RESULT_ACCEPTED`, `job_ledger` ↔ `HANDOFF_ADMITTED`, Approval-Records ↔ `approval_record_hash`) | Per SQL gelöschte Ledger-Zeile oder eingefügter `GRANTED`-Record → Start verweigert | offen |
+| B3 | Annahme-Ledger persistent, Annahme nur aus `EXECUTION_COMMITTED` | Ledger-Grenztest in `test_verifier.py` umgekehrt | erledigt: #93 (Codex) gemergt `3b81265`, Claude DB Review APPROVED an `0ac9e10`, Merge-OK Kaan 30.09.2026; der Gemini-Sicherheitsreview lag zum Merge nicht vor (Merge-Nachweis in #93) |
+| B4 | Wartende Jobs und Approval-Speicher persistent, append-only, verzweigungsfrei | Neustart verliert keinen wartenden Job; verbrauchter Token bleibt verbraucht | gemergt: #94 (Codex) `18381c2`, Head `0fd43b6`. Im PR ist **kein** `Claude DB Review: APPROVED` und kein Gemini-Sicherheitsreview auffindbar; nachzuholen (offene Entscheidung 6) |
+| B5 | Audit-Kette persistent; signierter Kopf in derselben Transaktion; Neustart verankert nur bereits signierte Köpfe nach | Per SQL angehängtes Event → Start verweigert | gemergt: #95 (Codex) `a3f2a3c`, Head `937fa44`; nur frische Installation (Kaan). Die PR-Beschreibung führt Claude DB Review und Gemini-Sicherheitsreview als ausstehend; eine Freigabe ist im PR nicht auffindbar, nachzuholen (offene Entscheidung 6) |
+| B6 | Ledger und Approval-Speicher **manipulationssichtbar**: jede sicherheitsrelevante Zeile und ihr Audit-Event in derselben Transaktion; die Startprüfung gleicht beide Richtungen gegen die verankerte Kette ab (`acceptance_ledger` ↔ `RESULT_ACCEPTED`, `job_ledger` ↔ `HANDOFF_ADMITTED`, Approval-Records ↔ `approval_record_hash`) | Per SQL gelöschte Ledger-Zeile oder eingefügter `GRANTED`-Record → Start verweigert | in Arbeit: #97 (Codex). Claude DB Review CHANGES REQUESTED an `f220e30`: abgelaufene Pending-Jobs füllen die Warteschlange dauerhaft; ein per SQL gelöschter wartender Job lässt den Dienst trotzdem starten. Der Mindestfix zur Warteschlange kam über #98 (Claude) in den B6-Branch (Head `f3ef129`) und braucht als Claude-Code eine unabhängige Prüfung; die Lücke beim gelöschten wartenden Job ist offen |
 | B7 | Absturztest: Dienst wird an jeder Zustandsgrenze hart beendet (`SIGKILL`) und neu gestartet | kein Doppellauf, keine Doppelannahme, Kette verifiziert | offen |
 
 ### C — Betrieb des Kerns
@@ -119,3 +119,13 @@ Implementierer.
    `docs/ISOLATION-A2.md`).
 4. Gehört das Portal (D1–D3) zur Beta, oder ist die Beta zunächst die Kern-API und das
    Portal ein eigener Meilenstein danach (Vorschlag aus #60)?
+5. Abgelaufene wartende Jobs: Ein auditierter Sweep (`REFUSED` und
+   `PENDING_APPROVAL_EXPIRED` in derselben Transaktion, `docs/DATABASE.md` §4.4) noch in
+   B6 oder als eigener PR danach? Bis dahin bleiben abgelaufene Zeilen liegen und
+   belegen nur keinen Platz mehr (Mindestfix aus #98).
+6. B4 (#94) und B5 (#95) sind ohne `Claude DB Review: APPROVED` am Head gemergt. Wird
+   das Review am gemergten Stand gesondert nachgeholt oder in E2 aufgenommen?
+7. Gespeicherte Annahmen sind an die aktuelle Policy und die aktuellen Schlüssel
+   gebunden (`SECURITY.md`, Review auf #93: (a) nur Integrität prüfen, (b)
+   Policy-Historie, (c) so lassen). Mit der Principal-Bindung aus Audit v2 (B6) wird (a)
+   möglich; eine Entscheidung ist nicht auffindbar.
