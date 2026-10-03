@@ -623,6 +623,23 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
         service.close()
         self.start(requires_approval=True).close()
 
+    def test_deleted_pending_job_and_ledger_refuse_restart(self):
+        headers = {"Content-Type": "application/json",
+                   "Authorization": "Bearer " + API_KEY.decode()}
+        service = self.start(requires_approval=True)
+        response = service.entry.handle(
+            method="POST", path="/jobs", headers=headers,
+            body=b'{"text":"pending deletion"}')
+        self.assertEqual(response.status, 202)
+        job_id = response.body["job_id"]
+        service.close()
+
+        with self.db.connect() as owner:
+            owner.execute("DELETE FROM public.pending_jobs WHERE job_id = %s", (job_id,))
+            owner.execute("DELETE FROM public.job_ledger WHERE job_id = %s", (job_id,))
+        with self.assertRaisesRegex(ContractError, "pending issuance has no job ledger row"):
+            self.start(requires_approval=True)
+
     def test_swapped_consumed_receipts_refuse_start(self):
         keys = derive_keys(ROOT_SECRET)
         authority = AuditAuthority(audit_key=keys.audit_key)
