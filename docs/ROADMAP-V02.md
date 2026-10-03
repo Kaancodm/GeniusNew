@@ -67,7 +67,7 @@ anpassen.
 | B4 | Wartende Jobs und Approval-Speicher persistent, append-only, verzweigungsfrei | Neustart verliert keinen wartenden Job; verbrauchter Token bleibt verbraucht | offen |
 | B5 | Audit-Kette persistent; signierter Kopf in derselben Transaktion; Neustart verankert nur bereits signierte Köpfe nach | Per SQL angehängtes Event → Start verweigert | offen |
 | B6 | Ledger und Approval-Speicher **manipulationssichtbar**: jede sicherheitsrelevante Zeile und ihr Audit-Event in derselben Transaktion; die Startprüfung gleicht beide Richtungen gegen die verankerte Kette ab (`acceptance_ledger` ↔ `RESULT_ACCEPTED`, `job_ledger` ↔ `HANDOFF_ADMITTED`, Approval-Records ↔ `approval_record_hash`) | Per SQL gelöschte Ledger-Zeile oder eingefügter `GRANTED`-Record → Start verweigert | offen |
-| B7 | Absturztest: Dienst wird an jeder Zustandsgrenze hart beendet (`SIGKILL`) und neu gestartet | kein Doppellauf, keine Doppelannahme, Kette verifiziert | offen |
+| B7 | Absturztest: Dienst wird an jeder Zustandsgrenze hart beendet (`SIGKILL`) und neu gestartet | kein Doppellauf, keine Doppelannahme, Kette verifiziert | `tests/test_b7_crash_recovery.py` (Claude), Beschreibung in `docs/POSTGRES-B1.md` B7; gestapelt auf B6 (#97, #98) |
 
 ### C — Betrieb des Kerns
 
