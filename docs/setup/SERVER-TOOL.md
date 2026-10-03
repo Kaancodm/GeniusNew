@@ -53,16 +53,22 @@ Aufruf: `bash genius-server <befehl>`. Beispiele unten nutzen `bash ops/server/g
    Das Werkzeug prüft Typ und Länge und zeigt den Fingerabdruck; vergleiche ihn mit Termius.
 6. Nochmals `setup --apply`. Jetzt ist ein Schlüssel da, und das Werkzeug schaltet
    Passwort-Login und root-Login ab. Es prüft die neue Konfiguration mit `sshd -t` und
-   `sshd -T` und nimmt sie bei Abweichung zurück. Bestehende Verbindungen bleiben offen.
+   `sshd -T` (alle vier gesetzten Werte) und nimmt sie bei Abweichung oder einem
+   fehlgeschlagenen Neuladen zurück. Bestehende Verbindungen bleiben offen. Steht irgendwo ein
+   `Match`-Block, bricht der Schritt vorher ab: `Match` kann den Passwort-Login für einzelne
+   Benutzer oder Adressen wieder einschalten.
 7. In Termius den Host anlegen (`bash ops/server/genius-server termius` zeigt die Werte):
-   Adresse = MagicDNS-Name oder 100.x-Adresse, Port 22, Benutzer, Schlüssel. Tailscale-App
-   muss an sein.
+   Adresse = MagicDNS-Name oder 100.x-Adresse, Port (aus `sshd -T`, meist 22), Benutzer,
+   Schlüssel. Tailscale-App muss an sein.
 8. **Schlüssel-Login in Termius testen, bevor du die erste Sitzung schließt.**
 9. In dieser Termius-Sitzung (also über Tailscale): `bash ops/server/genius-server lockdown --apply`.
    Es stellt zuerst ein Sicherheitsnetz (nach 5 Minuten schaltet sich die Firewall von selbst
-   aus), setzt die Regeln und schaltet `ufw` ein. SSH gilt dann nur noch über `tailscale0`.
+   aus), setzt die Regeln und schaltet `ufw` ein. SSH gilt dann nur noch über `tailscale0`,
+   auf genau den Ports, auf denen sshd lauscht. Ist `ufw` schon aktiv, ändert `lockdown` nichts:
+   Das Sicherheitsnetz könnte die Firewall nur ganz abschalten, nicht alte Regeln zurückholen.
 10. Zweite Termius-Verbindung über Tailscale öffnen und `bash ops/server/genius-server confirm`
-    ausführen. Erst das entfernt das Sicherheitsnetz.
+    ausführen. Erst das entfernt das Sicherheitsnetz. Hat es schon ausgelöst, meldet `confirm`
+    das und bestätigt nicht.
 11. Ab jetzt `status` (oder `status --watch`) für die Übersicht. Der letzte Abschnitt nennt
     den nächsten Schritt.
 12. Langläufer in `tmux new -As genius` starten; die Sitzung überlebt einen Verbindungsabbruch.
@@ -70,8 +76,8 @@ Aufruf: `bash genius-server <befehl>`. Beispiele unten nutzen `bash ops/server/g
 ## Schutz vor Aussperren
 
 - Die SSH-Härtung wird **übersprungen**, solange in `authorized_keys` kein gültiger Schlüssel steht.
-- `lockdown` und `confirm` laufen nur aus einer Sitzung, deren Quelladresse in 100.64.0.0/10 liegt
-  (Tailscale). Starte sie **ohne** `sudo` davor; sudo entfernt die Verbindungsangabe, dann
+- `lockdown` und `confirm` laufen nur aus einer Sitzung, deren Quelladresse in 100.64.0.0/10 oder
+  fd7a:115c:a1e0::/48 liegt (Tailscale, IPv4 oder IPv6; MagicDNS geht also auch). Starte sie **ohne** `sudo` davor; sudo entfernt die Verbindungsangabe, dann
   bricht das Werkzeug ab (sicher, aber lästig). Das Werkzeug ruft `sudo` selbst auf.
 - Die Firewall hat ein Sicherheitsnetz mit Zeitgeber. Ohne `confirm` ist sie nach 5 Minuten wieder aus.
 - `lockdown` warnt, wenn eine ältere Regel (zum Beispiel `22/tcp ALLOW Anywhere`) SSH weiter
@@ -94,6 +100,9 @@ Aufruf: `bash genius-server <befehl>`. Beispiele unten nutzen `bash ops/server/g
 | `als root gestartet` | Als normaler Benutzer mit sudo starten, oder `GENIUS_USER=<benutzer>` setzen |
 | `nur Debian oder Ubuntu` | Andere Systeme sind nicht unterstützt (fail closed) |
 | `ÜBERSPRUNGEN … kein gültiger Schlüssel` | Erst `add-key`, dann `setup --apply` erneut |
-| `die Werte gelten nicht` | Eine andere sshd-Datei überstimmt die Härtung; zurückgenommen, nichts geändert |
+| `'…' gilt nicht` | Eine andere sshd-Datei überstimmt die Härtung; zurückgenommen, nichts geändert |
+| `Match-Blöcke in …` | `Match` aus der genannten Datei entfernen oder die Härtung von Hand machen |
+| `ufw ist schon aktiv` | `lockdown` ändert keine aktive Firewall; Regeln mit `sudo ufw status verbose` prüfen |
+| `SSH-Port nicht ermittelbar` | `sudo sshd -T \| grep ^port` liefert keinen gültigen Port |
 | `Du bist nicht über Tailscale verbunden` | In Termius über die Tailscale-Adresse neu verbinden |
-| `Die Firewall ist nicht aktiv` bei `confirm` | Das Sicherheitsnetz hat ausgelöst; `lockdown --apply` erneut |
+| `schon ausgelöst` oder `nicht aktiv` bei `confirm` | Das Sicherheitsnetz hat ausgelöst; eine Minute warten, dann `lockdown --apply` erneut |

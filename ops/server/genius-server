@@ -12,6 +12,7 @@ set -euo pipefail
 KEYRING="${GENIUS_TS_KEYRING:-/usr/share/keyrings/tailscale-archive-keyring.gpg}"
 APT_LIST="${GENIUS_TS_APT_LIST:-/etc/apt/sources.list.d/tailscale.list}"
 SSHD_DROPIN="${GENIUS_SSHD_DROPIN:-/etc/ssh/sshd_config.d/00-geniusnew.conf}"
+SSHD_CONFIG="${GENIUS_SSHD_CONFIG:-/etc/ssh/sshd_config}"
 UFW_CONF="${GENIUS_UFW_CONF:-/etc/ufw/ufw.conf}"
 OS_RELEASE="${GENIUS_OS_RELEASE:-/etc/os-release}"
 TS_HOSTNAME="${GENIUS_HOSTNAME:-geniusnew-server}"
@@ -122,7 +123,8 @@ except Exception:
     pass' 2>/dev/null || true
 }
 
-# True when the ssh client address lies in Tailscale's 100.64.0.0/10. Read from
+# True when the ssh client address lies in Tailscale's 100.64.0.0/10 or
+# fd7a:115c:a1e0::/48 (a MagicDNS name may resolve to either). Read from
 # the environment of this process: do not put "sudo" in front of the script,
 # sudo drops SSH_CONNECTION and the check then (safely) fails.
 session_over_tailscale() {
@@ -132,13 +134,45 @@ session_over_tailscale() {
   python3 - "$peer" <<'PY'
 import ipaddress, sys
 try:
-    sys.exit(0 if ipaddress.ip_address(sys.argv[1]) in ipaddress.ip_network("100.64.0.0/10") else 1)
+    addr = ipaddress.ip_address(sys.argv[1])
+    nets = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
+    sys.exit(0 if any(addr.version == n.version and addr in n for n in nets) else 1)
 except ValueError:
     sys.exit(1)
 PY
 }
 
 ufw_enabled() { grep -qi '^ENABLED=yes' "$UFW_CONF" 2>/dev/null; }
+
+rollback_pending() { [ "$(systemctl is-active "$ROLLBACK_UNIT.timer" 2>/dev/null)" = "active" ]; }
+
+# ssh_ports: the ports sshd really listens on, from its effective configuration.
+# Fails when none can be read, so no caller guesses 22.
+ssh_ports() {
+  local ports p
+  ports="$(as_root "$(sshd_bin)" -T 2>/dev/null | awk '$1 == "port" {print $2}' | sort -un)" || true
+  [ -n "$ports" ] || return 1
+  for p in $ports; do
+    case "$p" in ''|*[!0-9]*) return 1 ;; esac
+    { [ "$p" -ge 1 ] && [ "$p" -le 65535 ]; } || return 1
+  done
+  printf '%s\n' "$ports"
+}
+
+# sshd_match_files: config files with a Match block. Match can switch password
+# login back on for one user or address, which a global check cannot see, so the
+# hardening refuses to run next to one.
+sshd_match_files() {
+  local f
+  for f in "$SSHD_CONFIG" "$(dirname "$SSHD_DROPIN")"/*.conf; do
+    [ -e "$f" ] || continue
+    if [ -r "$f" ]; then
+      if grep -qiE '^[[:space:]]*Match[[:space:]]' "$f"; then printf '%s\n' "$f"; fi
+    elif [ "$DRY" -eq 0 ]; then
+      if as_root grep -qiE '^[[:space:]]*Match[[:space:]]' "$f"; then printf '%s\n' "$f"; fi
+    fi
+  done
+}
 
 # Rules that keep a port open to everybody, which a Tailscale-only lockdown must not leave.
 firewall_warnings() {
@@ -234,6 +268,15 @@ step_ssh_hardening() {
     HARDEN_SKIPPED=1
     return
   fi
+  local matches
+  matches="$(sshd_match_files)"
+  if [ -n "$matches" ]; then
+    if [ "$DRY" -eq 1 ]; then
+      say "      WARNUNG: Match-Blöcke in $(printf '%s' "$matches" | tr '\n' ' ')- mit --apply bricht dieser Schritt ab."
+    else
+      die "Match-Blöcke in $(printf '%s' "$matches" | tr '\n' ' ')können den Passwort-Login für einzelne Benutzer oder Adressen wieder einschalten. Das Werkzeug unterstützt sie nicht; nichts geändert."
+    fi
+  fi
   local tmp backup=""
   tmp="$(mktemp)"
   printf '%s\n' '# Managed by genius-server. Read before other drop-ins, so these values win.' \
@@ -261,23 +304,30 @@ step_ssh_hardening() {
   fi
   local effective
   effective="$(as_root "$(sshd_bin)" -T 2>/dev/null || true)"
-  if ! grep -qx 'passwordauthentication no' <<<"$effective" \
-     || ! grep -qx 'permitrootlogin no' <<<"$effective"; then
+  local want
+  for want in 'passwordauthentication no' 'kbdinteractiveauthentication no' \
+              'permitrootlogin no' 'pubkeyauthentication yes'; do
+    if ! grep -qx "$want" <<<"$effective"; then
+      restore_dropin "$backup"; [ -z "$backup" ] || rm -f "$backup"
+      die "'$want' gilt nicht (eine andere Konfigurationsdatei überstimmt es oder sshd_config liest sshd_config.d nicht); zurückgenommen, nichts geändert"
+    fi
+  done
+  show "$(sudo_prefix)systemctl reload $(ssh_service)"
+  if ! as_root systemctl reload "$(ssh_service)"; then
     restore_dropin "$backup"; [ -z "$backup" ] || rm -f "$backup"
-    die "die Werte gelten nicht (eine andere Konfigurationsdatei überstimmt sie oder sshd_config liest sshd_config.d nicht); zurückgenommen, nichts geändert"
+    die "sshd ließ sich nicht neu laden; die Datei ist zurückgenommen, die laufende Konfiguration unverändert"
   fi
   [ -z "$backup" ] || rm -f "$backup"
-  show "$(sudo_prefix)systemctl reload $(ssh_service)"
-  as_root systemctl reload "$(ssh_service)"
   say "      WICHTIG: Teste jetzt in Termius den Schlüssel-Login, bevor du diese Sitzung schließt."
 }
 
 print_termius() {
-  local ip dns
+  local ip dns ports=""
   ip="$(tailscale_ip)"; dns="$(tailscale_dns)"
+  if can_root; then ports="$(ssh_ports 2>/dev/null | tr '\n' ' ' | sed 's/ $//')" || ports=""; fi
   section "Termius" "So legst du den Server in Termius an:"
   say "  Adresse      : ${dns:-<MagicDNS-Name aus 'tailscale status'>}  (oder ${ip:-<100.x-Adresse aus 'tailscale ip -4'>})"
-  say "  Port         : 22"
+  say "  Port         : ${ports:-<unbekannt; mit 'sudo sshd -T | grep ^port' prüfen>}"
   say "  Benutzer     : $TARGET_USER"
   say "  Anmeldung    : Schlüssel (in Termius erzeugt, siehe '$SELF add-key')"
   say "  Voraussetzung: Tailscale-App auf dem iPad/iPhone ist an und im selben Konto angemeldet"
@@ -339,6 +389,8 @@ cmd_add_key() {
   if grep -qxF "$line" "$AUTH_KEYS"; then
     say "Dieser Schlüssel ist schon eingetragen. Nichts geändert."
   else
+    # A last line without newline would swallow the new key into it.
+    if [ -s "$AUTH_KEYS" ] && [ -n "$(tail -c 1 "$AUTH_KEYS")" ]; then printf '\n' >>"$AUTH_KEYS"; fi
     printf '%s\n' "$line" >>"$AUTH_KEYS"
     say "Eingetragen in $AUTH_KEYS."
   fi
@@ -367,6 +419,25 @@ cmd_lockdown() {
   have tailscale || die "Tailscale fehlt; erst '$SELF setup --apply'"
   [ -n "$(tailscale_ip)" ] || die "Tailscale ist nicht verbunden (kein 'tailscale ip -4'); erst setup"
   require_tailscale_session
+  # The safety net can only switch ufw off, not restore earlier rules; so a
+  # firewall that is already on is left alone rather than risked.
+  local fw ports
+  if [ "$DRY" -eq 0 ] || can_root; then
+    fw="$(as_root ufw status 2>/dev/null)" || die "ufw-Status nicht lesbar; nichts geändert"
+    case "$fw" in
+      "Status: inactive"*) ;;
+      *)
+        [ "$DRY" -eq 1 ] || die "ufw ist schon aktiv. Das Sicherheitsnetz würde die Firewall ganz abschalten, deshalb ändert lockdown keine aktive Firewall. Regeln prüfen: sudo ufw status verbose"
+        say "WARNUNG: ufw ist schon aktiv. Mit --apply würde das Skript hier abbrechen." ;;
+    esac
+  fi
+  # Open exactly the ports sshd listens on, so the second session for confirm can connect.
+  if [ "$DRY" -eq 0 ] || can_root; then
+    ports="$(ssh_ports)" || die "SSH-Port nicht ermittelbar ('sshd -T' ohne gültige Port-Zeile); nichts geändert"
+  else
+    ports="22"
+    say "HINWEIS: Port nicht geprüft (braucht sudo); angenommen: 22"
+  fi
   TOTAL=3
   say "Firewall: nur noch Tailscale darf SSH erreichen"
   if [ "$DRY" -eq 1 ]; then say "TROCKENLAUF: es wird nichts verändert. Zum Ausführen: $SELF lockdown --apply"; fi
@@ -381,7 +452,10 @@ cmd_lockdown() {
   step "Regeln setzen" "eingehend alles sperren außer SSH über tailscale0; ausgehend alles erlaubt"
   root ufw default deny incoming
   root ufw default allow outgoing
-  root ufw allow in on tailscale0 to any port 22 proto tcp
+  local port
+  for port in $ports; do
+    root ufw allow in on tailscale0 to any port "$port" proto tcp
+  done
   step "Firewall einschalten" \
     "Achtung: andere eingehende Dienste (zum Beispiel Web) sind danach von außen nicht mehr erreichbar"
   root ufw --force enable
@@ -398,9 +472,22 @@ cmd_confirm() {
   DRY=0
   require_tailscale_session
   have ufw || die "ufw fehlt"
+  local again="Warte eine Minute, dann '$SELF lockdown --apply' erneut."
+  if rollback_pending; then
+    as_root systemctl stop "$ROLLBACK_UNIT.timer" \
+      || die "Das Sicherheitsnetz ließ sich nicht stoppen; die Firewall schaltet sich gleich ab. $again"
+  fi
+  ! rollback_pending || die "Das Sicherheitsnetz ist noch gestellt. $again"
+  # The timer may have fired just before it was stopped: then the rollback is
+  # queued or running, and confirming now would report a firewall about to go off.
+  case "$(systemctl is-active "$ROLLBACK_UNIT.service" 2>/dev/null || true)" in
+    active|activating|deactivating|reloading)
+      die "Das Sicherheitsnetz hat schon ausgelöst und schaltet die Firewall gerade ab. $again" ;;
+  esac
+  [ -z "$(systemctl list-jobs --no-legend "$ROLLBACK_UNIT.service" 2>/dev/null)" ] \
+    || die "Das Sicherheitsnetz hat schon ausgelöst und schaltet die Firewall gerade ab. $again"
   as_root ufw status 2>/dev/null | grep -q '^Status: active' \
-    || die "Die Firewall ist nicht aktiv (das Sicherheitsnetz hat sie wohl schon ausgeschaltet). Erst '$SELF lockdown --apply' erneut."
-  as_root systemctl stop "$ROLLBACK_UNIT.timer" 2>/dev/null || true
+    || die "Die Firewall ist nicht aktiv (das Sicherheitsnetz hat sie schon ausgeschaltet). $again"
   say "Bestätigt: das Sicherheitsnetz ist entfernt, die Firewall bleibt an."
   as_root ufw status verbose | sed 's/^/  /'
 }
@@ -412,7 +499,7 @@ classify_ports() {
   awk '{
     addr = $4; sub(/:[0-9]+$/, "", addr); gsub(/[\[\]]/, "", addr)
     if (addr ~ /^127\./ || addr == "::1") scope = "nur lokal"
-    else if (addr ~ /^100\./ || addr ~ /^fd7a:/) scope = "nur Tailscale"
+    else if (addr ~ /^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./ || tolower(addr) ~ /^fd7a:115c:a1e0:/) scope = "nur Tailscale"
     else scope = "ALLE ADRESSEN (die Firewall entscheidet)"
     printf "  tcp  %-28s %s\n", $4, scope
   }'
@@ -431,6 +518,9 @@ next_step() {
   fi
   if [ ! -e "$SSHD_DROPIN" ]; then
     say "  $SELF setup --apply   (schaltet den Passwort-Login ab)"; return
+  fi
+  if rollback_pending; then
+    say "  $SELF confirm   (aus einer zweiten Termius-Verbindung über Tailscale; sonst schaltet sich die Firewall wieder ab)"; return
   fi
   if ! ufw_enabled; then
     say "  $SELF lockdown --apply   (aus einer Termius-Verbindung über Tailscale)"; return

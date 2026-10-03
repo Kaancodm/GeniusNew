@@ -24,7 +24,7 @@ REAL_TOOLS = (
     "bash", "env", "cat", "cut", "head", "tail", "sed", "awk", "grep", "mktemp", "rm",
     "install", "stat", "touch", "chmod", "chown", "dirname", "basename", "tr", "wc",
     "sleep", "timeout", "python3", "hostname", "uptime", "df", "ps", "who", "free",
-    "clear", "true", "date", "mkdir", "ls",
+    "clear", "true", "date", "mkdir", "ls", "sort",
 )
 
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIfakefakefake termius-ipad"
@@ -53,13 +53,28 @@ echo "sudo $*" >>"$LOG"
 exec "$@"
 """,
     "apt-get": 'echo "apt-get $*" >>"$LOG"\n',
-    "systemd-run": 'echo "systemd-run $*" >>"$LOG"\n',
+    "systemd-run": 'echo "systemd-run $*" >>"$LOG"\necho active >"$STATE/timer"\n',
+    # systemctl: the rollback timer and service keep their state in files, so a
+    # test can put them anywhere between "set" and "already fired".
     "systemctl": """\
 echo "systemctl $*" >>"$LOG"
 case "$1" in
-  is-active) echo active ;;
+  is-active)
+    case "$2" in
+      geniusnew-lockdown-rollback.timer) state="$(cat "$STATE/timer" 2>/dev/null || echo inactive)" ;;
+      geniusnew-lockdown-rollback.service) state="$(cat "$STATE/rollback_service" 2>/dev/null || echo inactive)" ;;
+      *) state=active ;;
+    esac
+    echo "$state"
+    [ "$state" = active ] ;;
+  stop)
+    if [ "$2" = geniusnew-lockdown-rollback.timer ]; then
+      [ -z "${FAKE_STOP_FAIL:-}" ] || exit 1
+      echo inactive >"$STATE/timer"
+    fi ;;
+  reload) [ -z "${FAKE_RELOAD_FAIL:-}" ] || exit 1 ;;
+  list-jobs) cat "$STATE/jobs" 2>/dev/null || true ;;
 esac
-exit 0
 """,
     "curl": """\
 echo "curl $*" >>"$LOG"
@@ -90,7 +105,7 @@ case "$1" in
   -t) [ -z "${FAKE_SSHD_T_FAIL:-}" ] || exit 1 ;;
   -T)
     if [ -n "${FAKE_SSHD_T_OUT:-}" ]; then cat "$FAKE_SSHD_T_OUT"
-    else printf 'port 22\\npasswordauthentication no\\npermitrootlogin no\\npubkeyauthentication yes\\n'; fi ;;
+    else printf 'port 22\\npasswordauthentication no\\nkbdinteractiveauthentication no\\npermitrootlogin no\\npubkeyauthentication yes\\n'; fi ;;
 esac
 """,
     # ssh-keygen: a key is valid when its second field starts with AAAA; the bit
@@ -127,6 +142,9 @@ echo "LISTEN 0 128 0.0.0.0:22 0.0.0.0:*"
 echo "LISTEN 0 128 [::]:22 [::]:*"
 echo "LISTEN 0 4096 127.0.0.1:5432 0.0.0.0:*"
 echo "LISTEN 0 128 100.101.102.103:22 0.0.0.0:*"
+echo "LISTEN 0 128 100.128.0.1:80 0.0.0.0:*"
+echo "LISTEN 0 128 [fd7a:115c:a1e0::1]:22 [::]:*"
+echo "LISTEN 0 128 [fd7a:1::1]:8080 [::]:*"
 """,
 }
 
@@ -161,6 +179,8 @@ class Sandbox:
         self.dropin = tmp / "sshd_config.d" / "00-geniusnew.conf"
         self.ufw_conf = tmp / "ufw.conf"
         self.authorized_keys = self.home / ".ssh" / "authorized_keys"
+        self.sshd_config = tmp / "sshd_config"
+        self.sshd_config.write_text("Include /etc/ssh/sshd_config.d/*.conf\n#Match User anoncvs\n")
 
     def env(self, **extra: str) -> dict[str, str]:
         env = {
@@ -175,6 +195,7 @@ class Sandbox:
             "GENIUS_TS_APT_LIST": str(self.apt_list),
             "GENIUS_SSHD_DROPIN": str(self.dropin),
             "GENIUS_UFW_CONF": str(self.ufw_conf),
+            "GENIUS_SSHD_CONFIG": str(self.sshd_config),
         }
         env.update(extra)
         return env
@@ -201,6 +222,11 @@ class Sandbox:
             if line.startswith(prefix):
                 return i
         raise AssertionError(f"no call starting with {prefix!r} in {self.calls()}")
+
+    def effective(self, text: str) -> str:
+        path = self.tmp / "effective.txt"
+        path.write_text(text)
+        return str(path)
 
     def connect_tailscale(self) -> None:
         (self.state / "ts_up").touch()
@@ -367,7 +393,7 @@ class SetupTest(ServerToolTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("ÜBERSPRUNGEN", result.stdout)
         self.assertFalse(self.sb.dropin.exists())
-        self.assertFalse(self.sb.called("sshd"))
+        self.assertFalse(self.sb.called("sshd -t"))
         self.assertFalse(self.sb.called("systemctl reload"))
         self.assertIn("add-key", result.stdout)
 
@@ -471,6 +497,68 @@ class SetupTest(ServerToolTestCase):
         self.assertFalse(self.sb.dropin.exists())
 
 
+class HardeningGuardsTest(ServerToolTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.sb.add_key()
+        self.sb.connect_tailscale()
+
+    def test_a_match_block_in_sshd_config_is_refused_before_any_change(self):
+        self.sb.sshd_config.write_text("Match User tester\n  PasswordAuthentication yes\n")
+        result = self.sb.run("setup", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Match", result.stderr)
+        self.assertFalse(self.sb.dropin.exists())
+        self.assertFalse(self.sb.called("sshd -t"))
+        self.assertFalse(self.sb.called("systemctl reload"))
+
+    def test_a_match_block_in_another_dropin_is_refused(self):
+        self.sb.dropin.parent.mkdir()
+        (self.sb.dropin.parent / "50-cloud-init.conf").write_text("  match Address 10.0.0.0/8\n")
+        result = self.sb.run("setup", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("50-cloud-init.conf", result.stderr)
+        self.assertFalse(self.sb.dropin.exists())
+
+    def test_a_dry_run_warns_about_a_match_block(self):
+        self.sb.sshd_config.write_text("Match User tester\n")
+        result = self.sb.run("setup")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("WARNUNG: Match-Blöcke", result.stdout)
+        self.assertNothingChanged()
+
+    def test_every_written_value_must_hold_after_the_change(self):
+        good = {
+            "passwordauthentication": "no",
+            "kbdinteractiveauthentication": "no",
+            "permitrootlogin": "no",
+            "pubkeyauthentication": "yes",
+        }
+        for key, bad in (("passwordauthentication", "yes"), ("kbdinteractiveauthentication", "yes"),
+                         ("permitrootlogin", "prohibit-password"), ("pubkeyauthentication", "no")):
+            with self.subTest(key=key):
+                values = dict(good, **{key: bad})
+                text = "port 22\n" + "".join(f"{k} {v}\n" for k, v in values.items())
+                result = self.sb.run("setup", "--apply", FAKE_SSHD_T_OUT=self.sb.effective(text))
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(f"'{key} {good[key]}' gilt nicht", result.stderr)
+                self.assertFalse(self.sb.dropin.exists())
+        self.assertFalse(self.sb.called("systemctl reload"))
+
+    def test_a_failed_reload_restores_the_previous_dropin(self):
+        self.sb.dropin.parent.mkdir()
+        self.sb.dropin.write_text("# old content\n")
+        result = self.sb.run("setup", "--apply", FAKE_RELOAD_FAIL="1")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("neu laden", result.stderr)
+        self.assertEqual(self.sb.dropin.read_text(), "# old content\n")
+
+    def test_a_failed_reload_removes_a_new_dropin(self):
+        result = self.sb.run("setup", "--apply", FAKE_RELOAD_FAIL="1")
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse(self.sb.dropin.exists())
+
+
 class AddKeyTest(ServerToolTestCase):
     def test_a_valid_key_is_stored_privately_once(self):
         for _ in range(2):
@@ -515,6 +603,15 @@ class AddKeyTest(ServerToolTestCase):
         self.assertFalse(self.sb.authorized_keys.exists())
         long = self.sb.run("add-key", stdin="ssh-rsa AAAAB3fakefake bits3072\n")
         self.assertEqual(long.returncode, 0, long.stderr)
+
+    def test_a_last_line_without_newline_is_kept_apart(self):
+        self.sb.add_key("ssh-ed25519 AAAAC3oldkey laptop")
+        self.sb.authorized_keys.write_text("ssh-ed25519 AAAAC3oldkey laptop")
+        result = self.sb.run("add-key", stdin=KEY + "\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.sb.authorized_keys.read_text().splitlines(), ["ssh-ed25519 AAAAC3oldkey laptop", KEY]
+        )
 
     def test_adding_a_key_never_touches_the_system(self):
         self.sb.run("add-key", stdin=KEY + "\n")
@@ -593,6 +690,53 @@ class LockdownTest(ServerToolTestCase):
         self.assertNotIn("on tailscale0 ALLOW Anywhere\n    22/tcp on tailscale0", result.stdout)
 
 
+    def test_an_ipv6_tailscale_session_is_accepted(self):
+        self.sb.connect_tailscale()
+        result = self.sb.run("lockdown", "--apply", SSH_CONNECTION="fd7a:115c:a1e0::5 50000 fd7a:115c:a1e0::1 22")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.sb.called("ufw --force enable"))
+
+    def test_an_ipv6_session_outside_tailscale_is_refused(self):
+        self.sb.connect_tailscale()
+        for peer in ("2001:db8::5", "fd7a:115c:a1e1::5", "::ffff:100.64.0.7"):
+            with self.subTest(peer=peer):
+                result = self.sb.run("lockdown", "--apply", SSH_CONNECTION=f"{peer} 50000 x 22")
+                self.assertEqual(result.returncode, 1)
+        self.assertFalse(self.sb.called("systemd-run"))
+
+    def test_an_active_firewall_is_left_alone(self):
+        self.sb.connect_tailscale()
+        (self.sb.state / "ufw_status").write_text("Status: active\n\n22/tcp ALLOW Anywhere\n")
+        result = self.sb.run("lockdown", "--apply", SSH_CONNECTION=TAILSCALE_SESSION)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("schon aktiv", result.stderr)
+        self.assertFalse(self.sb.called("systemd-run"))
+        self.assertFalse(self.sb.called("ufw default"))
+        self.assertFalse(self.sb.called("ufw --force"))
+
+    def test_the_rules_follow_the_ports_sshd_listens_on(self):
+        self.sb.connect_tailscale()
+        effective = self.sb.effective("port 2222\nport 22\npasswordauthentication no\n")
+        result = self.sb.run("lockdown", "--apply", SSH_CONNECTION=TAILSCALE_SESSION, FAKE_SSHD_T_OUT=effective)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rules = [c for c in self.sb.calls() if c.startswith("ufw allow")]
+        self.assertEqual(rules, [
+            "ufw allow in on tailscale0 to any port 22 proto tcp",
+            "ufw allow in on tailscale0 to any port 2222 proto tcp",
+        ])
+
+    def test_an_unreadable_ssh_port_is_refused(self):
+        self.sb.connect_tailscale()
+        for text in ("passwordauthentication no\n", "port abc\n", "port 70000\n"):
+            with self.subTest(text=text):
+                result = self.sb.run(
+                    "lockdown", "--apply", SSH_CONNECTION=TAILSCALE_SESSION, FAKE_SSHD_T_OUT=self.sb.effective(text)
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("SSH-Port", result.stderr)
+        self.assertFalse(self.sb.called("systemd-run"))
+
+
 class ConfirmTest(ServerToolTestCase):
     def test_it_refuses_a_session_outside_tailscale(self):
         (self.sb.state / "ufw_status").write_text("Status: active\n")
@@ -608,11 +752,41 @@ class ConfirmTest(ServerToolTestCase):
 
     def test_it_removes_the_safety_net_from_a_tailscale_session(self):
         (self.sb.state / "ufw_status").write_text("Status: active\n")
+        (self.sb.state / "timer").write_text("active\n")
         result = self.sb.run("confirm", SSH_CONNECTION=TAILSCALE_SESSION)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.sb.called("systemctl stop geniusnew-lockdown-rollback.timer"))
         self.assertIn("Bestätigt", result.stdout)
         self.assertFalse(self.sb.called("ufw --force"))
+        self.assertEqual((self.sb.state / "timer").read_text().strip(), "inactive")
+
+    def test_a_failing_stop_is_not_reported_as_confirmed(self):
+        (self.sb.state / "ufw_status").write_text("Status: active\n")
+        (self.sb.state / "timer").write_text("active\n")
+        result = self.sb.run("confirm", SSH_CONNECTION=TAILSCALE_SESSION, FAKE_STOP_FAIL="1")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("nicht stoppen", result.stderr)
+        self.assertNotIn("Bestätigt", result.stdout)
+
+    def test_a_rollback_that_already_fired_is_not_reported_as_confirmed(self):
+        (self.sb.state / "ufw_status").write_text("Status: active\n")
+        for name, path, content in (
+            ("running", "rollback_service", "activating\n"),
+            ("queued", "jobs", "42 geniusnew-lockdown-rollback.service start waiting\n"),
+        ):
+            with self.subTest(name):
+                (self.sb.state / path).write_text(content)
+                result = self.sb.run("confirm", SSH_CONNECTION=TAILSCALE_SESSION)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("schon ausgelöst", result.stderr)
+                self.assertNotIn("Bestätigt", result.stdout)
+                (self.sb.state / path).unlink()
+
+    def test_an_already_confirmed_firewall_is_confirmed_without_a_stop(self):
+        (self.sb.state / "ufw_status").write_text("Status: active\n")
+        result = self.sb.run("confirm", SSH_CONNECTION=TAILSCALE_SESSION)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.sb.called("systemctl stop"))
 
 
 class StatusTest(ServerToolTestCase):
@@ -632,6 +806,9 @@ class StatusTest(ServerToolTestCase):
         self.assertIn("nur Tailscale", lines["100.101.102.103:22"])
         self.assertIn("ALLE ADRESSEN", lines["0.0.0.0:22"])
         self.assertIn("ALLE ADRESSEN", lines["[::]:22"])
+        self.assertIn("ALLE ADRESSEN", lines["100.128.0.1:80"])
+        self.assertIn("nur Tailscale", lines["[fd7a:115c:a1e0::1]:22"])
+        self.assertIn("ALLE ADRESSEN", lines["[fd7a:1::1]:8080"])
 
     def test_it_works_without_tailscale_and_says_what_to_do(self):
         sb = Sandbox(Path(tempfile.mkdtemp(dir=self._tmp.name)), with_tailscale=False)
@@ -659,6 +836,9 @@ class StatusTest(ServerToolTestCase):
         self.sb.dropin.write_text("PasswordAuthentication no\n")
         self.assertIn("lockdown --apply", next_step())
         self.sb.ufw_conf.write_text("ENABLED=yes\n")
+        (self.sb.state / "timer").write_text("active\n")
+        self.assertIn("confirm", next_step())
+        (self.sb.state / "timer").write_text("inactive\n")
         self.assertIn("Alles eingerichtet", next_step())
 
     def test_it_rejects_bad_watch_arguments(self):
@@ -676,9 +856,16 @@ class TermiusTest(ServerToolTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("geniusnew-server.tail1234.ts.net", result.stdout)
         self.assertIn("100.101.102.103", result.stdout)
-        self.assertIn("Port         : 22", result.stdout)
+        self.assertIn("Port         : 22\n", result.stdout)
         self.assertIn("Benutzer     : tester", result.stdout)
         self.assertNothingChanged()
+
+
+    def test_it_shows_the_port_sshd_really_uses(self):
+        self.sb.connect_tailscale()
+        result = self.sb.run("termius", FAKE_SSHD_T_OUT=self.sb.effective("port 2222\n"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Port         : 2222\n", result.stdout)
 
 
 if __name__ == "__main__":
