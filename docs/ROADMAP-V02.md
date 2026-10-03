@@ -129,3 +129,12 @@ Implementierer.
    gebunden (`SECURITY.md`, Review auf #93: (a) nur Integrität prüfen, (b)
    Policy-Historie, (c) so lassen). Mit der Principal-Bindung aus Audit v2 (B6) wird (a)
    möglich; eine Entscheidung ist nicht auffindbar.
+8. Claude Code Action als Reviewer (Research-Prüfung 03.10.2026): **nur Review**, kein
+   Merge, kein Deployment, keine Umgehung der Gates. Authentisierung über Workload
+   Identity Federation (`anthropic_federation_rule_id`, `anthropic_organization_id`,
+   `id-token: write`) statt statischem `ANTHROPIC_API_KEY`; Action per SHA gepinnt;
+   Werkzeuge über `settings`/`claude_args` begrenzt; `allowed_non_write_users` und
+   `allowed_bots` nie setzen. Offen: Der Schritt für Inline-Kommentare der Action
+   bekommt nur `anthropic_api_key`, ohne Schlüssel vermutlich
+   `classify_inline_comments: false` nötig (ungeprüft). Neue Action plus Workflow gilt
+   als neue Abhängigkeit (Kaans OK); Überschneidung mit #99 vorher klären.
