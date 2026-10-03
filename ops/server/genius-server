@@ -2,8 +2,9 @@
 # genius-server: set up and observe a GeniusNew server that is reached over
 # Tailscale from Termius.
 #
-# Everything that changes the machine needs --apply. Without it the tool only
-# prints each command and why it would run it. No secret is ever read from
+# setup and lockdown change the machine only with --apply; without it they print
+# each command and why they would run it. add-key and confirm act at once: each
+# is itself the deliberate step. No secret is ever read from
 # argv or written to the repository; a Tailscale auth key, if used, comes from
 # a private file.
 set -euo pipefail
@@ -13,6 +14,7 @@ KEYRING="${GENIUS_TS_KEYRING:-/usr/share/keyrings/tailscale-archive-keyring.gpg}
 APT_LIST="${GENIUS_TS_APT_LIST:-/etc/apt/sources.list.d/tailscale.list}"
 SSHD_DROPIN="${GENIUS_SSHD_DROPIN:-/etc/ssh/sshd_config.d/00-geniusnew.conf}"
 SSHD_CONFIG="${GENIUS_SSHD_CONFIG:-/etc/ssh/sshd_config}"
+LOCKDOWN_SESSION="${GENIUS_LOCKDOWN_SESSION:-/run/geniusnew-lockdown-session}"
 UFW_CONF="${GENIUS_UFW_CONF:-/etc/ufw/ufw.conf}"
 OS_RELEASE="${GENIUS_OS_RELEASE:-/etc/os-release}"
 TS_HOSTNAME="${GENIUS_HOSTNAME:-geniusnew-server}"
@@ -123,26 +125,63 @@ except Exception:
     pass' 2>/dev/null || true
 }
 
-# True when the ssh client address lies in Tailscale's 100.64.0.0/10 or
-# fd7a:115c:a1e0::/48 (a MagicDNS name may resolve to either). Read from
-# the environment of this process: do not put "sudo" in front of the script,
-# sudo drops SSH_CONNECTION and the check then (safely) fails.
+tailscale_ips() {
+  have tailscale || return 0
+  tailscale ip 2>/dev/null || true
+}
+
+# session_over_tailscale: the ssh client lies in Tailscale's 100.64.0.0/10 or
+# fd7a:115c:a1e0::/48 AND the server side of the connection is one of this
+# machine's Tailscale addresses. The client range alone proves nothing: it is
+# also shared CGNAT space (docs/CONTROL-DECK.md). Read from the environment of
+# this process: do not put "sudo" in front of the script, sudo drops
+# SSH_CONNECTION and the check then (safely) fails.
 session_over_tailscale() {
-  local conn="${SSH_CONNECTION:-${SSH_CLIENT:-}}"
-  local peer="${conn%% *}"
-  [ -n "$peer" ] || return 1
-  python3 - "$peer" <<'PY'
+  local peer="" local_addr="" rest
+  read -r peer rest local_addr rest <<<"${SSH_CONNECTION:-}" || true
+  [ -n "$peer" ] && [ -n "$local_addr" ] || return 1
+  local -a mine=()
+  mapfile -t mine < <(tailscale_ips)
+  python3 - "$peer" "$local_addr" "${mine[@]+"${mine[@]}"}" <<'PY'
 import ipaddress, sys
+nets = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
 try:
-    addr = ipaddress.ip_address(sys.argv[1])
-    nets = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
-    sys.exit(0 if any(addr.version == n.version and addr in n for n in nets) else 1)
+    peer, local = (ipaddress.ip_address(a) for a in sys.argv[1:3])
 except ValueError:
     sys.exit(1)
+mine = set()
+for text in sys.argv[3:]:
+    try:
+        mine.add(ipaddress.ip_address(text.strip()))
+    except ValueError:
+        pass
+in_range = any(peer.version == n.version and peer in n for n in nets)
+sys.exit(0 if in_range and local in mine else 1)
 PY
 }
 
 ufw_enabled() { grep -qi '^ENABLED=yes' "$UFW_CONF" 2>/dev/null; }
+
+# ufw_c: ufw with untranslated output, because its status text is parsed.
+ufw_c() { as_root env LC_ALL=C ufw "$@"; }
+
+ufw_active() { ufw_c status 2>/dev/null | grep -q '^Status: active'; }
+
+# public_rules: rules that admit traffic from outside tailscale0. "ufw show
+# added" lists them even while ufw is off, and a default deny does not remove them.
+public_rules() {
+  ufw_c show added 2>/dev/null | grep -E '^ufw (allow|limit) ' \
+    | grep -vE '^ufw (allow|limit) out ' | grep -v ' in on tailscale0 ' || true
+}
+
+refuse_public_rules() {
+  local rules
+  rules="$(public_rules)"
+  [ -n "$rules" ] || return 0
+  say "Diese ufw-Regeln lassen Verkehr auch von außerhalb von Tailscale zu:" >&2
+  printf '%s\n' "$rules" | sed 's/^ufw /    sudo ufw delete /' >&2
+  die "$1 Erst die Regeln oben prüfen und mit den gezeigten Befehlen entfernen."
+}
 
 rollback_pending() { [ "$(systemctl is-active "$ROLLBACK_UNIT.timer" 2>/dev/null)" = "active" ]; }
 
@@ -177,7 +216,7 @@ sshd_match_files() {
 # Rules that keep a port open to everybody, which a Tailscale-only lockdown must not leave.
 firewall_warnings() {
   local rules
-  rules="$(as_root ufw status 2>/dev/null | grep -E 'ALLOW' | grep -v 'tailscale0' || true)"
+  rules="$(ufw_c status 2>/dev/null | grep -E 'ALLOW|LIMIT' | grep -v 'tailscale0' || true)"
   if [ -n "$rules" ]; then
     say ""
     say "WARNUNG: Diese Regeln lassen Verkehr auch von außerhalb von Tailscale zu:"
@@ -423,13 +462,20 @@ cmd_lockdown() {
   # firewall that is already on is left alone rather than risked.
   local fw ports
   if [ "$DRY" -eq 0 ] || can_root; then
-    fw="$(as_root ufw status 2>/dev/null)" || die "ufw-Status nicht lesbar; nichts geändert"
+    fw="$(ufw_c status 2>/dev/null)" || die "ufw-Status nicht lesbar; nichts geändert"
     case "$fw" in
       "Status: inactive"*) ;;
       *)
         [ "$DRY" -eq 1 ] || die "ufw ist schon aktiv. Das Sicherheitsnetz würde die Firewall ganz abschalten, deshalb ändert lockdown keine aktive Firewall. Regeln prüfen: sudo ufw status verbose"
         say "WARNUNG: ufw ist schon aktiv. Mit --apply würde das Skript hier abbrechen." ;;
     esac
+    # A default deny leaves explicit allow rules in force: SSH would stay public
+    # while the tool says only Tailscale reaches it.
+    if [ "$DRY" -eq 0 ]; then
+      refuse_public_rules "Mit diesen Regeln wäre SSH weiter öffentlich erreichbar; nichts geändert."
+    elif [ -n "$(public_rules)" ]; then
+      say "WARNUNG: ufw hat Regeln für Verkehr von außerhalb Tailscale. Mit --apply würde das Skript hier abbrechen."
+    fi
   fi
   # Open exactly the ports sshd listens on, so the second session for confirm can connect.
   if [ "$DRY" -eq 0 ] || can_root; then
@@ -447,6 +493,13 @@ cmd_lockdown() {
     # A timer left over from an earlier, unconfirmed run would switch the firewall off again.
     as_root systemctl stop "$ROLLBACK_UNIT.timer" 2>/dev/null || true
     as_root systemctl reset-failed "$ROLLBACK_UNIT.service" 2>/dev/null || true
+    # confirm must come from a new connection: this one is already established
+    # and survives rules that would block every new one.
+    local record
+    record="$(mktemp)"
+    printf '%s\n' "${SSH_CONNECTION:-}" >"$record"
+    as_root install -m 0600 "$record" "$LOCKDOWN_SESSION"
+    rm -f "$record"
   fi
   root systemd-run --unit="$ROLLBACK_UNIT" --on-active="$ROLLBACK_SECONDS" "$(command -v ufw)" --force disable
   step "Regeln setzen" "eingehend alles sperren außer SSH über tailscale0; ausgehend alles erlaubt"
@@ -474,6 +527,13 @@ cmd_confirm() {
   have ufw || die "ufw fehlt"
   local again="Warte eine Minute, dann '$SELF lockdown --apply' erneut."
   if rollback_pending; then
+    local origin
+    origin="$(as_root cat "$LOCKDOWN_SESSION" 2>/dev/null || true)"
+    [ -n "$origin" ] \
+      || die "Unbekannt, aus welcher Verbindung lockdown lief; ohne diesen Nachweis wird nicht bestätigt. $again"
+    [ "$origin" != "${SSH_CONNECTION:-}" ] \
+      || die "Das ist dieselbe Verbindung, aus der lockdown lief. Sie bleibt offen, auch wenn neue Verbindungen gesperrt wären. Öffne in Termius eine zweite Verbindung und bestätige dort."
+    refuse_public_rules "SSH wäre weiter öffentlich erreichbar; nicht bestätigt, das Sicherheitsnetz bleibt gestellt."
     as_root systemctl stop "$ROLLBACK_UNIT.timer" \
       || die "Das Sicherheitsnetz ließ sich nicht stoppen; die Firewall schaltet sich gleich ab. $again"
   fi
@@ -486,10 +546,10 @@ cmd_confirm() {
   esac
   [ -z "$(systemctl list-jobs --no-legend "$ROLLBACK_UNIT.service" 2>/dev/null)" ] \
     || die "Das Sicherheitsnetz hat schon ausgelöst und schaltet die Firewall gerade ab. $again"
-  as_root ufw status 2>/dev/null | grep -q '^Status: active' \
-    || die "Die Firewall ist nicht aktiv (das Sicherheitsnetz hat sie schon ausgeschaltet). $again"
+  ufw_active || die "Die Firewall ist nicht aktiv (das Sicherheitsnetz hat sie schon ausgeschaltet). $again"
+  as_root rm -f "$LOCKDOWN_SESSION"
   say "Bestätigt: das Sicherheitsnetz ist entfernt, die Firewall bleibt an."
-  as_root ufw status verbose | sed 's/^/  /'
+  ufw_c status verbose | sed 's/^/  /'
 }
 
 # ---------------------------------------------------------------- status
@@ -568,7 +628,7 @@ status_once() {
 
   section "Firewall" "was von außen erreichbar ist"
   if have ufw && can_root; then
-    as_root ufw status 2>/dev/null | head -n 12 | sed 's/^/  /'
+    ufw_c status 2>/dev/null | head -n 12 | sed 's/^/  /'
     firewall_warnings
   else
     say "  unbekannt (ufw fehlt oder sudo nötig)"
@@ -621,12 +681,14 @@ genius-server: Server für Termius und Tailscale einrichten und beobachten
 
 Aufruf:  $SELF <befehl> [--apply]
 
+setup und lockdown ändern nur mit --apply etwas. add-key und confirm wirken sofort.
+
   status [--watch [s]]  Was läuft gerade? Nur lesen. --watch aktualisiert alle s Sekunden.
   setup                 Zeigt alle Schritte mit Befehl und Grund (Trockenlauf).
   setup --apply         Führt sie aus: Pakete, Tailscale, SSH nur mit Schlüssel.
   add-key               Öffentlichen Schlüssel aus Termius eintragen.
   lockdown [--apply]    Firewall: nur Tailscale erreicht SSH. Nur aus einer Tailscale-Sitzung.
-  confirm               Aus einer zweiten Tailscale-Sitzung: Firewall behalten.
+  confirm               Aus einer zweiten, neuen Tailscale-Verbindung: Firewall behalten.
   termius               Zeigt die Angaben für den Termius-Host.
 
 Reihenfolge beim ersten Mal:

@@ -29,6 +29,8 @@ REAL_TOOLS = (
 
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIfakefakefake termius-ipad"
 TAILSCALE_SESSION = "100.64.0.7 50000 100.101.102.103 22"
+# The connection lockdown ran from; confirm must come from another one.
+LOCKDOWN_SESSION = "100.64.0.7 49999 100.101.102.103 22"
 PUBLIC_SESSION = "203.0.113.5 50000 192.0.2.10 22"
 
 STUBS = {
@@ -70,7 +72,7 @@ case "$1" in
   stop)
     if [ "$2" = geniusnew-lockdown-rollback.timer ]; then
       [ -z "${FAKE_STOP_FAIL:-}" ] || exit 1
-      echo inactive >"$STATE/timer"
+      [ -n "${FAKE_STOP_NOOP:-}" ] || echo inactive >"$STATE/timer"
     fi ;;
   reload) [ -z "${FAKE_RELOAD_FAIL:-}" ] || exit 1 ;;
   list-jobs) cat "$STATE/jobs" 2>/dev/null || true ;;
@@ -84,12 +86,15 @@ while [ $# -gt 0 ]; do
   if [ "$1" = "-o" ]; then out="$2"; shift; fi
   last="$1"; shift
 done
-echo "FAKE-DOWNLOAD $last" >"$out"
+if [ -n "${FAKE_CURL_EMPTY:-}" ]; then : >"$out"; else echo "FAKE-DOWNLOAD $last" >"$out"; fi
 """,
     "tailscale": """\
 echo "tailscale $*" >>"$LOG"
 case "$1" in
-  ip) [ -e "$STATE/ts_up" ] && echo 100.101.102.103 || exit 1 ;;
+  ip)
+    [ -e "$STATE/ts_up" ] || exit 1
+    [ "${2:-}" = -6 ] || echo 100.101.102.103
+    [ "${2:-}" = -4 ] || echo fd7a:115c:a1e0::1 ;;
   up) touch "$STATE/ts_up" ;;
   status)
     if [ "${2:-}" = "--json" ]; then
@@ -115,6 +120,8 @@ esac
 rc=1
 while IFS= read -r line; do
   set -- $line
+  # Like OpenSSH, skip a leading options field: the key type and blob follow it.
+  case "${2:-}" in AAAA*) ;; *) shift ;; esac
   case "${2:-}" in AAAA*) ;; *) continue ;; esac
   rc=0
   case "$line" in
@@ -126,14 +133,22 @@ while IFS= read -r line; do
 done <"$3"
 exit $rc
 """,
+    # ufw: translates its status unless LC_ALL=C, like a localized install, and
+    # keeps the rules it was given so "show added" reports them while it is off.
     "ufw": """\
 echo "ufw $*" >>"$LOG"
+translate() { if [ "${LC_ALL:-}" = C ]; then cat; else sed 's/Status: active/Status: aktiv/; s/Status: inactive/Status: inaktiv/'; fi; }
 case "$1" in
-  status) cat "$STATE/ufw_status" 2>/dev/null || echo "Status: inactive" ;;
+  status)
+    [ -z "${FAKE_UFW_STATUS_FAIL:-}" ] || exit 1
+    { cat "$STATE/ufw_status" 2>/dev/null || echo "Status: inactive"; } | translate ;;
+  show)
+    echo "Added user rules (see 'ufw status' for running firewall):"
+    cat "$STATE/ufw_added" 2>/dev/null || true ;;
+  allow|limit) echo "ufw $*" >>"$STATE/ufw_added" ;;
   --force)
     if [ "$2" = enable ]; then
-      { echo "Status: active"; echo; echo "To Action From"; echo "22/tcp on tailscale0 ALLOW Anywhere"
-        [ -z "${FAKE_UFW_EXTRA:-}" ] || echo "$FAKE_UFW_EXTRA"; } >"$STATE/ufw_status"
+      { echo "Status: active"; echo; echo "To Action From"; echo "22/tcp on tailscale0 ALLOW Anywhere"; } >"$STATE/ufw_status"
     fi ;;
 esac
 """,
@@ -152,7 +167,7 @@ echo "LISTEN 0 128 [fd7a:1::1]:8080 [::]:*"
 class Sandbox:
     """A private PATH, a log of every stubbed call, and throw-away target paths."""
 
-    def __init__(self, tmp: Path, *, with_tailscale: bool = True) -> None:
+    def __init__(self, tmp: Path, *, without: tuple[str, ...] = ()) -> None:
         self.tmp = tmp
         self.bin = tmp / "bin"
         self.bin.mkdir()
@@ -167,7 +182,7 @@ class Sandbox:
             if real:
                 (self.bin / name).symlink_to(real)
         for name, body in STUBS.items():
-            if name == "tailscale" and not with_tailscale:
+            if name in without:
                 continue
             path = self.bin / name
             path.write_text("#!/bin/bash\n" + body)
@@ -179,6 +194,9 @@ class Sandbox:
         self.dropin = tmp / "sshd_config.d" / "00-geniusnew.conf"
         self.ufw_conf = tmp / "ufw.conf"
         self.authorized_keys = self.home / ".ssh" / "authorized_keys"
+        # Like /run on a real host, the directory exists before the tool runs.
+        (tmp / "run").mkdir()
+        self.lockdown_session = tmp / "run" / "lockdown-session"
         self.sshd_config = tmp / "sshd_config"
         self.sshd_config.write_text("Include /etc/ssh/sshd_config.d/*.conf\n#Match User anoncvs\n")
 
@@ -196,6 +214,7 @@ class Sandbox:
             "GENIUS_SSHD_DROPIN": str(self.dropin),
             "GENIUS_UFW_CONF": str(self.ufw_conf),
             "GENIUS_SSHD_CONFIG": str(self.sshd_config),
+            "GENIUS_LOCKDOWN_SESSION": str(self.lockdown_session),
         }
         env.update(extra)
         return env
@@ -306,6 +325,20 @@ class BasicsTest(ServerToolTestCase):
         self.assertIn("nur Debian oder Ubuntu", result.stderr)
         self.assertNothingChanged()
 
+    def test_a_missing_os_release_is_refused(self):
+        self.sb.os_release.unlink()
+        result = self.sb.run("setup", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Betriebssystem nicht erkennbar", result.stderr)
+        self.assertNothingChanged()
+
+    def test_a_system_without_systemd_is_refused(self):
+        sb = Sandbox(Path(tempfile.mkdtemp(dir=self._tmp.name)), without=("systemctl",))
+        result = sb.run("setup")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("systemd wird gebraucht", result.stderr)
+        self.assertNotIn("[1/6]", result.stdout)
+
     def test_a_missing_codename_is_refused(self):
         self.sb.os_release.write_text("ID=debian\n")
         result = self.sb.run("setup", "--apply")
@@ -375,6 +408,25 @@ class SetupTest(ServerToolTestCase):
         self.assertIn("Download fehlgeschlagen", result.stderr)
         self.assertFalse(self.sb.keyring.exists())
         self.assertFalse(self.sb.called("apt-get install -y tailscale"))
+        self.assertFalse(self.sb.dropin.exists())
+
+    def test_an_empty_download_leaves_no_key_and_stops(self):
+        self.sb.add_key()
+        result = self.sb.run("setup", "--apply", FAKE_CURL_EMPTY="1")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("leere Antwort", result.stderr)
+        self.assertFalse(self.sb.keyring.exists())
+        self.assertFalse(self.sb.called("apt-get install -y tailscale"))
+
+    def test_a_rejected_auth_key_stops_the_setup(self):
+        self.sb.add_key()
+        keyfile = Path(self._tmp.name) / "authkey"
+        keyfile.write_text("tskey-auth-EXPIRED\n")
+        keyfile.chmod(0o600)
+        (self.sb.bin / "tailscale").write_text("#!/bin/bash\necho \"tailscale $*\" >>\"$LOG\"\nexit 1\n")
+        result = self.sb.run("setup", "--apply", GENIUS_TS_AUTHKEY_FILE=str(keyfile))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Auth-Key abgelaufen oder ungültig", result.stderr)
         self.assertFalse(self.sb.dropin.exists())
 
     def test_apply_as_root_needs_no_sudo(self):
@@ -588,6 +640,8 @@ class AddKeyTest(ServerToolTestCase):
             with self.subTest(name):
                 result = self.sb.run("add-key", stdin=text + "\n")
                 self.assertEqual(result.returncode, 1)
+                expected = "kein Schlüssel eingegeben" if name == "empty" else "kein öffentlicher Schlüssel"
+                self.assertIn(expected, result.stderr)
                 self.assertFalse(self.sb.authorized_keys.exists())
 
     def test_an_unreadable_key_is_refused(self):
@@ -620,11 +674,26 @@ class AddKeyTest(ServerToolTestCase):
 
 class LockdownTest(ServerToolTestCase):
     def test_it_needs_tailscale(self):
-        sb = Sandbox(Path(tempfile.mkdtemp(dir=self._tmp.name)), with_tailscale=False)
+        sb = Sandbox(Path(tempfile.mkdtemp(dir=self._tmp.name)), without=("tailscale",))
         result = sb.run("lockdown", "--apply", SSH_CONNECTION=TAILSCALE_SESSION)
         self.assertEqual(result.returncode, 1)
         self.assertIn("Tailscale fehlt", result.stderr)
         self.assertFalse(sb.called("ufw"))
+
+    def test_it_needs_ufw(self):
+        sb = Sandbox(Path(tempfile.mkdtemp(dir=self._tmp.name)), without=("ufw",))
+        sb.connect_tailscale()
+        result = sb.run("lockdown", "--apply", SSH_CONNECTION=TAILSCALE_SESSION)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("ufw fehlt", result.stderr)
+        self.assertFalse(sb.called("systemd-run"))
+
+    def test_an_unreadable_firewall_state_is_refused(self):
+        self.sb.connect_tailscale()
+        result = self.sb.run("lockdown", "--apply", SSH_CONNECTION=TAILSCALE_SESSION, FAKE_UFW_STATUS_FAIL="1")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("ufw-Status nicht lesbar", result.stderr)
+        self.assertFalse(self.sb.called("systemd-run"))
 
     def test_it_needs_a_connected_tailscale(self):
         result = self.sb.run("lockdown", "--apply", SSH_CONNECTION=TAILSCALE_SESSION)
@@ -679,15 +748,42 @@ class LockdownTest(ServerToolTestCase):
             if call.startswith("ufw allow"):
                 self.assertIn("on tailscale0", call)
 
-    def test_a_rule_that_keeps_a_port_public_is_reported(self):
+    def test_a_rule_that_keeps_ssh_public_is_refused_before_any_change(self):
         self.sb.connect_tailscale()
-        result = self.sb.run(
-            "lockdown", "--apply", SSH_CONNECTION=TAILSCALE_SESSION, FAKE_UFW_EXTRA="22/tcp ALLOW Anywhere"
+        (self.sb.state / "ufw_added").write_text(
+            "ufw allow 22/tcp\nufw allow out 53\nufw allow in on tailscale0 to any port 22 proto tcp\n"
         )
+        result = self.sb.run("lockdown", "--apply", SSH_CONNECTION=TAILSCALE_SESSION)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("sudo ufw delete allow 22/tcp", result.stderr)
+        self.assertNotIn("delete allow out 53", result.stderr)
+        self.assertNotIn("delete allow in on tailscale0", result.stderr)
+        self.assertFalse(self.sb.called("systemd-run"))
+        self.assertFalse(self.sb.called("ufw default"))
+        self.assertFalse(self.sb.called("ufw --force"))
+
+    def test_a_dry_run_warns_about_a_public_rule(self):
+        self.sb.connect_tailscale()
+        (self.sb.state / "ufw_added").write_text("ufw limit 22/tcp\n")
+        result = self.sb.run("lockdown", SSH_CONNECTION=TAILSCALE_SESSION)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("WARNUNG", result.stdout)
-        self.assertIn("22/tcp ALLOW Anywhere", result.stdout)
-        self.assertNotIn("on tailscale0 ALLOW Anywhere\n    22/tcp on tailscale0", result.stdout)
+        self.assertIn("außerhalb Tailscale", result.stdout)
+        self.assertNothingChanged()
+
+    def test_a_cgnat_client_on_a_public_server_address_is_refused(self):
+        self.sb.connect_tailscale()
+        result = self.sb.run("lockdown", "--apply", SSH_CONNECTION="100.64.0.7 50000 192.0.2.10 22")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("nicht über Tailscale", result.stderr)
+        self.assertFalse(self.sb.called("systemd-run"))
+
+    def test_apply_records_the_connection_it_ran_from(self):
+        self.sb.connect_tailscale()
+        result = self.sb.run("lockdown", "--apply", SSH_CONNECTION=TAILSCALE_SESSION)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.sb.lockdown_session.read_text(), TAILSCALE_SESSION + "\n")
+        self.assertEqual(stat.S_IMODE(self.sb.lockdown_session.stat().st_mode), 0o600)
+        self.assertLess(self.sb.index("sudo install -m 0600"), self.sb.index("systemd-run"))
 
 
     def test_an_ipv6_tailscale_session_is_accepted(self):
@@ -738,8 +834,18 @@ class LockdownTest(ServerToolTestCase):
 
 
 class ConfirmTest(ServerToolTestCase):
-    def test_it_refuses_a_session_outside_tailscale(self):
+    def setUp(self) -> None:
+        super().setUp()
+        self.sb.connect_tailscale()
+
+    def arm(self) -> None:
+        """The state right after lockdown --apply: firewall on, safety net set."""
         (self.sb.state / "ufw_status").write_text("Status: active\n")
+        (self.sb.state / "timer").write_text("active\n")
+        self.sb.lockdown_session.write_text(LOCKDOWN_SESSION + "\n")
+
+    def test_it_refuses_a_session_outside_tailscale(self):
+        self.arm()
         result = self.sb.run("confirm", SSH_CONNECTION=PUBLIC_SESSION)
         self.assertEqual(result.returncode, 1)
         self.assertFalse(self.sb.called("systemctl stop"))
@@ -750,19 +856,62 @@ class ConfirmTest(ServerToolTestCase):
         self.assertIn("nicht aktiv", result.stderr)
         self.assertFalse(self.sb.called("systemctl stop"))
 
-    def test_it_removes_the_safety_net_from_a_tailscale_session(self):
-        (self.sb.state / "ufw_status").write_text("Status: active\n")
-        (self.sb.state / "timer").write_text("active\n")
+    def test_it_removes_the_safety_net_from_a_new_tailscale_connection(self):
+        self.arm()
         result = self.sb.run("confirm", SSH_CONNECTION=TAILSCALE_SESSION)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.sb.called("systemctl stop geniusnew-lockdown-rollback.timer"))
         self.assertIn("Bestätigt", result.stdout)
         self.assertFalse(self.sb.called("ufw --force"))
         self.assertEqual((self.sb.state / "timer").read_text().strip(), "inactive")
+        self.assertFalse(self.sb.lockdown_session.exists())
+
+    def test_the_connection_lockdown_ran_from_cannot_confirm(self):
+        self.arm()
+        result = self.sb.run("confirm", SSH_CONNECTION=LOCKDOWN_SESSION)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("dieselbe Verbindung", result.stderr)
+        self.assertFalse(self.sb.called("systemctl stop"))
+        self.assertNotIn("Bestätigt", result.stdout)
+
+    def test_an_unknown_lockdown_connection_is_not_confirmed(self):
+        self.arm()
+        self.sb.lockdown_session.unlink()
+        result = self.sb.run("confirm", SSH_CONNECTION=TAILSCALE_SESSION)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Unbekannt", result.stderr)
+        self.assertFalse(self.sb.called("systemctl stop"))
+
+    def test_a_public_rule_keeps_the_safety_net(self):
+        self.arm()
+        (self.sb.state / "ufw_added").write_text("ufw allow 22/tcp\n")
+        result = self.sb.run("confirm", SSH_CONNECTION=TAILSCALE_SESSION)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("sudo ufw delete allow 22/tcp", result.stderr)
+        self.assertFalse(self.sb.called("systemctl stop"))
+
+    def test_a_translated_ufw_does_not_break_confirmation(self):
+        self.arm()
+        result = self.sb.run("confirm", SSH_CONNECTION=TAILSCALE_SESSION, LC_ALL="de_DE.UTF-8", LANG="de_DE.UTF-8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Bestätigt", result.stdout)
+
+    def test_it_needs_ufw(self):
+        sb = Sandbox(Path(tempfile.mkdtemp(dir=self._tmp.name)), without=("ufw",))
+        sb.connect_tailscale()
+        result = sb.run("confirm", SSH_CONNECTION=TAILSCALE_SESSION)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("ufw fehlt", result.stderr)
+
+    def test_a_timer_still_set_after_the_stop_is_not_confirmed(self):
+        self.arm()
+        result = self.sb.run("confirm", SSH_CONNECTION=TAILSCALE_SESSION, FAKE_STOP_NOOP="1")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("noch gestellt", result.stderr)
+        self.assertNotIn("Bestätigt", result.stdout)
 
     def test_a_failing_stop_is_not_reported_as_confirmed(self):
-        (self.sb.state / "ufw_status").write_text("Status: active\n")
-        (self.sb.state / "timer").write_text("active\n")
+        self.arm()
         result = self.sb.run("confirm", SSH_CONNECTION=TAILSCALE_SESSION, FAKE_STOP_FAIL="1")
         self.assertEqual(result.returncode, 1)
         self.assertIn("nicht stoppen", result.stderr)
@@ -811,7 +960,7 @@ class StatusTest(ServerToolTestCase):
         self.assertIn("ALLE ADRESSEN", lines["[fd7a:1::1]:8080"])
 
     def test_it_works_without_tailscale_and_says_what_to_do(self):
-        sb = Sandbox(Path(tempfile.mkdtemp(dir=self._tmp.name)), with_tailscale=False)
+        sb = Sandbox(Path(tempfile.mkdtemp(dir=self._tmp.name)), without=("tailscale",))
         result = sb.run("status")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("nicht installiert", result.stdout)
@@ -842,10 +991,12 @@ class StatusTest(ServerToolTestCase):
         self.assertIn("Alles eingerichtet", next_step())
 
     def test_it_rejects_bad_watch_arguments(self):
-        for args in (("status", "--watch", "abc"), ("status", "--watch", "0"), ("status", "--bogus")):
+        for args, message in ((("status", "--watch", "abc"), "Zahl"), (("status", "--watch", "0"), "mindestens 1"),
+                              (("status", "--bogus"), "unbekannte Option")):
             with self.subTest(args=args):
                 result = self.sb.run(*args)
                 self.assertEqual(result.returncode, 1)
+                self.assertIn(message, result.stderr)
                 self.assertNotIn("== System ==", result.stdout)
 
 

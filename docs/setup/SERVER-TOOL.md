@@ -4,8 +4,10 @@
 vom iPad oder Laptop über **Tailscale** und **Termius** erreichst, und zeigt jederzeit,
 was gerade läuft. Es ist ein einzelnes Bash-Skript ohne Abhängigkeiten.
 
-**Grundregel:** Ohne `--apply` verändert das Werkzeug nichts. Es zeigt jeden Befehl und
-den Grund dazu. Verändert wird nur mit `--apply`.
+**Grundregel:** `setup` und `lockdown` verändern ohne `--apply` nichts; sie zeigen jeden
+Befehl und den Grund dazu. `add-key` (trägt einen Schlüssel ein) und `confirm` (behält die
+Firewall) wirken sofort, denn sie sind selbst der bewusste Schritt. `status` und `termius`
+lesen nur.
 
 **Grenze:** Das Werkzeug ist in der Testumgebung mit Attrappen für apt, systemd, sshd, ufw
 und Tailscale geprüft (`tests/test_server_tool.py`), nicht auf einem echten Server.
@@ -30,7 +32,7 @@ nicht Teil davon (`docs/ANCHOR-SERVICE.md`, `docs/REVERSE-PROXY.md`).
 | `setup --apply` | führt sie aus: Pakete, Tailscale, SSH nur mit Schlüssel |
 | `add-key` | öffentlichen Schlüssel aus Termius eintragen |
 | `lockdown --apply` | Firewall: SSH nur noch über Tailscale (mit automatischem Zurückrollen) |
-| `confirm` | aus einer zweiten Tailscale-Sitzung: Firewall behalten |
+| `confirm` | aus einer zweiten, **neuen** Tailscale-Verbindung: Firewall behalten |
 | `termius` | zeigt Adresse, Port und Benutzer für Termius |
 
 Aufruf: `bash genius-server <befehl>`. Beispiele unten nutzen `bash ops/server/genius-server`.
@@ -67,7 +69,9 @@ Aufruf: `bash genius-server <befehl>`. Beispiele unten nutzen `bash ops/server/g
    auf genau den Ports, auf denen sshd lauscht. Ist `ufw` schon aktiv, ändert `lockdown` nichts:
    Das Sicherheitsnetz könnte die Firewall nur ganz abschalten, nicht alte Regeln zurückholen.
 10. Zweite Termius-Verbindung über Tailscale öffnen und `bash ops/server/genius-server confirm`
-    ausführen. Erst das entfernt das Sicherheitsnetz. Hat es schon ausgelöst, meldet `confirm`
+    ausführen. Erst das entfernt das Sicherheitsnetz. Aus der Verbindung, in der `lockdown`
+    lief, lehnt `confirm` ab: Eine schon bestehende Verbindung bleibt offen, auch wenn die neuen
+    Regeln jede neue Verbindung sperren würden; nur eine neue beweist, dass SSH erreichbar bleibt. Hat es schon ausgelöst, meldet `confirm`
     das und bestätigt nicht.
 11. Ab jetzt `status` (oder `status --watch`) für die Übersicht. Der letzte Abschnitt nennt
     den nächsten Schritt.
@@ -76,12 +80,18 @@ Aufruf: `bash genius-server <befehl>`. Beispiele unten nutzen `bash ops/server/g
 ## Schutz vor Aussperren
 
 - Die SSH-Härtung wird **übersprungen**, solange in `authorized_keys` kein gültiger Schlüssel steht.
-- `lockdown` und `confirm` laufen nur aus einer Sitzung, deren Quelladresse in 100.64.0.0/10 oder
-  fd7a:115c:a1e0::/48 liegt (Tailscale, IPv4 oder IPv6; MagicDNS geht also auch). Starte sie **ohne** `sudo` davor; sudo entfernt die Verbindungsangabe, dann
-  bricht das Werkzeug ab (sicher, aber lästig). Das Werkzeug ruft `sudo` selbst auf.
+- `lockdown` und `confirm` laufen nur aus einer Verbindung, deren Quelladresse in 100.64.0.0/10
+  oder fd7a:115c:a1e0::/48 liegt **und** deren Zieladresse eine Tailscale-Adresse dieses Servers
+  ist (IPv4 oder IPv6; MagicDNS geht also auch). Die Quelladresse allein reicht nicht, weil
+  100.64.0.0/10 auch von Anbietern als CGNAT genutzt wird. Starte beide **ohne** `sudo` davor;
+  sudo entfernt die Verbindungsangabe, dann bricht das Werkzeug ab (sicher, aber lästig). Das
+  Werkzeug ruft `sudo` selbst auf.
 - Die Firewall hat ein Sicherheitsnetz mit Zeitgeber. Ohne `confirm` ist sie nach 5 Minuten wieder aus.
-- `lockdown` warnt, wenn eine ältere Regel (zum Beispiel `22/tcp ALLOW Anywhere`) SSH weiter
-  öffentlich offen lässt. Löschen musst du sie selbst: `sudo ufw delete allow 22/tcp`.
+- `lockdown` und `confirm` brechen ab, solange eine ufw-Regel Verkehr von außerhalb Tailscale
+  zulässt (zum Beispiel `ufw allow 22/tcp`): Eine Standard-Sperre entfernt solche Regeln nicht,
+  SSH bliebe also öffentlich. Das Werkzeug zeigt die Löschbefehle (`sudo ufw delete allow 22/tcp`);
+  ausführen musst du sie selbst.
+- `confirm` gilt nur aus einer neuen Verbindung, nicht aus der, in der `lockdown` lief.
 - Andere eingehende Dienste (Web, Datenbank) sind nach `lockdown` von außen nicht erreichbar.
   Das ist gewollt; Freigaben nur gezielt und über `tailscale0`.
 
@@ -105,4 +115,6 @@ Aufruf: `bash genius-server <befehl>`. Beispiele unten nutzen `bash ops/server/g
 | `ufw ist schon aktiv` | `lockdown` ändert keine aktive Firewall; Regeln mit `sudo ufw status verbose` prüfen |
 | `SSH-Port nicht ermittelbar` | `sudo sshd -T \| grep ^port` liefert keinen gültigen Port |
 | `Du bist nicht über Tailscale verbunden` | In Termius über die Tailscale-Adresse neu verbinden |
+| `Diese ufw-Regeln lassen Verkehr auch von außerhalb …` | Gezeigte `sudo ufw delete …`-Befehle prüfen und ausführen, dann neu starten |
+| `dieselbe Verbindung, aus der lockdown lief` | In Termius eine zweite Verbindung öffnen und `confirm` dort ausführen |
 | `schon ausgelöst` oder `nicht aktiv` bei `confirm` | Das Sicherheitsnetz hat ausgelöst; eine Minute warten, dann `lockdown --apply` erneut |
