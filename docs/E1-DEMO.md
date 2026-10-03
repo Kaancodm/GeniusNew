@@ -4,7 +4,8 @@ Die zusätzliche Demo nutzt ausschließlich eine wegwerfbare PostgreSQL-Datenban
 die sie über `GENIUSNEW_TEST_ADMIN_DSN` anlegt und wieder entfernt. Sie verwendet
 keine produktiven Zugangsdaten und keinen öffentlich erreichbaren Endpunkt.
 
-Sie prüft drei Fälle mit dem echten dauerhaften Dienst:
+`python scripts/demo_persistence.py` prüft drei Fälle mit dem echten dauerhaften
+Dienst. `./scripts/demo.sh` bleibt die kurze HTTP-Demo ohne Datenbank:
 
 1. Ein abgeschlossener Job wird nach Neustart mit derselben Kennung erneut
    eingereicht. Der Dienst lehnt ihn ab und führt den Worker nicht nochmals aus.
