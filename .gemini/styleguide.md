@@ -1,4 +1,4 @@
-# Review-Leitfaden für Gemini (Antigravity-CLI, Gemini CLI, Code Assist)
+# Review-Leitfaden für Gemini (Antigravity-CLI, Abacus-CLI, Gemini CLI, Code Assist)
 
 GeniusNew ist ein Zero-Trust-Agentensystem in Python. Regeln: `AGENTS.md`, Rollen:
 `docs/COLLABORATION.md`. Reviews bitte **auf Deutsch**, im Format
