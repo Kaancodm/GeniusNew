@@ -107,8 +107,8 @@ Vollständig in `SECURITY.md`. Die wichtigsten:
 ## Zusammenarbeit der Werkzeuge
 
 Ab 27.09.2026 gilt `docs/COLLABORATION.md` in aktualisierter Fassung. **Codex setzt
-Kerncode um und mergt.** **Gemini Pro und NotebookLM pflegen `docs/STATUS.md`**
-(dieses Dokument); Gemini reviewt außerdem jeden PR automatisch. **Kaan entscheidet
+Kerncode um und mergt.** **Seit 04.10.2026 pflegt Claude Code `docs/STATUS.md`**
+(dieses Dokument); Gemini prüft über die Antigravity-CLI (`docs/COLLABORATION.md`). **Kaan entscheidet
 und entwirft die Datenbank (`docs/DATABASE.md`) selbst.** **ChatGPT** übernimmt neue
 Werkzeuge, Server-Pflege und Infrastruktur. Copilot prüft zusätzlich. Microsoft 365
 Copilot liest aus OneDrive. **Claude Code besitzt `docs/COLLABORATION.md` und
@@ -117,7 +117,7 @@ Plattformen mit Überschreibrecht und hilft, wenn Codex feststeckt.
 
 | Werkzeug | Rolle | Liest |
 | --- | --- | --- |
-| Gemini Pro | Pflegt `docs/STATUS.md` mit NotebookLM, automatisches Review jedes PRs, Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung | `GEMINI.md`, `.gemini/styleguide.md` |
+| Gemini Pro | Review über die Antigravity-CLI: Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung, sonst auf Anforderung | `GEMINI.md`, `.gemini/styleguide.md` |
 | NotebookLM | **Wissensdatenbank**: Auskunft für alle, mit Quelle | dieses Dokument, `docs/DECISIONS.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`, `AGENTS.md` |
 | ChatGPT Pro / Codex | **Kerncode-Umsetzung**, ein Thema pro PR (`codex/<thema>`), mit Wissensblock | `AGENTS.md`, `docs/COLLABORATION.md` |
 | ChatGPT (Chat) | **Neue Werkzeuge, Server-Pflege, Infrastruktur, Integrationen** (`chatgpt/<thema>`), NotebookLM + eigenes Notebook; Kaan mergt | `AGENTS.md`, `docs/COLLABORATION.md` |

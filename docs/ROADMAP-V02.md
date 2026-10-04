@@ -97,8 +97,15 @@ anpassen.
 
 ## Reihenfolge
 
-A1 → B0 → B1 → B2 → B3 → B4 → B5 → B6 → B7 → C1 → C2 → C3 → C4 → A2 → D1 → D2 → D3 →
-C5 → E1 → E2 → E3.
+A1 → B0 → B1 → B2 → B3 → B4 → B5 → B6 → B7 → C1 → C2 → C3 → C4 → A2 → **C5 → E3** →
+D1 → D2 → D3 → E1 → E2.
+
+**Geändert am 04.10.2026 (Kaan, `docs/DECISIONS.md`):** C5 und E3 kommen vor das Portal,
+weil bisher nichts auf einem echten Server gelaufen ist. Der Server wird zuerst mit
+`ops/server/genius-server` eingerichtet (`docs/setup/SERVER-TOOL.md`). Das Portal startet
+klein mit D1; der Python-Prototyp von Codex (27.09.) ist Vorlage, nicht Code zum
+Übernehmen. E1 liegt schon als PR vor (#112) und wird unabhängig davon gemergt. Jeder PR
+basiert auf `main` (keine Stapel-PRs).
 
 Zuständigkeit (Vorschlag, je Branch ein Implementierer; Rollen nach #66): Codex B1–B4, C3, jeder DB-PR mit „Claude DB Review: APPROVED“ am exakten Head; Claude C1
 (#61), C2 (#62, Neuaufbau aus #32), C4 (#71) sowie Design und Umsetzung von A2 (#72, #76; Entscheidung Kaan 29.09.2026); B5 und B6 Claude (Security) mit
@@ -129,3 +136,12 @@ Implementierer.
    gebunden (`SECURITY.md`, Review auf #93: (a) nur Integrität prüfen, (b)
    Policy-Historie, (c) so lassen). Mit der Principal-Bindung aus Audit v2 (B6) wird (a)
    möglich; eine Entscheidung ist nicht auffindbar.
+8. Claude Code Action als Reviewer (Research-Prüfung 03.10.2026): **nur Review**, kein
+   Merge, kein Deployment, keine Umgehung der Gates. Authentisierung über Workload
+   Identity Federation (`anthropic_federation_rule_id`, `anthropic_organization_id`,
+   `id-token: write`) statt statischem `ANTHROPIC_API_KEY`; Action per SHA gepinnt;
+   Werkzeuge über `settings`/`claude_args` begrenzt; `allowed_non_write_users` und
+   `allowed_bots` nie setzen. Offen: Der Schritt für Inline-Kommentare der Action
+   bekommt nur `anthropic_api_key`, ohne Schlüssel vermutlich
+   `classify_inline_comments: false` nötig (ungeprüft). Neue Action plus Workflow gilt
+   als neue Abhängigkeit (Kaans OK); Überschneidung mit #99 vorher klären.
