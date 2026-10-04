@@ -4,7 +4,7 @@
 vom iPad oder Laptop über **Tailscale** und **Termius** erreichst, und zeigt jederzeit,
 was gerade läuft. Es ist ein einzelnes Bash-Skript ohne Abhängigkeiten.
 
-**Grundregel:** `setup` und `lockdown` verändern ohne `--apply` nichts; sie zeigen jeden
+**Grundregel:** `setup`, `lockdown` und `deck` verändern ohne `--apply` nichts; sie zeigen jeden
 Befehl und den Grund dazu. `add-key` (trägt einen Schlüssel ein) und `confirm` (behält die
 Firewall) wirken sofort, denn sie sind selbst der bewusste Schritt. `status` und `termius`
 lesen nur.
@@ -34,6 +34,7 @@ nicht Teil davon (`docs/ANCHOR-SERVICE.md`, `docs/REVERSE-PROXY.md`).
 | `lockdown --apply` | Firewall: SSH nur noch über Tailscale (mit automatischem Zurückrollen) |
 | `confirm` | aus einer zweiten, **neuen** Tailscale-Verbindung: Firewall behalten |
 | `termius` | zeigt Adresse, Port und Benutzer für Termius |
+| `deck --apply` | Control Deck (Dashboard) als systemd-Dienst, nur über Tailscale |
 
 Aufruf: `bash genius-server <befehl>`. Beispiele unten nutzen `bash ops/server/genius-server`.
 
@@ -76,6 +77,28 @@ Aufruf: `bash genius-server <befehl>`. Beispiele unten nutzen `bash ops/server/g
 11. Ab jetzt `status` (oder `status --watch`) für die Übersicht. Der letzte Abschnitt nennt
     den nächsten Schritt.
 12. Langläufer in `tmux new -As genius` starten; die Sitzung überlebt einen Verbindungsabbruch.
+13. Optional, das Dashboard als Dienst: erst `bash ops/server/genius-server deck` lesen, dann
+    `bash ops/server/genius-server deck --apply`. Danach am iPad mit eingeschaltetem Tailscale
+    `http://<100.x-Adresse>:8787` öffnen.
+
+## Dashboard (Control Deck) als Dienst
+
+`deck --apply` schreibt `/etc/systemd/system/geniusnew-deck.service`, gibt in der Firewall
+Port 8787 **nur auf `tailscale0`** frei und startet den Dienst. Er startet beim Booten neu.
+
+- Er läuft als dein Benutzer, nicht als root, mit `NoNewPrivileges`, `PrivateTmp` und
+  `ProtectSystem=full`.
+- Er ist nur an die Tailscale-Adresse gebunden. Das Control Deck selbst lehnt jede andere Adresse ab
+  (`docs/CONTROL-DECK.md`).
+- Gibt es im Repository `.venv`, nimmt der Dienst dessen Python, sonst `python3` des Systems.
+- Port ändern: `GENIUS_DECK_PORT=9000 bash ops/server/genius-server deck --apply`.
+- Hat sich die Tailscale-Adresse geändert, einfach `deck --apply` erneut ausführen.
+- Wieder entfernen:
+  ```sh
+  sudo systemctl disable --now geniusnew-deck
+  sudo rm /etc/systemd/system/geniusnew-deck.service && sudo systemctl daemon-reload
+  sudo ufw delete allow in on tailscale0 to any port 8787 proto tcp
+  ```
 
 ## Schutz vor Aussperren
 
@@ -110,6 +133,7 @@ Aufruf: `bash genius-server <befehl>`. Beispiele unten nutzen `bash ops/server/g
 | Meldung | Bedeutung |
 | --- | --- |
 | `als root gestartet` | Als normaler Benutzer mit sudo starten, oder `GENIUS_USER=<benutzer>` setzen |
+| `Das Dashboard läuft nicht` | Ursache mit `sudo journalctl -u geniusnew-deck -n 30` ansehen |
 | `Das ist WSL (Laptop), kein Server` | Auf dem Server ausführen, nicht im Laptop-WSL |
 | `nur Debian oder Ubuntu` | Andere Systeme sind nicht unterstützt (fail closed) |
 | `ÜBERSPRUNGEN … kein gültiger Schlüssel` | Erst `add-key`, dann `setup --apply` erneut |

@@ -15,6 +15,10 @@ APT_LIST="${GENIUS_TS_APT_LIST:-/etc/apt/sources.list.d/tailscale.list}"
 SSHD_DROPIN="${GENIUS_SSHD_DROPIN:-/etc/ssh/sshd_config.d/00-geniusnew.conf}"
 SSHD_CONFIG="${GENIUS_SSHD_CONFIG:-/etc/ssh/sshd_config}"
 LOCKDOWN_SESSION="${GENIUS_LOCKDOWN_SESSION:-/run/geniusnew-lockdown-session}"
+DECK_UNIT="${GENIUS_DECK_UNIT:-/etc/systemd/system/geniusnew-deck.service}"
+DECK_PORT="${GENIUS_DECK_PORT:-8787}"
+DECK_SETTLE="${GENIUS_DECK_SETTLE:-2}"
+REPO_ROOT="${GENIUS_REPO_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
 UFW_CONF="${GENIUS_UFW_CONF:-/etc/ufw/ufw.conf}"
 OS_RELEASE="${GENIUS_OS_RELEASE:-/etc/os-release}"
 KERNEL_RELEASE="${GENIUS_KERNEL_RELEASE:-/proc/sys/kernel/osrelease}"
@@ -568,6 +572,96 @@ cmd_confirm() {
   ufw_c status verbose | sed 's/^/  /'
 }
 
+# ---------------------------------------------------------------- deck
+
+# deck_unit IP PORT PYTHON [NAME]: the systemd unit for the Control Deck. It
+# binds to the Tailscale address only; the deck itself refuses anything but
+# loopback and 100.64.0.0/10 (docs/CONTROL-DECK.md).
+deck_unit() {
+  local ip="$1" port="$2" python="$3" name="${4:-}" allow=""
+  [ -z "$name" ] || allow=" --allow-host $name --allow-host $name:$port"
+  cat <<UNIT
+# Managed by genius-server.
+[Unit]
+Description=GeniusNew Control Deck (read-only, Tailscale only)
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+User=$TARGET_USER
+WorkingDirectory=$REPO_ROOT
+ExecStart=$python -m tools.control_deck --host $ip --port $port$allow
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+}
+
+cmd_deck() {
+  refuse_wsl
+  resolve_user
+  have systemctl || die "systemd wird gebraucht"
+  have tailscale || die "Tailscale fehlt; erst '$SELF setup --apply'"
+  local ip name python tmp
+  ip="$(tailscale_ip)"
+  [ -n "$ip" ] || die "Tailscale ist nicht verbunden (kein 'tailscale ip -4'); erst setup"
+  case "$DECK_PORT" in ''|*[!0-9]*) die "GENIUS_DECK_PORT muss eine Zahl sein" ;; esac
+  { [ "$DECK_PORT" -ge 1024 ] && [ "$DECK_PORT" -le 65535 ]; } \
+    || die "GENIUS_DECK_PORT muss zwischen 1024 und 65535 liegen"
+  # The path goes into the unit unquoted; anything beyond plain path characters
+  # could change what systemd runs.
+  case "$REPO_ROOT" in /*) ;; *) die "Repository-Pfad muss absolut sein: $REPO_ROOT" ;; esac
+  case "$REPO_ROOT" in *[!A-Za-z0-9._/-]*) die "Repository-Pfad enthält Zeichen, die eine systemd-Unit nicht sicher trägt: $REPO_ROOT" ;; esac
+  [ -f "$REPO_ROOT/tools/control_deck/__main__.py" ] \
+    || die "Control Deck fehlt in $REPO_ROOT (tools/control_deck); Repository aktualisieren"
+  # The project venv carries the pinned dependencies the deck's checks import.
+  if [ -x "$REPO_ROOT/.venv/bin/python3" ]; then
+    python="$REPO_ROOT/.venv/bin/python3"
+  else
+    python="$(command -v python3 || true)"
+  fi
+  [ -n "$python" ] || die "python3 fehlt"
+  case "$python" in /*) ;; *) die "python3-Pfad muss absolut sein: $python" ;; esac
+  case "$python" in *[!A-Za-z0-9._/-]*) die "python3-Pfad enthält Zeichen, die eine systemd-Unit nicht sicher trägt: $python" ;; esac
+  name="$(tailscale_dns)"
+  case "$name" in *[!a-z0-9.-]*) name="" ;; esac
+  TOTAL=3
+  say "Control Deck als Dienst, nur über Tailscale erreichbar: http://$ip:$DECK_PORT"
+  if [ "$DRY" -eq 1 ]; then say "TROCKENLAUF: es wird nichts verändert. Zum Ausführen: $SELF deck --apply"; fi
+  step "Dienst-Datei schreiben" \
+    "startet das Dashboard beim Booten, als Benutzer $TARGET_USER, gebunden an die Tailscale-Adresse"
+  tmp="$(mktemp)"
+  deck_unit "$ip" "$DECK_PORT" "$python" "$name" >"$tmp"
+  show "$(sudo_prefix)install -m 0644 <Inhalt> $DECK_UNIT"
+  sed 's/^/        | /' "$tmp"
+  if [ "$DRY" -eq 0 ]; then
+    as_root install -d -m 0755 "$(dirname "$DECK_UNIT")"
+    as_root install -m 0644 "$tmp" "$DECK_UNIT"
+  fi
+  rm -f "$tmp"
+  step "Firewall-Regel" "nur über tailscale0; wirkt, sobald lockdown die Firewall eingeschaltet hat"
+  root ufw allow in on tailscale0 to any port "$DECK_PORT" proto tcp
+  step "Dienst starten" "neu laden, beim Booten aktivieren, jetzt (neu) starten"
+  root systemctl daemon-reload
+  root systemctl enable geniusnew-deck
+  root systemctl restart geniusnew-deck
+  if [ "$DRY" -eq 0 ]; then
+    # A deck that cannot bind exits right after start; give it a moment to do so.
+    sleep "$DECK_SETTLE"
+    [ "$(systemctl is-active geniusnew-deck 2>/dev/null)" = "active" ] \
+      || die "Das Dashboard läuft nicht. Ursache: sudo journalctl -u geniusnew-deck -n 30"
+    say ""
+    say "Dashboard läuft. Auf dem iPad (Tailscale an): http://$ip:$DECK_PORT"
+    [ -z "$name" ] || say "  oder: http://$name:$DECK_PORT"
+  fi
+}
+
 # ---------------------------------------------------------------- status
 
 # classify_ports: label each listening TCP socket by how far its address reaches.
@@ -602,6 +696,7 @@ next_step() {
     say "  $SELF lockdown --apply   (aus einer Termius-Verbindung über Tailscale)"; return
   fi
   say "  Alles eingerichtet. Verbinden: $SELF termius"
+  [ -e "$DECK_UNIT" ] || say "  Optional, Dashboard als Dienst: $SELF deck --apply"
 }
 
 status_once() {
@@ -655,7 +750,7 @@ status_once() {
 
   section "Dienste" "systemd-Dienste, die für GeniusNew eine Rolle spielen"
   local u
-  for u in ssh sshd tailscaled docker postgresql geniusnew geniusnew-anchor; do
+  for u in ssh sshd tailscaled docker postgresql geniusnew geniusnew-anchor geniusnew-deck; do
     if systemctl cat "$u.service" >/dev/null 2>&1; then
       printf '  %-16s %s\n' "$u" "$(systemctl is-active "$u" 2>/dev/null || true)"
     fi
@@ -697,7 +792,7 @@ genius-server: Server für Termius und Tailscale einrichten und beobachten
 
 Aufruf:  $SELF <befehl> [--apply]
 
-setup und lockdown ändern nur mit --apply etwas. add-key und confirm wirken sofort.
+setup, lockdown und deck ändern nur mit --apply etwas. add-key und confirm wirken sofort.
 
   status [--watch [s]]  Was läuft gerade? Nur lesen. --watch aktualisiert alle s Sekunden.
   setup                 Zeigt alle Schritte mit Befehl und Grund (Trockenlauf).
@@ -706,6 +801,7 @@ setup und lockdown ändern nur mit --apply etwas. add-key und confirm wirken sof
   lockdown [--apply]    Firewall: nur Tailscale erreicht SSH. Nur aus einer Tailscale-Sitzung.
   confirm               Aus einer zweiten, neuen Tailscale-Verbindung: Firewall behalten.
   termius               Zeigt die Angaben für den Termius-Host.
+  deck [--apply]        Control Deck (Dashboard) als Dienst, nur über Tailscale.
 
 Reihenfolge beim ersten Mal:
   1. setup (ansehen), 2. setup --apply, 3. Schlüssel in Termius erzeugen,
@@ -716,6 +812,7 @@ Umgebung (optional):
   GENIUS_HOSTNAME           Name im Tailscale-Netz (Standard geniusnew-server)
   GENIUS_USER               Benutzer, dessen Schlüssel gelten (Standard: aufrufender Benutzer)
   GENIUS_TS_AUTHKEY_FILE    Datei mit Tailscale-Auth-Key, Modus 600 (sonst Anmelde-Link)
+  GENIUS_DECK_PORT          Port des Dashboards (Standard 8787)
 EOF
 }
 
@@ -736,6 +833,7 @@ main() {
     lockdown) cmd_lockdown ;;
     confirm)  cmd_confirm ;;
     termius)  resolve_user; print_termius ;;
+    deck)     cmd_deck ;;
     help|-h|--help) usage ;;
     *) usage >&2; die "unbekannter Befehl: $cmd" ;;
   esac
