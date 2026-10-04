@@ -154,10 +154,12 @@ Nach dem Stop aller Core-Schreiber und dem Gleichstandsvergleich lautet der
 Kern der Sicherung beispielsweise (als Operator mit `sudo`, `private_dir` zeigt
 auf einen zuvor bestimmten Pfad auf verschlüsseltem Speicher):
 
-```sh
+```bash
+set -euo pipefail
 sudo install -d -m 0700 -o root -g root "$private_dir"
 sudo env PGSERVICEFILE=/etc/geniusnew/backup.pg_service.conf PGPASSFILE=/etc/geniusnew/backup.pgpass pg_dump --dbname='service=geniusnew-backup' --format=custom --file="$private_dir/core.dump"
 sudo chmod 0600 "$private_dir/core.dump"
+sudo pg_restore --list "$private_dir/core.dump" >/dev/null
 sudo systemctl stop geniusnew-anchor.service
 sudo install -m 0600 -o root -g root /var/lib/geniusnew-anchor/anchor.state "$private_dir/anchor.state"
 sudo sha256sum "$private_dir/core.dump" "$private_dir/anchor.state" | sudo tee "$private_dir/SHA256SUMS" >/dev/null
