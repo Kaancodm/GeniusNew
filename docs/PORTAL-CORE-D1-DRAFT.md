@@ -21,6 +21,11 @@ Damit beweist D1 den aufrufenden Dienst, noch keine einzelne Portal-Nutzeridenti
 Die Isolation von Nutzeraufträgen und Approvals in D3 braucht daher eine eigene,
 vor der Aktivierung entschiedene Autorisierungsregel. Ein gemeinsamer Principal darf
 nicht stillschweigend als Nachweis einer Core-seitigen Nutzertrennung gelten.
+Im heutigen Kern teilen sich alle Requests desselben `subject` einen Token-Bucket
+und eine Policy-Grant; Approvals prüfen Core-seitig nur diesen `subject`. Ein
+Portal-Nutzer kann deshalb über den gemeinsamen Principal andere Nutzer
+auslasten, und der Kern trennt ihre Approvals noch nicht. Bleibt diese Grenze
+beim Code-PR offen, muss sie in `SECURITY.md` sichtbar sein.
 
 ## Signierter Request
 
@@ -37,6 +42,20 @@ Der Portal-Server erzeugt pro Versuch einen neuen, kryptografisch zufälligen
 | `body_sha256` | SHA-256 über die tatsächlich gesendeten Body-Bytes |
 | `signature` | Ed25519 über Domänentrennungslabel und alle vorigen Felder |
 
+Die Kanonform entspricht `geniusnew.contracts.canonical`: Schlüssel werden nach
+ASCII-Namen aufsteigend sortiert, Trennzeichen sind `,` und `:` ohne Leerzeichen,
+alle Nicht-ASCII-Zeichen werden als JSON-`\u`-Escapes kodiert, `NaN` und
+Fließkommazahlen sind verboten. Die Zeiten sind exakte Integer im darstellbaren
+Unix-Sekundenbereich vor 2100; `null`, Booleans und doppelte Schlüssel sind
+verboten. Die Signatur deckt das Domänentrennungslabel plus die kanonischen
+Envelope-Bytes **ohne** `signature` ab. Der Verifier parst das vollständige
+Envelope und verlangt Bytegleichheit mit der erneuten Kanonkodierung, bevor er
+die Signatur prüft. Die Portal-Implementierung muss dieselben Bytes erzeugen;
+Cross-Language-Testvektoren einschließlich Unicode sind Teil der Code-Abnahme.
+Beispiel für den Body `{"text":"Grüße🙂"}` sind die ASCII-Bytes
+`{"text":"Gr\u00fc\u00dfe\ud83d\ude42"}`; der Digest bezieht sich auf genau
+diese Bytes.
+
 Der Body ist kanonisches JSON mit genau einem nichtleeren String `text`, höchstens
 16 KiB. Unbekannte, doppelte oder falsch typisierte Felder, nichtkanonische Bytes,
 ungültige Unicode-Skalare, mehrdeutige URL-Kodierung und abweichende Body-Bytes
@@ -45,6 +64,8 @@ Der HTTP-Adapter muss genau eine eindeutig kodierte Envelope-Header-Instanz
 akzeptieren; doppelte Header, ein gleichzeitiger Bearer- und Signaturpfad sowie
 Proxy-Umschreibungen werden verweigert. Die konkreten Header- und
 Fehlerstatus-Bytes werden vor der Implementierung im Protokoll fixiert.
+Der Adapter verlangt außerdem eindeutig `Content-Type: application/json`; der
+signierte Body-Digest bleibt auf die tatsächlich empfangenen Bytes bezogen.
 
 Der Kern wählt den öffentlichen Schlüssel ausschließlich aus seiner eigenen,
 begrenzten Konfiguration anhand der erwarteten Bindung aus `issuer`, `audience` und
@@ -55,8 +76,10 @@ geprüftem Servernamen; die Signatur ersetzt keinen geschützten Netzwerkkanal.
 
 ## Ablauf, Replay und Fehler
 
-Die Kernuhr muss innerhalb des signierten Zeitfensters liegen. Ein abgelaufener
-oder erst zukünftig gültiger Request wird verweigert. Nach vollständiger
+Die Kernuhr muss innerhalb des signierten Zeitfensters liegen. Der Vorschlag
+für D1 erlaubt höchstens fünf Sekunden Uhrabweichung vor `issued_at`;
+`now < expires_at` gilt ohne Nachfrist. Ein stärker in der Zukunft liegender
+oder abgelaufener Request wird verweigert. Nach vollständiger
 Signaturprüfung reserviert der Kern `(Protokolldomäne, issuer, nonce)` in einer
 dauerhaften Core-PostgreSQL-Tabelle mit Unique Constraint. Derselbe Nonce bleibt
 auch bei geändertem Body, Digest, Schlüssel oder Job-ID verbraucht. Zwei
@@ -64,8 +87,13 @@ gleichzeitige Instanzen dürfen höchstens eine Reservation gewinnen. Die Prüfu
 und Reservation sind transaktional; ein nicht erreichbarer oder beschädigter
 Replay-Speicher führt zu einer Ablehnung, nie zu einem In-Memory-Fallback.
 
-Der Nonce wird vor der Ausführung verbraucht. Fällt der Dienst nach der Reservation
-und vor einer Antwort aus, ist der ursprüngliche Request nicht erneut ausführbar.
+**Verbindliche Reihenfolge für die Implementierung:** Der Kern committed die
+Nonce-Reservation erfolgreich, bevor er eine Job-ID erzeugt, einen Handoff
+ausstellt oder eine Job-/Audit-Mutation beginnt. Ein Job darf nie vor dem
+bestätigten Nonce-Commit entstehen. So kann ein Crash keine bereits angelegte
+Job-Reservation mit noch wiederholbarem Request zurücklassen. Fällt der Dienst
+nach der Reservation und vor einer Antwort aus, ist der ursprüngliche Request
+nicht erneut ausführbar.
 Ein Client darf aus einem Timeout keinen Erfolg ableiten. D1 verspricht damit
 Replay-Schutz für den signierten Request, noch keine Ende-zu-Ende-Deduplikation
 derselben menschlichen Absicht bei einem neuen Nonce. Der genaue Ablauf zwischen
@@ -73,12 +101,16 @@ Replay-Reservation und bestehender Job-Reservation muss vor Code gegen Crashpunk
 festgelegt und getestet werden. Ein Worker läuft nie in einer offenen
 Replay-Transaktion.
 
-Die Datenbank-Migration, Runtime-Rechte, Aufbewahrung und Bereinigung der
-Nonce-Zeilen gehören in `docs/DATABASE.md` und brauchen dessen vorgesehenen
-Entwurfs- und Reviewweg. Bereinigung darf einen noch gültigen Nonce nie wieder
-freigeben; Schlüsselrotation darf das ebenfalls nicht. Das Portal braucht einen
-eigenen Mechanismus, um unklare Antworten sicher anzuzeigen und keine automatische
-Wiederholung desselben Requests auszulösen.
+Die Datenbank-Migration und Runtime-Rechte der Nonce-Zeilen gehören in
+`docs/DATABASE.md` und brauchen dessen vorgesehenen Entwurfs- und Reviewweg.
+Mindestanforderungen sind `expires_at` je Reservation, ein Unique Constraint auf
+`(domain, issuer, nonce)` und für die Core-Runtime nur `SELECT` und `INSERT`,
+kein `UPDATE` oder `DELETE`. Für D1 werden Nonces nicht bereinigt: Auch ein
+Uhrsprung zurück oder eine Schlüsselrotation darf sie nicht erneut freigeben.
+Ein voller Speicher verweigert neue Aufträge. Eine spätere Bereinigung braucht
+einen eigenen geprüften Vertrag mit Uhr-Rücksprungschutz und separater
+Wartungsrolle. Das Portal braucht einen eigenen Mechanismus, um unklare Antworten
+sicher anzuzeigen und keine automatische Wiederholung desselben Requests auszulösen.
 
 ## Abnahme vor Aktivierung
 
@@ -100,5 +132,6 @@ Wiederholung desselben Requests auszulösen.
    dessen Approvals abgebildet, ohne Browserwerte zur Core-Autorität zu machen?
 2. Welche konkreten Header, Fehlerantworten und Redirect-/Proxy-Regeln bilden die
    HTTP-Grenze? Diese Bytes müssen vor dem Adapter feststehen.
-3. Welche Aufbewahrungs- und Bereinigungsregel für Nonces bleibt auch bei
-   Uhrfehlern und Schlüsselrotation fail closed?
+3. Bestätigt Kaan die vorgeschlagenen fünf Sekunden Uhrabweichung und die
+   unveränderte Aufbewahrung aller Nonces für D1? Vor Code muss
+   `docs/DATABASE.md` die dazugehörige Migration und Rechte festlegen.
