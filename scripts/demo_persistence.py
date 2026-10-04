@@ -146,7 +146,8 @@ def anchor_ahead_of_database(directory: str) -> None:
         service, connection = start(current, anchor_state, log_path)
         try:
             result = harness.run_job(service, mode="direct", text=harness.CRASH_TEXT)[-1]
-            require(result.status == 202 and service.anchor.committed[0] > 0,
+            anchor_count = service.anchor.committed[0]
+            require(result.status == 202 and anchor_count > 0,
                     "the anchor was not advanced")
         finally:
             service.close()
@@ -158,7 +159,8 @@ def anchor_ahead_of_database(directory: str) -> None:
             try:
                 service, connection = start(older, anchor_state, log_path)
             except ContractError as refusal:
-                require("anchor" in str(refusal),
+                require(str(refusal) ==
+                        f"anchor committed {anchor_count} records; this chain has 0",
                         "the older database met an unrelated refusal")
             else:
                 service.close()

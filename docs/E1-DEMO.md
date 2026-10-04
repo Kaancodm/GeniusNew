@@ -1,8 +1,11 @@
 # E1: Persistenz-Angriffe in der Demo
 
-Die zusätzliche Demo nutzt ausschließlich eine wegwerfbare PostgreSQL-Datenbank,
-die sie über `GENIUSNEW_TEST_ADMIN_DSN` anlegt und wieder entfernt. Sie verwendet
-keine produktiven Zugangsdaten und keinen öffentlich erreichbaren Endpunkt.
+Die zusätzliche Demo legt über `GENIUSNEW_TEST_ADMIN_DSN` wegwerfbare
+PostgreSQL-Datenbanken an und entfernt sie wieder. Die Testhülle legt außerdem
+die Rolle `genius_core` im Cluster an. Deshalb darf die Admin-DSN nur auf einen
+wegwerfbaren Testcluster zeigen, wie den PostgreSQL-Container der CI. Die CI
+verwendet dafür keine produktiven Zugangsdaten und keinen öffentlich
+erreichbaren Endpunkt.
 
 `python scripts/demo_persistence.py` prüft drei Fälle mit dem echten dauerhaften
 Dienst. `./scripts/demo.sh` bleibt die kurze HTTP-Demo ohne Datenbank:
