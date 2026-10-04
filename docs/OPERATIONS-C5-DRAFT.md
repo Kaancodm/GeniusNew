@@ -159,12 +159,30 @@ während seiner Laufzeit auch vom Kontoinhaber nicht verkürzt werden. Vor dem
 ersten Upload müssen Bucket, Retention und Wiederherstellungszugang mit einem
 kleinen verschlüsselten Testobjekt und Rücklesen geprüft sein.
 
-Jeder bestätigte Backupstand bekommt einen eigenen unveränderlichen Objektnamen:
-verschlüsselter DB-Dump, verschlüsselter Ankerzustand und Manifest mit
-Code-SHA, UTC, `count`, `head_hash` und Prüfsummen. Ein fehlender Upload oder
-ein fehlgeschlagenes Rücklesen ergibt kein Backup-PASS. Der Upload-Zugang darf
-keine Objekte löschen und keinen Retentionsschutz aufheben; der Restore-Zugang
-ist getrennt. Zugangsdaten und der private Entschlüsselungsschlüssel bleiben
+Jeder bestätigte Backupstand bekommt eigene Objektnamen für verschlüsselten
+DB-Dump, verschlüsselten Ankerzustand und Manifest mit Code-SHA, UTC, `count`,
+`head_hash` und Prüfsummen. Zusätzlich hält ein vom Upload-Zugang unabhängiger,
+privat gesicherter Restore-Katalog die **B2-File-IDs und Prüfsummen aller drei
+konkreten Versionen** fest. Ein fehlender Upload, eine fehlende File-ID oder ein
+fehlgeschlagenes Rücklesen genau dieser Version per ID ergibt kein Backup-PASS.
+Der Restore-Katalog darf nicht allein als neueste Version im Upload-Bucket
+liegen; eine Kopie muss nach Verlust des Servers für den Restore-Operator
+erreichbar sein. Sind Katalog und verifizierbare Versionen nicht verfügbar,
+bleibt der Dienst in HOLD.
+
+Der eingeschränkte Upload-Schlüssel braucht `writeFiles`, aber weder
+`deleteFiles`, `writeFileLegalHolds`, `writeFileRetentions`,
+`writeBucketRetentions` noch `bypassGovernance`. Backblaze erlaubt mit
+[`writeFiles` auch `b2_hide_file`](https://www.backblaze.com/docs/cloud-storage-application-key-capabilities):
+Ein Hide-Marker kann den Abruf nach Namen mit 404 enden lassen, obwohl die
+geschützte ältere Version erhalten bleibt. Der getrennte Restore-Zugang erhält
+`listFiles`, `readFiles`, `readFileRetentions` und `readFileLegalHolds`, aber
+keine Schreibrechte. Er lädt die im Katalog bestätigte Version per File-ID
+und vergleicht ihre Prüfsumme. Bei fehlender ID
+werden alle Versionen mit `b2_list_file_versions` untersucht, aber ohne
+unabhängig bestätigte Zuordnung kein Backup-PASS erteilt. Das Verhalten ist im
+[B2-Versionsmodell](https://www.backblaze.com/docs/cloud-storage-file-versions)
+beschrieben. Zugangsdaten und der private Entschlüsselungsschlüssel bleiben
 außerhalb des Repositories und außerhalb des Upload-Buckets.
 
 **Anker-Untergrenze:** Zusätzlich zum 30-Tage-Backup bleibt der zuletzt
@@ -175,6 +193,11 @@ zurückgelesen und unabhängig bestätigt wurde. Kann das nicht belegt werden,
 bleibt der alte Hold bestehen und ein Restore hinter diesen Stand in HOLD.
 Damit löscht der Ablauf den letzten unabhängigen Ankerbeleg auch dann nicht,
 wenn normale 30-Tage-Backups auslaufen.
+
+`writeFileLegalHolds` kann einen Hold auch entfernen und liegt deshalb nur bei
+einem getrennten Operatorzugang außerhalb des Upload-Servers. Der Operator
+dokumentiert die File-ID des alten und des neuen Ankerobjekts vor jeder
+Hold-Änderung.
 
 Der konkrete Bucket-Name, der eingeschränkte Upload-Schlüssel, der getrennte
 Restore-Zugang, der Ort des privaten Entschlüsselungsschlüssels und der
@@ -230,12 +253,16 @@ Zurücksetzen oder Neuerzeugen des Ankers.
 7. Fehlende Historie nicht rekonstruierbar: HOLD. Kein stiller Epochenwechsel,
    kein neuer Anker und keine Freigabe alter job_id-Werte.
 
-Die Restore-Probe nutzt eine neue Datenbank und eine Kopie des Ankerzustands.
+Die CI-Probe in `scripts/demo_restore.py` nutzt eine neue Datenbank und eine
+Kopie des Ankerzustands. Sie prüft `pg_dump`/`pg_restore`, Start und Replay;
+Upload, Versionsabruf und Rücklesen aus B2 müssen zusätzlich mit einem kleinen
+verschlüsselten Testobjekt einschließlich Hide-Marker geprüft werden.
 `pg_restore` und der Starttest dürfen niemals auf die laufende Produktions-DB
 oder den aktiven Anker zeigen. Das private Protokoll hält Dump- und
-Anker-Prüfsummen, den vor dem Restore beobachteten Ankerkopf, den restaurierten
-DB-Kopf und den Start-/Refusal-Ausgang fest. Bei einem älteren DB-Dump wird die
-Kopie des Ankers **nicht** zurückgesetzt: Der Start muss mit `ContractError`
+Anker-Prüfsummen, die bestätigten B2-File-IDs, den vor dem Restore beobachteten
+Ankerkopf, den restaurierten DB-Kopf und den Start-/Refusal-Ausgang fest. Bei
+einem älteren DB-Dump wird die Kopie des Ankers **nicht** zurückgesetzt: Der
+Start muss mit `ContractError`
 scheitern. Danach werden die wegwerfbaren Ressourcen entfernt; die aktive
 Historie bleibt unverändert.
 
