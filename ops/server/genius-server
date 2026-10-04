@@ -613,6 +613,9 @@ cmd_deck() {
   resolve_user
   have systemctl || die "systemd wird gebraucht"
   have tailscale || die "Tailscale fehlt; erst '$SELF setup --apply'"
+  # Checked up front: the firewall step comes after the start, and a missing
+  # ufw there would stop the run with the service already up.
+  have ufw || die "ufw fehlt; erst '$SELF setup --apply'"
   local ip name python tmp old_port="" cleaned
   ip="$(tailscale_ip)"
   [ -n "$ip" ] || die "Tailscale ist nicht verbunden (kein 'tailscale ip -4'); erst setup"

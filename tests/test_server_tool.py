@@ -1188,9 +1188,10 @@ class DeckTest(ServerToolTestCase):
         self.assertIn("python3 fehlt", result.stderr)
         self.assertFalse(sb.deck_unit.exists())
 
-    def test_it_needs_systemd_and_a_connected_tailscale(self):
+    def test_it_needs_systemd_ufw_and_a_connected_tailscale(self):
         for without, connect, message in ((("systemctl",), True, "systemd wird gebraucht"),
                                           (("tailscale",), False, "Tailscale fehlt"),
+                                          (("ufw",), True, "ufw fehlt"),
                                           ((), False, "nicht verbunden")):
             with self.subTest(message):
                 sb = Sandbox(Path(tempfile.mkdtemp(dir=self._tmp.name)), without=without)
