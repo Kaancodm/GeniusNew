@@ -65,6 +65,7 @@ case "$1" in
     case "$2" in
       geniusnew-lockdown-rollback.timer) state="$(cat "$STATE/timer" 2>/dev/null || echo inactive)" ;;
       geniusnew-lockdown-rollback.service) state="$(cat "$STATE/rollback_service" 2>/dev/null || echo inactive)" ;;
+      geniusnew-deck) state="$(cat "$STATE/deck" 2>/dev/null || echo active)" ;;
       *) state=active ;;
     esac
     echo "$state"
@@ -75,6 +76,8 @@ case "$1" in
       [ -n "${FAKE_STOP_NOOP:-}" ] || echo inactive >"$STATE/timer"
     fi ;;
   reload) [ -z "${FAKE_RELOAD_FAIL:-}" ] || exit 1 ;;
+  disable) [ -z "${FAKE_DISABLE_FAIL:-}" ] || exit 1 ;;
+  daemon-reload) [ -z "${FAKE_DAEMON_RELOAD_FAIL:-}" ] || exit 1 ;;
   list-jobs) cat "$STATE/jobs" 2>/dev/null || true ;;
 esac
 """,
@@ -93,7 +96,7 @@ echo "tailscale $*" >>"$LOG"
 case "$1" in
   ip)
     [ -e "$STATE/ts_up" ] || exit 1
-    [ "${2:-}" = -6 ] || echo 100.101.102.103
+    [ "${2:-}" = -6 ] || echo "${FAKE_TS_IP4:-100.101.102.103}"
     [ "${2:-}" = -4 ] || echo fd7a:115c:a1e0::1 ;;
   up) touch "$STATE/ts_up" ;;
   status)
@@ -146,6 +149,14 @@ case "$1" in
     echo "Added user rules (see 'ufw status' for running firewall):"
     cat "$STATE/ufw_added" 2>/dev/null || true ;;
   allow|limit) echo "ufw $*" >>"$STATE/ufw_added" ;;
+  delete)
+    shift
+    rule="ufw $*"
+    if [ -f "$STATE/ufw_added" ]; then
+      grep -vxF "$rule" "$STATE/ufw_added" >"$STATE/ufw_added.new" || true
+      cat "$STATE/ufw_added.new" >"$STATE/ufw_added"
+      rm -f "$STATE/ufw_added.new"
+    fi ;;
   --force)
     if [ "$2" = enable ]; then
       { echo "Status: active"; echo; echo "To Action From"; echo "22/tcp on tailscale0 ALLOW Anywhere"; } >"$STATE/ufw_status"
@@ -179,7 +190,7 @@ class Sandbox:
         self.log.write_text("")
         for name in REAL_TOOLS:
             real = shutil.which(name)
-            if real:
+            if real and name not in without:
                 (self.bin / name).symlink_to(real)
         for name, body in STUBS.items():
             if name in without:
@@ -197,6 +208,10 @@ class Sandbox:
         # Like /run on a real host, the directory exists before the tool runs.
         (tmp / "run").mkdir()
         self.lockdown_session = tmp / "run" / "lockdown-session"
+        self.deck_unit = tmp / "systemd" / "geniusnew-deck.service"
+        self.repo = tmp / "repo"
+        (self.repo / "tools" / "control_deck").mkdir(parents=True)
+        (self.repo / "tools" / "control_deck" / "__main__.py").write_text("")
         self.sshd_config = tmp / "sshd_config"
         # The host's own kernel would make the result depend on where the tests run.
         self.kernel_release = tmp / "osrelease"
@@ -219,14 +234,19 @@ class Sandbox:
             "GENIUS_SSHD_CONFIG": str(self.sshd_config),
             "GENIUS_LOCKDOWN_SESSION": str(self.lockdown_session),
             "GENIUS_KERNEL_RELEASE": str(self.kernel_release),
+            "GENIUS_DECK_UNIT": str(self.deck_unit),
+            "GENIUS_DECK_SETTLE": "0",
+            "GENIUS_REPO_ROOT": str(self.repo),
         }
         env.update(extra)
         return env
 
-    def run(self, *args: str, stdin: str = "", **extra: str) -> subprocess.CompletedProcess[str]:
+    def run(self, *args: str, stdin: str = "", cwd: Path | None = None,
+            **extra: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [shutil.which("bash") or "bash", str(SCRIPT), *args],
             input=stdin,
+            cwd=cwd,
             capture_output=True,
             text=True,
             env=self.env(**extra),
@@ -1041,6 +1061,200 @@ class TermiusTest(ServerToolTestCase):
         result = self.sb.run("termius", FAKE_SSHD_T_OUT=self.sb.effective("port 2222\n"))
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Port         : 2222\n", result.stdout)
+
+
+class DeckTest(ServerToolTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.sb.connect_tailscale()
+
+    def test_a_dry_run_shows_the_unit_and_changes_nothing(self):
+        result = self.sb.run("deck")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("TROCKENLAUF", result.stdout)
+        self.assertIn("--host 100.101.102.103 --port 8787", result.stdout)
+        self.assertIn("--allow-host geniusnew-server.tail1234.ts.net", result.stdout)
+        self.assertFalse(self.sb.deck_unit.exists())
+        self.assertFalse(self.sb.called("ufw allow"))
+        self.assertFalse(self.sb.called("systemctl enable"))
+        self.assertFalse(self.sb.called("systemctl restart"))
+
+    def test_apply_writes_the_unit_opens_tailscale_only_and_starts(self):
+        result = self.sb.run("deck", "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        unit = self.sb.deck_unit.read_text()
+        self.assertIn("User=tester\n", unit)
+        self.assertIn(f"WorkingDirectory={self.sb.repo}\n", unit)
+        self.assertIn(f"-m tools.control_deck --host 100.101.102.103 --port 8787 --repo {self.sb.repo}", unit)
+        self.assertIn("NoNewPrivileges=yes", unit)
+        self.assertIn("ProtectHome=read-only\n", unit)
+        python_dir = Path(shutil.which("python3", path=str(self.sb.bin))).parent
+        self.assertIn(f"Environment=PATH={python_dir}:/usr/local/sbin:", unit)
+        self.assertFalse(self.sb.called("ufw delete"))
+        order = [
+            self.sb.index("systemctl daemon-reload"),
+            self.sb.index("systemctl enable geniusnew-deck"),
+            self.sb.index("systemctl restart geniusnew-deck"),
+            self.sb.index("systemctl is-active geniusnew-deck"),
+            self.sb.index("ufw allow in on tailscale0 to any port 8787 proto tcp"),
+        ]
+        self.assertEqual(order, sorted(order))
+        for call in self.sb.calls():
+            if call.startswith("ufw allow"):
+                self.assertIn("on tailscale0", call)
+        self.assertIn("http://100.101.102.103:8787", result.stdout)
+
+    def test_another_port_is_used_everywhere(self):
+        result = self.sb.run("deck", "--apply", GENIUS_DECK_PORT="9000")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--port 9000", self.sb.deck_unit.read_text())
+        self.assertTrue(self.sb.called("ufw allow in on tailscale0 to any port 9000 proto tcp"))
+
+    def test_the_project_venv_is_preferred(self):
+        venv = self.sb.repo / ".venv" / "bin"
+        venv.mkdir(parents=True)
+        (venv / "python3").symlink_to(shutil.which("python3"))
+        result = self.sb.run("deck", "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        unit = self.sb.deck_unit.read_text()
+        self.assertIn(f"ExecStart={venv / 'python3'} -m tools.control_deck", unit)
+        self.assertIn(f"Environment=PATH={venv}:", unit)
+
+    def test_a_port_change_removes_the_rule_for_the_old_port(self):
+        self.assertEqual(self.sb.run("deck", "--apply").returncode, 0)
+        result = self.sb.run("deck", "--apply", GENIUS_DECK_PORT="9000")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.sb.called("ufw delete allow in on tailscale0 to any port 8787 proto tcp"))
+        added = (self.sb.state / "ufw_added").read_text()
+        self.assertNotIn("port 8787 ", added)
+        self.assertIn("port 9000 ", added)
+
+    def test_rerunning_on_the_same_port_keeps_its_rule(self):
+        self.assertEqual(self.sb.run("deck", "--apply").returncode, 0)
+        result = self.sb.run("deck", "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.sb.called("ufw delete"))
+        self.assertIn("port 8787 ", (self.sb.state / "ufw_added").read_text())
+
+    def test_bad_ports_are_refused(self):
+        for port, message in (("abc", "Zahl"), ("80", "zwischen"), ("70000", "zwischen")):
+            with self.subTest(port=port):
+                result = self.sb.run("deck", "--apply", GENIUS_DECK_PORT=port)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(message, result.stderr)
+        self.assertFalse(self.sb.deck_unit.exists())
+        self.assertFalse(self.sb.called("systemctl restart"))
+
+    def test_an_unsafe_repository_path_is_refused(self):
+        spaced = Path(self._tmp.name) / "my repo"
+        (spaced / "tools" / "control_deck").mkdir(parents=True)
+        (spaced / "tools" / "control_deck" / "__main__.py").write_text("")
+        for root, message in ((str(spaced), "Zeichen"), ("repo", "absolut")):
+            with self.subTest(root=root):
+                result = self.sb.run("deck", "--apply", GENIUS_REPO_ROOT=root)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(message, result.stderr)
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_a_repository_without_the_deck_is_refused(self):
+        empty = Path(self._tmp.name) / "empty"
+        empty.mkdir()
+        result = self.sb.run("deck", "--apply", GENIUS_REPO_ROOT=str(empty))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Control Deck fehlt", result.stderr)
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_an_unsafe_python_path_is_refused(self):
+        odd = Path(self._tmp.name) / "py thon"
+        odd.mkdir()
+        (odd / "python3").symlink_to(shutil.which("python3"))
+        relative = Path(self._tmp.name) / "rel"
+        relative.mkdir()
+        (relative / "python3").symlink_to(shutil.which("python3"))
+        for path, cwd, message in ((f"{odd}:{self.sb.bin}", None, "Zeichen"),
+                                   (f"rel:{self.sb.bin}", Path(self._tmp.name), "absolut")):
+            with self.subTest(message):
+                result = self.sb.run("deck", "--apply", PATH=path, cwd=cwd)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(f"python3-Pfad muss absolut sein" if message == "absolut"
+                              else "python3-Pfad enthält Zeichen", result.stderr)
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_missing_python_is_refused(self):
+        sb = Sandbox(Path(tempfile.mkdtemp(dir=self._tmp.name)), without=("python3",))
+        sb.connect_tailscale()
+        result = sb.run("deck", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("python3 fehlt", result.stderr)
+        self.assertFalse(sb.deck_unit.exists())
+
+    def test_it_needs_systemd_ufw_and_a_connected_tailscale(self):
+        for without, connect, message in ((("systemctl",), True, "systemd wird gebraucht"),
+                                          (("tailscale",), False, "Tailscale fehlt"),
+                                          (("ufw",), True, "ufw fehlt"),
+                                          ((), False, "nicht verbunden")):
+            with self.subTest(message):
+                sb = Sandbox(Path(tempfile.mkdtemp(dir=self._tmp.name)), without=without)
+                if connect:
+                    sb.connect_tailscale()
+                result = sb.run("deck", "--apply")
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(message, result.stderr)
+                self.assertFalse(sb.deck_unit.exists())
+
+    def test_wsl_is_refused(self):
+        self.sb.kernel_release.write_text("5.15.153.1-microsoft-standard-WSL2\n")
+        result = self.sb.run("deck", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Das ist WSL", result.stderr)
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_root_is_refused_as_service_user(self):
+        result = self.sb.run("deck", "--apply", FAKE_USER="root", GENIUS_USER="root")
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_a_deck_that_does_not_stay_up_is_reported(self):
+        (self.sb.state / "deck").write_text("failed\n")
+        result = self.sb.run("deck", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("journalctl -u geniusnew-deck", result.stderr)
+        self.assertIn("Firewall-Regel für Port 8787 entfernt", result.stderr)
+        self.assertNotIn("Dashboard läuft", result.stdout)
+        self.assertTrue(self.sb.called("systemctl disable --now geniusnew-deck"))
+        self.assertTrue(self.sb.called("ufw delete allow in on tailscale0 to any port 8787 proto tcp"))
+        self.assertFalse(self.sb.called("ufw allow"))
+
+    def test_a_failure_before_the_start_opens_no_firewall_rule(self):
+        result = self.sb.run("deck", "--apply", FAKE_DAEMON_RELOAD_FAIL="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.sb.called("ufw allow"))
+        self.assertNotIn("Dashboard läuft", result.stdout)
+
+    def test_an_unexpected_tailscale_address_is_refused(self):
+        result = self.sb.run("deck", "--apply", FAKE_TS_IP4="100.1.2.3 --repo /tmp")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Unerwartete Tailscale-Adresse", result.stderr)
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_a_failed_cleanup_after_a_failed_start_is_reported(self):
+        (self.sb.state / "deck").write_text("failed\n")
+        result = self.sb.run("deck", "--apply", FAKE_DISABLE_FAIL="1")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Aufräumen fehlgeschlagen", result.stderr)
+        self.assertNotIn("entfernt", result.stderr)
+
+    def test_status_suggests_the_deck_once_everything_else_is_done(self):
+        self.sb.add_key()
+        self.sb.dropin.parent.mkdir()
+        self.sb.dropin.write_text("PasswordAuthentication no\n")
+        self.sb.ufw_conf.write_text("ENABLED=yes\n")
+        out = self.sb.run("status").stdout.split("== Nächster Schritt ==")[1]
+        self.assertIn("deck --apply", out)
+        self.sb.deck_unit.parent.mkdir()
+        self.sb.deck_unit.write_text("x")
+        out = self.sb.run("status").stdout.split("== Nächster Schritt ==")[1]
+        self.assertNotIn("deck --apply", out)
 
 
 if __name__ == "__main__":
