@@ -100,5 +100,51 @@ class RefusalScannerTest(unittest.TestCase):
         self.assertEqual(self.find(source), [])
 
 
+
+class ShellRefusalScannerTest(unittest.TestCase):
+    SOURCE = textwrap.dedent('''\
+        #!/usr/bin/env bash
+        die() { printf '%s\\n' "$*" >&2; exit 1; }
+        # a comment that says die "never" is not a refusal
+        say "die Firewall bleibt an"
+        [ -n "$x" ] || die "x fehlt"
+        case "$y" in *) die "falsch: $y" ;; esac
+        rm -f "$tmp"; die "kaputt"
+    ''')
+
+    def find(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "tool"
+            path.write_text(self.SOURCE)
+            with patch.object(refusals, "ROOT", root):
+                return refusals.find_refusals(path)
+
+    def test_only_die_commands_are_refusals(self):
+        found = self.find()
+        self.assertEqual([r.line for r in found], [5, 6, 7])
+        self.assertEqual([r.message for r in found], ["x fehlt", "falsch: $y", "kaputt"])
+        self.assertTrue(all(r.kind == "shell_die" for r in found))
+
+    def test_a_shell_mutant_disables_exactly_one_line(self):
+        found = self.find()
+        mutated = refusals._disable(self.SOURCE, found[0])
+        self.assertIn('[ -n "$x" ] || : "x fehlt"', mutated)
+        self.assertEqual(mutated.count('die "'), self.SOURCE.count('die "') - 1)
+        self.assertEqual(len(mutated.splitlines()), len(self.SOURCE.splitlines()))
+
+    def test_a_moved_shell_refusal_is_not_silently_skipped(self):
+        found = self.find()
+        with self.assertRaises(SystemExit):
+            refusals._disable(self.SOURCE.replace('|| die "x fehlt"', "|| true"), found[0])
+
+    def test_every_guarded_shell_script_names_an_existing_test_module(self):
+        for script, module in refusals.GUARDED_SHELL.items():
+            self.assertIn(script, refusals.GUARDED)
+            self.assertTrue((refusals.ROOT / script).is_file())
+            self.assertTrue((refusals.ROOT / "tests" / module).is_file())
+            self.assertIn(Path(script).name, (refusals.ROOT / "tests" / module).read_text())
+
+
 if __name__ == "__main__":
     unittest.main()
