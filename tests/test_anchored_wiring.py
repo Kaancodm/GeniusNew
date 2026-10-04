@@ -125,6 +125,21 @@ class ControlledAnchorTest(Fixture, unittest.TestCase):
                          'HANDOFF_ISSUED', 'HANDOFF_ADMITTED',
                          'EXECUTION_DISPATCHED', 'RESULT_ACCEPTED'])
 
+    def test_anchor_recovery_happens_before_any_new_audit_append(self):
+        self.test_anchor.fail_on = 'HANDOFF_ADMITTED'
+        self.assertEqual(self.post(), (409, {'error': 'REJECTED'}))
+        records = self.service.chain.records
+        self.assertEqual([record.event.action for record in records],
+                         ['HANDOFF_ISSUED', 'HANDOFF_ADMITTED'])
+
+        self.test_anchor.fail_on = 'HANDOFF_ADMITTED'
+        self.next_id = 'job-other'
+        self.assertEqual(self.post(), (409, {'error': 'REJECTED'}))
+        self.assertEqual(self.service.chain.records, records)
+        self.assertEqual(self.runner_type.calls, 0)
+
+        self.assertEqual(self.post()[0], 202)
+
     def test_post_execution_failure_refuses_and_same_job_id_does_not_run_twice(self):
         self.test_anchor.fail_on = 'RESULT_ACCEPTED'
         self.assertEqual(self.post(), (409, {'error': 'REJECTED'}))

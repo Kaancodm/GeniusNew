@@ -408,8 +408,8 @@ class EndToEndTest(Fixture, unittest.TestCase):
     # Review finding LOW-1 (26.09.2026): it used to be appended after the worker
     # returned, inferred by the composition root rather than read off the permit.
 
-    def test_the_admission_is_on_the_chain_before_the_worker_runs(self):
-        """In the live process, admission precedes any worker execution."""
+    def test_admission_and_dispatch_are_on_the_chain_before_the_worker_runs(self):
+        """In the live process, admission and dispatch precede worker execution."""
         keys = self.service.keys
         runners = []
 
@@ -429,7 +429,8 @@ class EndToEndTest(Fixture, unittest.TestCase):
         self.assertEqual(self.post(url=self.url_for(service))[1]['status'], 'SUCCEEDED')
         self.assertEqual(runner.seen, [
             ('orchestrator', 'orchestrator-1', 'HANDOFF_ISSUED', self.clock[0]),
-            ('gateway', 'gateway-1', 'HANDOFF_ADMITTED', self.clock[0])])
+            ('gateway', 'gateway-1', 'HANDOFF_ADMITTED', self.clock[0]),
+            ('orchestrator', 'orchestrator-1', 'EXECUTION_DISPATCHED', self.clock[0])])
         self.assertEqual(len(service.chain.records), 4)
         # Read off the permit, and still the same job's trace.
         self.assertEqual(len({record.event.trace_id for record in service.chain.records}), 1)
@@ -479,9 +480,9 @@ class EndToEndTest(Fixture, unittest.TestCase):
                 'handoff', 'handoff_sha256', 'admitted_at', 'approval_record_hash')},
             gateway_id='gateway-1')
         with self.assertRaisesRegex(ContractError, 'gateway-minted DispatchPermit'):
-            record(claimed)
+            record(claimed, 'subject-demo')
         with self.assertRaisesRegex(ContractError, 'did not wire'):
-            record(foreign)
+            record(foreign, 'subject-demo')
         self.assertEqual(self.service.chain.records, ())
 
     def served_anchor(self):
@@ -733,6 +734,11 @@ class PendingJobsTest(unittest.TestCase):
     def waiting(self, expires_at=100):
         handoff = type('Handoff', (), {'expires_at': expires_at})()
         return wiring._Waiting('subject-demo', b'wire', handoff, 'trace-x')
+
+    def test_process_local_pending_store_refuses_database_transaction(self):
+        jobs = wiring.PendingJobs()
+        with self.assertRaisesRegex(ContractError, 'cannot join'):
+            jobs.add('job-tx', self.waiting(), now=10, transaction=object())
 
     def test_a_job_id_waits_once(self):
         jobs = wiring.PendingJobs()
