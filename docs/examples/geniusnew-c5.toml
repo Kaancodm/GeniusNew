@@ -1,0 +1,50 @@
+# C5 service configuration for `python -m geniusnew serve --config <this file>`.
+# Checked by geniusnew/config.py; every table has a closed key set, and any
+# unknown or missing key refuses the start. This file starts nothing as it is:
+# the principal below is a placeholder, not a SHA-256 digest.
+
+[service]
+# Loopback only. TLS, rate limiting and the public address belong to a
+# reverse proxy on the same host (docs/ROADMAP-V02.md gate C4).
+listen_host = "127.0.0.1"
+listen_port = 8080
+# A regular file owned by the service user, mode 0600, at least 32 random bytes,
+# used exactly as stored. For example: head -c 32 /dev/urandom > root_secret
+root_secret_file = "/etc/geniusnew/root_secret"
+# The anchor runs as a separate service under a separate OS user. Replace the
+# reply key with the public output of `anchor_process public-key`; never add
+# anchor_state here, because that selects a child anchor under the core user.
+anchor_socket = "/run/geniusnew-anchor/anchor.sock"
+anchor_reply_public_key = "<64 lowercase hex characters>"
+# Private UTF-8 libpq connection string file, owned by the service user, mode 0600.
+# Keep it outside the repository and worker allowlist (like root_secret).
+database_dsn_file = "/etc/geniusnew/database_dsn"
+
+[service.limits]
+# Required. Each is an upper bound with a ceiling in geniusnew/http_entry.py; the
+# reverse proxy template (docs/REVERSE-PROXY.md) is sized for these values.
+rate_per_minute = 60   # per principal, token bucket; beyond it 429
+burst = 20             # requests a principal may send at once
+max_in_flight = 8      # jobs running at once across all principals; beyond it 503
+max_connections = 64   # open connections; beyond it closed unread
+
+[policy]
+version = "policy-v1"
+orchestrator_id = "orchestrator-1"
+handoff_ttl_seconds = 60
+allowed_tools = ["summarize"]
+allowed_sandbox_profiles = ["isolated"]
+
+[[policy.grants]]
+subject = "subject-example"
+user_id = "user-example"
+worker_agent_id = "worker-summarize"
+tier = "basic"
+tools = ["summarize"]
+sandbox_profile = "isolated"
+requires_approval = false
+
+[principals]
+# SHA-256 of an API key, from: python -m geniusnew digest-api-key < key-file
+# The key itself is never written here.
+REPLACE_WITH_SHA256_OF_THE_API_KEY = "subject-example"

@@ -18,8 +18,12 @@ Portal. Ankerzustand und Anker-Antwortschlüssel gehören ausschließlich dem
 Ankernutzer. Die Core-Runtime darf sie weder lesen, schreiben noch zurücksetzen.
 Die gemeinsame Socketgruppe gewährt nur Kommunikation mit dem Anker.
 
-Die Beispiel-Units liegen unter docs/examples/. Vor Aktivierung sind die Pfade,
-der geprüfte vollständige SHA und der öffentliche Audit-Schlüssel einzusetzen.
+Die Beispiel-Units und die **C5-TOML-Vorlage**
+`docs/examples/geniusnew-c5.toml` liegen unter `docs/examples/`. Nur diese
+Vorlage aktiviert den unabhängigen Socket-Anker; die allgemeine
+`docs/examples/geniusnew.toml` zeigt noch den Kind-Anker und ist für C5
+unverändert ungeeignet. Vor Aktivierung sind die Pfade, der geprüfte
+vollständige SHA und der öffentliche Audit-Schlüssel einzusetzen.
 Das Programm liegt unter /opt/geniusnew, Secrets in privaten Dateien außerhalb
 von Git. Migrationen laufen separat mit der Migrationsrolle; der Kern bekommt
 ausschließlich die geprüfte Runtime-DSN. Ein fehlendes Feld verhindert den Start.
