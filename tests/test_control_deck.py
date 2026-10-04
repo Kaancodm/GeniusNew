@@ -53,6 +53,14 @@ class ControlDeckTest(unittest.TestCase):
     def test_unimplemented_gate_is_red(self):
         self.assertEqual(checks.gate_status(checks.DEFAULT_REPO, None), "red")
 
+    @patch("tools.control_deck.checks._run", return_value=(0, ""))
+    def test_merged_gate_proof_is_checked_against_origin_main(self, run):
+        proof = next(ref for gate, _, ref in checks.BETA_GATES if gate == "B2")
+        self.assertEqual(checks.gate_status(checks.DEFAULT_REPO, proof), "green")
+        self.assertEqual(run.call_args_list[-1].args[0],
+                         ["git", "merge-base", "--is-ancestor", proof,
+                          "refs/remotes/origin/main"])
+
     def test_action_allowlist_is_fixed(self):
         self.assertEqual(
             set(actions.allowed_actions()),
@@ -63,9 +71,10 @@ class ControlDeckTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "allowlisted"):
             actions.run_action("rm_everything")
 
-    @patch("tools.control_deck.checks.repo_status", return_value={"head": "abc123"})
-    def test_project_resume_starts_at_gate_zero_when_logins_are_missing(self, _repo):
-        gates = [{"id": gate, "name": name, "status": "yellow" if ref else "red"}
+    @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
+    def test_project_resume_starts_at_gate_zero_when_logins_are_missing(self, _run):
+        gates = [{"id": gate, "name": name, "status": "yellow" if ref else "red",
+                  "detail": "review pending"}
                  for gate, name, ref in checks.BETA_GATES]
         tools = {
             "claude": {"status": "green", "detail": "logged in"},
@@ -77,7 +86,24 @@ class ControlDeckTest(unittest.TestCase):
         self.assertIn("Gate 0", state["focus"])
         self.assertEqual(state["main_head"], "abc123")
         self.assertEqual(state["resume"][0]["value"], "codex login")
-        self.assertTrue(any(step["value"].endswith("/pull/57") for step in state["resume"]))
+        self.assertTrue(any(step["title"].startswith("A1 ") for step in state["resume"]))
+
+    def test_merged_gate_proofs_advance_resume_past_b1(self):
+        gates = []
+        for gate, name, ref in checks.BETA_GATES:
+            status = ("green" if gate in {"A1", "B0", "B1", "B2", "B3", "B6", "B7",
+                                          "C1", "C2", "C4", "A2"} else
+                      "yellow" if gate in checks.PENDING_REVIEWS else "red")
+            gates.append({"id": gate, "name": name, "status": status,
+                          "detail": "review pending" if status == "yellow" else "open"})
+        self.assertTrue(all(next(ref for gate, _, ref in checks.BETA_GATES if gate == item)
+                            for item in ("B1", "B2", "B3", "B4", "B5", "B6", "B7")))
+        tools = {name: {"status": "green", "detail": "logged in"}
+                 for name in ("claude", "codex", "gemini", "gh")}
+        state = checks.project_resume(gates, tools, checks.DEFAULT_REPO)
+        self.assertEqual(state["focus"], "B4 – Pending Jobs + Approvals")
+        self.assertTrue(state["resume"][0]["value"].endswith("/pull/94"))
+        self.assertFalse(any(step["title"].startswith("B1 ") for step in state["resume"]))
 
 
     def test_mail_snapshot_missing_is_offline(self):

@@ -61,7 +61,6 @@ const labels={green:'✓ PASS',yellow:'! ACTION',red:'× OPEN'};
 const badge=s=>'<span class="badge '+s+'" aria-label="'+(labels[s]||'UNKNOWN')+'">'+(labels[s]||'? UNKNOWN')+'</span>';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const actionFor={Git:'git_status',Docker:'docker_status'};
-const nextFor={A1:'PR #57 prüfen/mergen',A2:'PR #72 prüfen',B0:'PR #70 freigeben',B1:'PostgreSQL-Fundament starten',C1:'PR #61 prüfen',C2:'PR #62 prüfen',C4:'PR #71 prüfen'};
 let mailState=null;
 function mailToken(d){if(d.status!=='ready')return '×';if(d.critical)return '!!';if(d.important)return '!';return String(d.unread||0)}
 function mailSummary(d){if(!d||d.status!=='ready')return 'Mail Center: Snapshot nicht verfügbar.\n\nRead-only Bridge noch nicht synchronisiert.';const c=d.categories||{};const line=(key,icon)=>{const x=c[key]||{};return icon+' '+(x.label||key)+': '+(x.unread||0)+(x.critical?'  !!':x.important?'  !':'')};const head=[String(d.provider||'mail').toUpperCase()+' · READ ONLY','',line('sales','💰'),line('sponsoring','🤝'),line('general','📨'),line('system','⚙️')];const recent=(d.threads||[]).slice(0,8).map(x=>(x.critical?'!! ':x.important?'! ':'')+(x.subject||'(ohne Betreff)')+(x.sender?' — '+x.sender:''));return head.concat(recent.length?['','Wichtig / ungelesen:',...recent]:['','Keine wichtigen oder ungelesenen Nachrichten.']).join('\n')}
@@ -72,7 +71,7 @@ async function runAction(name){prun.disabled=true;poutput.hidden=false;poutput.t
 async function load(){
  const [r,mr]=await Promise.all([fetch('/api/status',{cache:'no-store'}),fetch('/api/mail',{cache:'no-store'})]); const d=await r.json(); const m=await mr.json(); updateMail(m);
  document.getElementById('stamp').textContent=new Date(d.generated_at*1000).toLocaleTimeString();
- document.getElementById('projectSummary').innerHTML='<div class="projectfocus">'+esc(d.project.focus)+'</div><div class="muted">Zuletzt gestoppt: '+esc(d.project.stopped_at)+'</div><div class="projectmeta"><span class="pill">main '+esc(d.project.main_head)+'</span><span class="pill">v0.2 Gates auf main: '+esc(d.project.merged_gates)+'/'+esc(d.project.total_gates)+'</span></div>';
+ document.getElementById('projectSummary').innerHTML='<div class="projectfocus">'+esc(d.project.focus)+'</div><div class="muted">Nächster Schritt: '+esc(d.project.stopped_at)+'</div><div class="projectmeta"><span class="pill">origin/main '+esc(d.project.main_head)+'</span><span class="pill">v0.2 Gates erfüllt: '+esc(d.project.merged_gates)+'/'+esc(d.project.total_gates)+'</span></div>';
  document.getElementById('resume').className='resume';
  document.getElementById('resume').innerHTML=d.project.resume.map((s,i)=>{let ctl='';if(s.type==='command')ctl='<button data-resume-cmd="'+esc(s.value)+'">TERM kopieren</button>';else if(s.type==='url')ctl='<a href="'+esc(s.value)+'" target="_blank" rel="noopener"><button>PR öffnen</button></a>';else if(s.type==='action')ctl='<button data-resume-action="'+esc(s.value)+'">Prüfung starten</button>';return '<div class="resumeitem"><div><b>'+(i+1)+'. '+esc(s.title)+'</b><div class="muted">'+esc(s.detail)+'</div></div>'+ctl+'</div>'}).join('')||'<div class="resumeitem">✓ Kein Wiedereinstiegspunkt offen</div>';
  document.getElementById('priorities').innerHTML=d.priorities.map((s,i)=>'<div class="row"><span><b>'+(i+1)+'.</b> '+esc(s.title)+'</span><span class="muted">'+esc(s.detail)+'</span></div>').join('')||'<div class="row">✓ Keine offenen Prioritäten</div>';
@@ -82,10 +81,10 @@ async function load(){
  const items={Git:d.repo,Tailscale:d.services.tailscale,'Desktop Commander':d.services.desktop_commander,Docker:d.services.docker,tmux:d.tmux};
  document.getElementById('system').innerHTML=Object.entries(items).map(([k,v])=>row(k,v)).join('');
  document.getElementById('tools').innerHTML=Object.entries(d.tools).map(([k,v])=>row(k,v)).join('');
- document.getElementById('gates').innerHTML=d.gates.map(g=>'<button class="gate clickable" data-kind="gate" data-id="'+esc(g.id)+'" data-name="'+esc(g.name)+'">'+badge(g.status)+'<b>'+esc(g.id)+'</b> '+esc(g.name)+'</button>').join('');
+ document.getElementById('gates').innerHTML=d.gates.map(g=>'<button class="gate clickable" data-kind="gate" data-id="'+esc(g.id)+'" data-name="'+esc(g.name)+'" data-detail="'+esc(g.detail)+'">'+badge(g.status)+'<b>'+esc(g.id)+'</b> '+esc(g.name)+'</button>').join('');
  document.getElementById('commands').innerHTML=Object.entries(d.commands).map(([k,v])=>'<div class="cmd"><button data-cmd="'+esc(v)+'">Kopieren</button><code>'+esc(k)+': '+esc(v)+'</code></div>').join('');
  document.querySelectorAll('[data-kind="item"]').forEach(b=>b.onclick=()=>openPanel(b.dataset.name,'Statusdetails und sichere Aktion für '+b.dataset.name,actionFor[b.dataset.name]));
- document.querySelectorAll('[data-kind="gate"]').forEach(b=>b.onclick=()=>openPanel(b.dataset.id+' '+b.dataset.name,nextFor[b.dataset.id]||'Gate ist noch offen. Abhängigkeiten zuerst abschließen.',null));
+ document.querySelectorAll('[data-kind="gate"]').forEach(b=>b.onclick=()=>openPanel(b.dataset.id+' '+b.dataset.name,b.dataset.detail,null));
  document.querySelectorAll('[data-research]').forEach(b=>b.onclick=()=>openPanel(b.dataset.research,b.dataset.reason,null));
  document.querySelectorAll('button[data-cmd]').forEach(b=>b.onclick=()=>copyCommand(b.dataset.cmd));
  document.querySelectorAll('[data-resume-cmd]').forEach(b=>b.onclick=async()=>{if(await copyCommand(b.dataset.resumeCmd)){const old=b.textContent;b.textContent='✓ Kopiert';setTimeout(()=>b.textContent=old,1200)}});
