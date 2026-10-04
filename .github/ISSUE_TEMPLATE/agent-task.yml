@@ -15,8 +15,9 @@ body:
       options:
         - Codex (Kerncode)
         - ChatGPT (Tools / Server / Infrastruktur / DB-Design im Auftrag von Kaan)
-        - Gemini Pro (Review über die Antigravity-CLI)
+        - Gemini Pro (Review über die Antigravity- oder Abacus-CLI)
         - Copilot (begrenzte Umsetzung auf eigenem Branch)
+        - Kiro-CLI (Zweitprüfung von Claudes Code, nur lesend)
         - Claude Code (Ordnung / Konflikt / Regeln / Projektstand docs/STATUS.md)
     validations:
       required: true

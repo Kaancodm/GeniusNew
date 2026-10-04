@@ -108,7 +108,7 @@ Vollständig in `SECURITY.md`. Die wichtigsten:
 
 Ab 27.09.2026 gilt `docs/COLLABORATION.md` in aktualisierter Fassung. **Codex setzt
 Kerncode um und mergt.** **Seit 04.10.2026 pflegt Claude Code `docs/STATUS.md`**
-(dieses Dokument); Gemini prüft über die Antigravity-CLI (`docs/COLLABORATION.md`). **Kaan entscheidet
+(dieses Dokument); Gemini prüft über die Antigravity- oder Abacus-CLI (`docs/COLLABORATION.md`). **Kaan entscheidet
 und entwirft die Datenbank (`docs/DATABASE.md`) selbst.** **ChatGPT** übernimmt neue
 Werkzeuge, Server-Pflege und Infrastruktur. Copilot prüft zusätzlich. Microsoft 365
 Copilot liest aus OneDrive. **Claude Code besitzt `docs/COLLABORATION.md` und
@@ -117,11 +117,12 @@ Plattformen mit Überschreibrecht und hilft, wenn Codex feststeckt.
 
 | Werkzeug | Rolle | Liest |
 | --- | --- | --- |
-| Gemini Pro | Review über die Antigravity-CLI: Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung, sonst auf Anforderung | `GEMINI.md`, `.gemini/styleguide.md` |
+| Gemini Pro | Review über die Antigravity- oder Abacus-CLI: Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung, sonst auf Anforderung | `GEMINI.md`, `.gemini/styleguide.md` |
 | NotebookLM | **Wissensdatenbank**: Auskunft für alle, mit Quelle | dieses Dokument, `docs/DECISIONS.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`, `AGENTS.md` |
 | ChatGPT Pro / Codex | **Kerncode-Umsetzung**, ein Thema pro PR (`codex/<thema>`), mit Wissensblock | `AGENTS.md`, `docs/COLLABORATION.md` |
 | ChatGPT (Chat) | **Neue Werkzeuge, Server-Pflege, Infrastruktur, Integrationen** (`chatgpt/<thema>`), NotebookLM + eigenes Notebook; Kaan mergt | `AGENTS.md`, `docs/COLLABORATION.md` |
 | GitHub Copilot Pro | Editor und Review jedes PRs | `.github/copilot-instructions.md` |
+| Kiro-CLI | Unabhängige Zweitprüfung für Claudes eigenen Code, nur lesend | `docs/COLLABORATION.md` |
 | Microsoft 365 Copilot | Berichte, E-Mails, Folien | OneDrive-Ordner `GeniusNew` |
 | Claude Code | **Besitzt `docs/COLLABORATION.md`/`docs/DECISIONS.md`, Ordnung, Konfliktlöser mit Überschreibrecht**, Sicherheits-Review von Kaans DB-Entwurf und Codex' DB-Code, Hilfe bei Hilferuf | `AGENTS.md`, `docs/COLLABORATION.md` |
 
