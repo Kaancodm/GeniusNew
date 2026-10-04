@@ -181,7 +181,10 @@ class ApprovalStore:
         record = _Record(digest, scope, now, expires_at, _GRANTED, now, None, record_hash)
         return token, record
 
-    def grant(self, scope: ApprovalScope, *, now: int, ttl_seconds: int) -> ApprovalGrant:
+    def grant(self, scope: ApprovalScope, *, now: int, ttl_seconds: int,
+              transaction=None) -> ApprovalGrant:
+        if transaction is not None:
+            _fail("process-local approval store cannot join a database transaction")
         token, record = self._new_grant(scope, now=now, ttl_seconds=ttl_seconds)
         with self._lock:
             if record.token_digest in self._records:
@@ -190,10 +193,15 @@ class ApprovalStore:
         return ApprovalGrant(token, scope, record.issued_at, record.expires_at, record.record_hash)
 
     def consume(self, token: bytes, scope: ApprovalScope, *, now: int,
-                subject: str | None = None) -> ApprovalReceipt:
+                subject: str | None = None, transaction=None) -> ApprovalReceipt:
+        if transaction is not None:
+            _fail("process-local approval store cannot join a database transaction")
         return self._transition(token, scope, now=now, new_state=_CONSUMED, require_unexpired=True)
 
-    def revoke(self, token: bytes, scope: ApprovalScope, *, now: int) -> ApprovalReceipt:
+    def revoke(self, token: bytes, scope: ApprovalScope, *, now: int,
+               transaction=None) -> ApprovalReceipt:
+        if transaction is not None:
+            _fail("process-local approval store cannot join a database transaction")
         return self._transition(token, scope, now=now, new_state=_REVOKED, require_unexpired=False)
 
     def _transition(self, token: bytes, scope: ApprovalScope, *, now: int, new_state: str,
