@@ -1,0 +1,871 @@
+#!/usr/bin/env bash
+# genius-server: set up and observe a GeniusNew server that is reached over
+# Tailscale from Termius.
+#
+# setup and lockdown change the machine only with --apply; without it they print
+# each command and why they would run it. add-key and confirm act at once: each
+# is itself the deliberate step. No secret is ever read from
+# argv or written to the repository; a Tailscale auth key, if used, comes from
+# a private file.
+set -euo pipefail
+
+# Paths and names a test can point somewhere harmless. The defaults are the real ones.
+KEYRING="${GENIUS_TS_KEYRING:-/usr/share/keyrings/tailscale-archive-keyring.gpg}"
+APT_LIST="${GENIUS_TS_APT_LIST:-/etc/apt/sources.list.d/tailscale.list}"
+SSHD_DROPIN="${GENIUS_SSHD_DROPIN:-/etc/ssh/sshd_config.d/00-geniusnew.conf}"
+SSHD_CONFIG="${GENIUS_SSHD_CONFIG:-/etc/ssh/sshd_config}"
+LOCKDOWN_SESSION="${GENIUS_LOCKDOWN_SESSION:-/run/geniusnew-lockdown-session}"
+DECK_UNIT="${GENIUS_DECK_UNIT:-/etc/systemd/system/geniusnew-deck.service}"
+DECK_PORT="${GENIUS_DECK_PORT:-8787}"
+DECK_SETTLE="${GENIUS_DECK_SETTLE:-2}"
+REPO_ROOT="${GENIUS_REPO_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
+UFW_CONF="${GENIUS_UFW_CONF:-/etc/ufw/ufw.conf}"
+OS_RELEASE="${GENIUS_OS_RELEASE:-/etc/os-release}"
+KERNEL_RELEASE="${GENIUS_KERNEL_RELEASE:-/proc/sys/kernel/osrelease}"
+TS_HOSTNAME="${GENIUS_HOSTNAME:-geniusnew-server}"
+TS_AUTHKEY_FILE="${GENIUS_TS_AUTHKEY_FILE:-}"
+TARGET_USER="${GENIUS_USER:-${SUDO_USER:-$(id -un)}}"
+ROLLBACK_UNIT="geniusnew-lockdown-rollback"
+ROLLBACK_SECONDS=300
+SELF="bash $0"
+
+DRY=1
+STEP=0
+TOTAL=0
+HARDEN_SKIPPED=0
+HOME_DIR=""
+AUTH_KEYS=""
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'FEHLER: %s\n' "$*" >&2; exit 1; }
+section() { printf '\n== %s ==\n%s\n' "$1" "$2"; }
+step() { STEP=$((STEP + 1)); printf '\n[%d/%d] %s\n      Warum: %s\n' "$STEP" "$TOTAL" "$1" "$2"; }
+show() { printf '      Befehl: %s\n' "$*"; }
+
+# run CMD...: print the command, execute it only with --apply.
+run() {
+  show "$*"
+  if [ "$DRY" -eq 0 ]; then "$@"; fi
+}
+
+# as_root CMD...: execute with root rights, no printing.
+as_root() {
+  if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi
+}
+
+# root CMD...: print and (with --apply) execute with root rights.
+root() {
+  if [ "$(id -u)" -eq 0 ]; then run "$@"; else run sudo "$@"; fi
+}
+
+sudo_prefix() { if [ "$(id -u)" -eq 0 ]; then printf ''; else printf 'sudo '; fi; }
+
+can_root() { [ "$(id -u)" -eq 0 ] || sudo -n true 2>/dev/null; }
+
+valid_user() {
+  case "$1" in
+    ''|*[!a-z0-9_-]*|[0-9-]*) return 1 ;;
+  esac
+  [ "${#1}" -le 32 ]
+}
+
+user_home() { getent passwd "$1" 2>/dev/null | cut -d: -f6 || true; }
+
+# user_ok: the quiet form of resolve_user, for read-only commands.
+user_ok() {
+  valid_user "$TARGET_USER" && [ "$TARGET_USER" != "root" ] && [ -n "$(user_home "$TARGET_USER")" ]
+}
+
+resolve_user() {
+  valid_user "$TARGET_USER" || die "ungültiger Benutzername: '$TARGET_USER'"
+  [ "$TARGET_USER" != "root" ] \
+    || die "als root gestartet. Entweder als normaler Benutzer mit sudo starten oder GENIUS_USER=<benutzer> setzen (der Benutzer muss existieren, zum Beispiel 'adduser <name>' und 'usermod -aG sudo <name>'). Der root-Login wird abgeschaltet."
+  HOME_DIR="$(user_home "$TARGET_USER")"
+  [ -n "$HOME_DIR" ] || die "Benutzer '$TARGET_USER' existiert nicht"
+  AUTH_KEYS="${GENIUS_AUTH_KEYS:-$HOME_DIR/.ssh/authorized_keys}"
+}
+
+load_os() {
+  [ -r "$OS_RELEASE" ] || die "Betriebssystem nicht erkennbar ($OS_RELEASE fehlt)"
+  # shellcheck disable=SC1090
+  OS_ID="$(. "$OS_RELEASE" && printf '%s' "${ID:-}")"
+  # shellcheck disable=SC1090
+  CODENAME="$(. "$OS_RELEASE" && printf '%s' "${VERSION_CODENAME:-}")"
+  case "$OS_ID" in
+    debian|ubuntu) ;;
+    *) die "nur Debian oder Ubuntu werden unterstützt (gefunden: ${OS_ID:-unbekannt})" ;;
+  esac
+  [ -n "$CODENAME" ] || die "VERSION_CODENAME fehlt in $OS_RELEASE"
+  case "$CODENAME" in *[!a-z]*) die "ungültiger Codename: $CODENAME" ;; esac
+}
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+on_wsl() {
+  [ -n "${WSL_DISTRO_NAME:-}" ] || [ -n "${WSL_INTEROP:-}" ] \
+    || grep -qiE 'microsoft|wsl' "$KERNEL_RELEASE" 2>/dev/null
+}
+
+# refuse_wsl: on the laptop, Tailscale belongs to Windows; a second one inside
+# WSL and a ufw there would only confuse the network both depend on.
+refuse_wsl() {
+  if on_wsl; then
+    die "Das ist WSL (Laptop), kein Server. Tailscale gehört dort zu Windows, nicht in WSL, und ufw hat in WSL keine Wirkung. Dieses Werkzeug richtet nur einen Debian/Ubuntu-Server ein; nichts geändert."
+  fi
+}
+
+# Fingerprints of the keys in authorized_keys; empty when there is none.
+key_fingerprints() {
+  [ -s "$AUTH_KEYS" ] || return 0
+  ssh-keygen -l -f "$AUTH_KEYS" 2>/dev/null || true
+}
+
+have_valid_key() { [ -n "$(key_fingerprints)" ]; }
+
+sshd_bin() { command -v sshd 2>/dev/null || echo /usr/sbin/sshd; }
+
+ssh_service() {
+  if systemctl cat ssh.service >/dev/null 2>&1; then echo ssh; else echo sshd; fi
+}
+
+tailscale_ip() {
+  have tailscale || return 0
+  tailscale ip -4 2>/dev/null | head -n 1 || true
+}
+
+tailscale_dns() {
+  have tailscale || return 0
+  tailscale status --json 2>/dev/null | python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))
+except Exception:
+    pass' 2>/dev/null || true
+}
+
+tailscale_ips() {
+  have tailscale || return 0
+  tailscale ip 2>/dev/null || true
+}
+
+# session_over_tailscale: the ssh client lies in Tailscale's 100.64.0.0/10 or
+# fd7a:115c:a1e0::/48 AND the server side of the connection is one of this
+# machine's Tailscale addresses. The client range alone proves nothing: it is
+# also shared CGNAT space (docs/CONTROL-DECK.md). Read from the environment of
+# this process: do not put "sudo" in front of the script, sudo drops
+# SSH_CONNECTION and the check then (safely) fails.
+session_over_tailscale() {
+  local peer="" local_addr="" rest
+  read -r peer rest local_addr rest <<<"${SSH_CONNECTION:-}" || true
+  [ -n "$peer" ] && [ -n "$local_addr" ] || return 1
+  local -a mine=()
+  mapfile -t mine < <(tailscale_ips)
+  python3 - "$peer" "$local_addr" "${mine[@]+"${mine[@]}"}" <<'PY'
+import ipaddress, sys
+nets = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
+try:
+    peer, local = (ipaddress.ip_address(a) for a in sys.argv[1:3])
+except ValueError:
+    sys.exit(1)
+mine = set()
+for text in sys.argv[3:]:
+    try:
+        mine.add(ipaddress.ip_address(text.strip()))
+    except ValueError:
+        pass
+in_range = any(peer.version == n.version and peer in n for n in nets)
+sys.exit(0 if in_range and local in mine else 1)
+PY
+}
+
+ufw_enabled() { grep -qi '^ENABLED=yes' "$UFW_CONF" 2>/dev/null; }
+
+# ufw_c: ufw with untranslated output, because its status text is parsed.
+ufw_c() { as_root env LC_ALL=C ufw "$@"; }
+
+ufw_active() { ufw_c status 2>/dev/null | grep -q '^Status: active'; }
+
+# public_rules: rules that admit traffic from outside tailscale0. "ufw show
+# added" lists them even while ufw is off, and a default deny does not remove them.
+public_rules() {
+  ufw_c show added 2>/dev/null | grep -E '^ufw (allow|limit) ' \
+    | grep -vE '^ufw (allow|limit) out ' | grep -v ' in on tailscale0 ' || true
+}
+
+refuse_public_rules() {
+  local rules
+  rules="$(public_rules)"
+  [ -n "$rules" ] || return 0
+  say "Diese ufw-Regeln lassen Verkehr auch von außerhalb von Tailscale zu:" >&2
+  printf '%s\n' "$rules" | sed 's/^ufw /    sudo ufw delete /' >&2
+  die "$1 Erst die Regeln oben prüfen und mit den gezeigten Befehlen entfernen."
+}
+
+rollback_pending() { [ "$(systemctl is-active "$ROLLBACK_UNIT.timer" 2>/dev/null)" = "active" ]; }
+
+# ssh_ports: the ports sshd really listens on, from its effective configuration.
+# Fails when none can be read, so no caller guesses 22.
+ssh_ports() {
+  local ports p
+  ports="$(as_root "$(sshd_bin)" -T 2>/dev/null | awk '$1 == "port" {print $2}' | sort -un)" || true
+  [ -n "$ports" ] || return 1
+  for p in $ports; do
+    case "$p" in ''|*[!0-9]*) return 1 ;; esac
+    { [ "$p" -ge 1 ] && [ "$p" -le 65535 ]; } || return 1
+  done
+  printf '%s\n' "$ports"
+}
+
+# sshd_match_files: config files with a Match block. Match can switch password
+# login back on for one user or address, which a global check cannot see, so the
+# hardening refuses to run next to one.
+sshd_match_files() {
+  local f
+  for f in "$SSHD_CONFIG" "$(dirname "$SSHD_DROPIN")"/*.conf; do
+    [ -e "$f" ] || continue
+    if [ -r "$f" ]; then
+      if grep -qiE '^[[:space:]]*Match[[:space:]]' "$f"; then printf '%s\n' "$f"; fi
+    elif [ "$DRY" -eq 0 ]; then
+      if as_root grep -qiE '^[[:space:]]*Match[[:space:]]' "$f"; then printf '%s\n' "$f"; fi
+    fi
+  done
+}
+
+# Rules that keep a port open to everybody, which a Tailscale-only lockdown must not leave.
+firewall_warnings() {
+  local rules
+  rules="$(ufw_c status 2>/dev/null | grep -E 'ALLOW|LIMIT' | grep -v 'tailscale0' || true)"
+  if [ -n "$rules" ]; then
+    say ""
+    say "WARNUNG: Diese Regeln lassen Verkehr auch von außerhalb von Tailscale zu:"
+    printf '%s\n' "$rules" | sed 's/^/    /'
+    say "  Entfernen (Beispiel): sudo ufw delete allow 22/tcp   — erst prüfen, ob du das brauchst."
+  fi
+}
+
+# ---------------------------------------------------------------- setup
+
+step_packages() {
+  step "Grundpakete installieren" \
+    "ssh-Server, tmux (Sitzungen bleiben bei Verbindungsabbruch), git, python3-venv, ufw (Firewall, noch nicht aktiv)"
+  root apt-get update
+  root env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    ca-certificates curl gnupg openssh-server tmux git python3-venv ufw
+}
+
+fetch_to() {
+  # fetch_to URL DEST: download completely first, then install; a broken
+  # download must never leave a half-written key or source list behind.
+  local url="$1" dest="$2" tmp
+  tmp="$(mktemp)"
+  if ! curl -fsSL --proto '=https' --tlsv1.2 -o "$tmp" "$url"; then
+    rm -f "$tmp"
+    die "Download fehlgeschlagen: $url"
+  fi
+  [ -s "$tmp" ] || { rm -f "$tmp"; die "leere Antwort von $url"; }
+  as_root install -d -m 0755 "$(dirname "$dest")"
+  as_root install -m 0644 "$tmp" "$dest"
+  rm -f "$tmp"
+}
+
+step_tailscale_repo() {
+  step "Tailscale-Paketquelle einrichten" \
+    "offizielle Pakete mit Signaturschlüssel, damit Updates über apt kommen"
+  local base="https://pkgs.tailscale.com/stable/$OS_ID/$CODENAME"
+  show "curl -fsSL --proto '=https' --tlsv1.2 -o <temp> $base.noarmor.gpg   dann: $(sudo_prefix)install -m 0644 <temp> $KEYRING"
+  show "curl -fsSL --proto '=https' --tlsv1.2 -o <temp> $base.tailscale-keyring.list   dann: $(sudo_prefix)install -m 0644 <temp> $APT_LIST"
+  if [ "$DRY" -eq 0 ]; then
+    fetch_to "$base.noarmor.gpg" "$KEYRING"
+    fetch_to "$base.tailscale-keyring.list" "$APT_LIST"
+  fi
+  root apt-get update
+  root env DEBIAN_FRONTEND=noninteractive apt-get install -y tailscale
+}
+
+step_tailscale_service() {
+  step "Tailscale-Dienst starten" "tailscaled muss laufen und beim Booten starten"
+  root systemctl enable --now tailscaled
+}
+
+step_tailscale_login() {
+  step "Server ins Tailscale-Netz aufnehmen" \
+    "danach ist er über das private Netz erreichbar, ohne dass dafür ein Port öffentlich offen sein muss"
+  if [ "$DRY" -eq 0 ] && [ -n "$(tailscale_ip)" ]; then
+    say "      Schon verbunden: $(tailscale_ip). Nichts zu tun."
+    return
+  fi
+  if [ -n "$TS_AUTHKEY_FILE" ]; then
+    [ -f "$TS_AUTHKEY_FILE" ] || die "Auth-Key-Datei fehlt: $TS_AUTHKEY_FILE"
+    [ "$(stat -c %a "$TS_AUTHKEY_FILE")" = "600" ] || die "$TS_AUTHKEY_FILE muss Modus 600 haben"
+    root timeout 600 tailscale up --hostname="$TS_HOSTNAME" --auth-key="file:$TS_AUTHKEY_FILE" \
+      || die "Anmeldung bei Tailscale fehlgeschlagen (Auth-Key abgelaufen oder ungültig?)"
+  else
+    say "      Gleich erscheint ein Anmelde-Link. Öffne ihn im Browser (iPad geht) und melde dich"
+    say "      mit dem Tailscale-Konto an. Das Skript wartet bis zu 10 Minuten."
+    root timeout 600 tailscale up --hostname="$TS_HOSTNAME" \
+      || die "Anmeldung bei Tailscale fehlgeschlagen (Link nicht innerhalb von 10 Minuten bestätigt?)"
+  fi
+  if [ "$DRY" -eq 0 ]; then
+    [ -n "$(tailscale_ip)" ] || die "Tailscale hat keine Adresse vergeben. Mit 'tailscale status' prüfen."
+  fi
+}
+
+restore_dropin() {
+  # restore_dropin BACKUP: put back what was there before, or remove our file.
+  if [ -n "$1" ]; then as_root install -m 0644 "$1" "$SSHD_DROPIN"; else as_root rm -f "$SSHD_DROPIN"; fi
+}
+
+step_ssh_hardening() {
+  step "SSH nur mit Schlüssel erlauben" \
+    "kein Passwort-Login und kein root-Login; Termius meldet sich mit seinem Schlüssel an"
+  if ! have_valid_key; then
+    say "      ÜBERSPRUNGEN: In $AUTH_KEYS steht kein gültiger Schlüssel."
+    say "      Passwort-Login bleibt an, damit du nicht ausgesperrt wirst."
+    say "      Danach: Schlüssel in Termius erzeugen, '$SELF add-key', dann setup erneut."
+    HARDEN_SKIPPED=1
+    return
+  fi
+  local matches
+  matches="$(sshd_match_files)"
+  if [ -n "$matches" ]; then
+    if [ "$DRY" -eq 1 ]; then
+      say "      WARNUNG: Match-Blöcke in $(printf '%s' "$matches" | tr '\n' ' ')- mit --apply bricht dieser Schritt ab."
+    else
+      die "Match-Blöcke in $(printf '%s' "$matches" | tr '\n' ' ')können den Passwort-Login für einzelne Benutzer oder Adressen wieder einschalten. Das Werkzeug unterstützt sie nicht; nichts geändert."
+    fi
+  fi
+  local tmp backup=""
+  tmp="$(mktemp)"
+  printf '%s\n' '# Managed by genius-server. Read before other drop-ins, so these values win.' \
+    'PasswordAuthentication no' 'KbdInteractiveAuthentication no' \
+    'PermitRootLogin no' 'PubkeyAuthentication yes' >"$tmp"
+  show "$(sudo_prefix)install -m 0644 <Inhalt> $SSHD_DROPIN"
+  sed 's/^/        | /' "$tmp"
+  if [ "$DRY" -eq 1 ]; then
+    show "$(sudo_prefix)$(sshd_bin) -t   (Konfiguration prüfen, bei Fehler alles zurücknehmen)"
+    show "$(sudo_prefix)$(sshd_bin) -T   (prüfen, dass die Werte wirklich gelten)"
+    show "$(sudo_prefix)systemctl reload $(ssh_service)   (bestehende Verbindungen bleiben offen)"
+    rm -f "$tmp"
+    return
+  fi
+  if [ -e "$SSHD_DROPIN" ]; then
+    backup="$(mktemp)"
+    as_root cat "$SSHD_DROPIN" >"$backup"
+  fi
+  as_root install -d -m 0755 "$(dirname "$SSHD_DROPIN")"
+  as_root install -m 0644 "$tmp" "$SSHD_DROPIN"
+  rm -f "$tmp"
+  if ! as_root "$(sshd_bin)" -t; then
+    restore_dropin "$backup"; [ -z "$backup" ] || rm -f "$backup"
+    die "sshd lehnt die neue Konfiguration ab; zurückgenommen, nichts geändert"
+  fi
+  local effective
+  effective="$(as_root "$(sshd_bin)" -T 2>/dev/null || true)"
+  local want
+  for want in 'passwordauthentication no' 'kbdinteractiveauthentication no' \
+              'permitrootlogin no' 'pubkeyauthentication yes'; do
+    if ! grep -qx "$want" <<<"$effective"; then
+      restore_dropin "$backup"; [ -z "$backup" ] || rm -f "$backup"
+      die "'$want' gilt nicht (eine andere Konfigurationsdatei überstimmt es oder sshd_config liest sshd_config.d nicht); zurückgenommen, nichts geändert"
+    fi
+  done
+  show "$(sudo_prefix)systemctl reload $(ssh_service)"
+  if ! as_root systemctl reload "$(ssh_service)"; then
+    restore_dropin "$backup"; [ -z "$backup" ] || rm -f "$backup"
+    die "sshd ließ sich nicht neu laden; die Datei ist zurückgenommen, die laufende Konfiguration unverändert"
+  fi
+  [ -z "$backup" ] || rm -f "$backup"
+  say "      WICHTIG: Teste jetzt in Termius den Schlüssel-Login, bevor du diese Sitzung schließt."
+}
+
+print_termius() {
+  local ip dns ports=""
+  ip="$(tailscale_ip)"; dns="$(tailscale_dns)"
+  if can_root; then ports="$(ssh_ports 2>/dev/null | tr '\n' ' ' | sed 's/ $//')" || ports=""; fi
+  section "Termius" "So legst du den Server in Termius an:"
+  say "  Adresse      : ${dns:-<MagicDNS-Name aus 'tailscale status'>}  (oder ${ip:-<100.x-Adresse aus 'tailscale ip -4'>})"
+  say "  Port         : ${ports:-<unbekannt; mit 'sudo sshd -T | grep ^port' prüfen>}"
+  say "  Benutzer     : $TARGET_USER"
+  say "  Anmeldung    : Schlüssel (in Termius erzeugt, siehe '$SELF add-key')"
+  say "  Voraussetzung: Tailscale-App auf dem iPad/iPhone ist an und im selben Konto angemeldet"
+  say "  Danach       : 'tmux new -As genius' (Sitzung bleibt bei Abbruch bestehen)"
+}
+
+cmd_setup() {
+  refuse_wsl
+  resolve_user; load_os
+  have systemctl || die "systemd wird gebraucht"
+  TOTAL=6
+  say "GeniusNew-Server einrichten für Benutzer '$TARGET_USER' auf $OS_ID/$CODENAME"
+  if [ "$DRY" -eq 1 ]; then
+    say "TROCKENLAUF: es wird nichts verändert. Zum Ausführen: $SELF setup --apply"
+  fi
+  step_packages
+  step_tailscale_repo
+  step_tailscale_service
+  step_tailscale_login
+  step_ssh_hardening
+  step "Ergebnis zeigen" "damit du direkt in Termius weitermachen kannst"
+  if [ "$DRY" -eq 0 ]; then
+    print_termius
+    say ""
+    if [ "$HARDEN_SKIPPED" -eq 0 ]; then
+      say "Nächster Schritt: aus einer Termius-Verbindung über Tailscale: $SELF lockdown --apply"
+    else
+      say "Offen: SSH-Härtung übersprungen (kein Schlüssel). Schlüssel in Termius erzeugen, $SELF add-key, setup --apply erneut."
+    fi
+  fi
+}
+
+# ---------------------------------------------------------------- add-key
+
+cmd_add_key() {
+  resolve_user
+  local line tmp ktype bits
+  say "Füge den öffentlichen Schlüssel aus Termius ein (eine Zeile, beginnt mit ssh-ed25519 …) und drücke Enter:"
+  IFS= read -r line || true
+  line="${line%$'\r'}"
+  [ -n "$line" ] || die "kein Schlüssel eingegeben"
+  case "$line" in
+    ssh-ed25519\ *|ecdsa-sha2-nistp*\ *|sk-ssh-ed25519@openssh.com\ *|ssh-rsa\ *) ;;
+    *) die "das ist kein öffentlicher Schlüssel (er muss mit ssh-ed25519, ecdsa-sha2-… oder ssh-rsa beginnen; Optionen sind nicht erlaubt)" ;;
+  esac
+  tmp="$(mktemp)"
+  printf '%s\n' "$line" >"$tmp"
+  if ! ssh-keygen -l -f "$tmp" >/dev/null 2>&1; then rm -f "$tmp"; die "der Schlüssel ist nicht lesbar"; fi
+  ktype="${line%% *}"
+  if [ "$ktype" = "ssh-rsa" ]; then
+    bits="$(ssh-keygen -l -f "$tmp" | cut -d' ' -f1)"
+    if ! [ "$bits" -ge 3072 ] 2>/dev/null; then
+      rm -f "$tmp"; die "RSA-Schlüssel brauchen mindestens 3072 Bit; besser ssh-ed25519 erzeugen"
+    fi
+  fi
+  rm -f "$tmp"
+  install -d -m 0700 "$(dirname "$AUTH_KEYS")"
+  touch "$AUTH_KEYS"
+  chmod 600 "$AUTH_KEYS"
+  if grep -qxF "$line" "$AUTH_KEYS"; then
+    say "Dieser Schlüssel ist schon eingetragen. Nichts geändert."
+  else
+    # A last line without newline would swallow the new key into it.
+    if [ -s "$AUTH_KEYS" ] && [ -n "$(tail -c 1 "$AUTH_KEYS")" ]; then printf '\n' >>"$AUTH_KEYS"; fi
+    printf '%s\n' "$line" >>"$AUTH_KEYS"
+    say "Eingetragen in $AUTH_KEYS."
+  fi
+  # Started as root for another user: the files must belong to that user, or sshd ignores them.
+  if [ "$(id -u)" -eq 0 ] && [ -z "${GENIUS_AUTH_KEYS:-}" ]; then
+    chown -R "$TARGET_USER": "$HOME_DIR/.ssh"
+  fi
+  say "Schlüssel auf dem Server (Bits, Fingerabdruck, Art); vergleiche ihn mit Termius:"
+  key_fingerprints | sed 's/^/  /'
+  say "Weiter: '$SELF setup --apply' (schaltet danach den Passwort-Login ab)."
+}
+
+# ---------------------------------------------------------------- lockdown / confirm
+
+require_tailscale_session() {
+  if session_over_tailscale; then return 0; fi
+  if [ "$DRY" -eq 1 ]; then
+    say "WARNUNG: Diese Sitzung läuft nicht über Tailscale. Mit --apply würde das Skript hier abbrechen."
+    return 0
+  fi
+  die "Du bist nicht über Tailscale verbunden. Verbinde dich in Termius über die Tailscale-Adresse und starte den Befehl dort neu (ohne sudo davor). So sperrst du dich nicht aus."
+}
+
+cmd_lockdown() {
+  refuse_wsl
+  have ufw || die "ufw fehlt; '$SELF setup --apply' installiert es"
+  have tailscale || die "Tailscale fehlt; erst '$SELF setup --apply'"
+  [ -n "$(tailscale_ip)" ] || die "Tailscale ist nicht verbunden (kein 'tailscale ip -4'); erst setup"
+  require_tailscale_session
+  # The safety net can only switch ufw off, not restore earlier rules; so a
+  # firewall that is already on is left alone rather than risked.
+  local fw ports
+  if [ "$DRY" -eq 0 ] || can_root; then
+    fw="$(ufw_c status 2>/dev/null)" || die "ufw-Status nicht lesbar; nichts geändert"
+    case "$fw" in
+      "Status: inactive"*) ;;
+      *)
+        [ "$DRY" -eq 1 ] || die "ufw ist schon aktiv. Das Sicherheitsnetz würde die Firewall ganz abschalten, deshalb ändert lockdown keine aktive Firewall. Regeln prüfen: sudo ufw status verbose"
+        say "WARNUNG: ufw ist schon aktiv. Mit --apply würde das Skript hier abbrechen." ;;
+    esac
+    # A default deny leaves explicit allow rules in force: SSH would stay public
+    # while the tool says only Tailscale reaches it.
+    if [ "$DRY" -eq 0 ]; then
+      refuse_public_rules "Mit diesen Regeln wäre SSH weiter öffentlich erreichbar; nichts geändert."
+    elif [ -n "$(public_rules)" ]; then
+      say "WARNUNG: ufw hat Regeln für Verkehr von außerhalb Tailscale. Mit --apply würde das Skript hier abbrechen."
+    fi
+  fi
+  # Open exactly the ports sshd listens on, so the second session for confirm can connect.
+  if [ "$DRY" -eq 0 ] || can_root; then
+    ports="$(ssh_ports)" || die "SSH-Port nicht ermittelbar ('sshd -T' ohne gültige Port-Zeile); nichts geändert"
+  else
+    ports="22"
+    say "HINWEIS: Port nicht geprüft (braucht sudo); angenommen: 22"
+  fi
+  TOTAL=3
+  say "Firewall: nur noch Tailscale darf SSH erreichen"
+  if [ "$DRY" -eq 1 ]; then say "TROCKENLAUF: es wird nichts verändert. Zum Ausführen: $SELF lockdown --apply"; fi
+  step "Sicherheitsnetz stellen" \
+    "nach $ROLLBACK_SECONDS Sekunden schaltet sich die Firewall von selbst wieder aus, falls etwas schiefgeht"
+  if [ "$DRY" -eq 0 ]; then
+    # A timer left over from an earlier, unconfirmed run would switch the firewall off again.
+    as_root systemctl stop "$ROLLBACK_UNIT.timer" 2>/dev/null || true
+    as_root systemctl reset-failed "$ROLLBACK_UNIT.service" 2>/dev/null || true
+    # confirm must come from a new connection: this one is already established
+    # and survives rules that would block every new one.
+    local record
+    record="$(mktemp)"
+    printf '%s\n' "${SSH_CONNECTION:-}" >"$record"
+    as_root install -m 0600 "$record" "$LOCKDOWN_SESSION"
+    rm -f "$record"
+  fi
+  root systemd-run --unit="$ROLLBACK_UNIT" --on-active="$ROLLBACK_SECONDS" "$(command -v ufw)" --force disable
+  step "Regeln setzen" "eingehend alles sperren außer SSH über tailscale0; ausgehend alles erlaubt"
+  root ufw default deny incoming
+  root ufw default allow outgoing
+  local port
+  for port in $ports; do
+    root ufw allow in on tailscale0 to any port "$port" proto tcp
+  done
+  step "Firewall einschalten" \
+    "Achtung: andere eingehende Dienste (zum Beispiel Web) sind danach von außen nicht mehr erreichbar"
+  root ufw --force enable
+  if [ "$DRY" -eq 0 ]; then
+    firewall_warnings
+    say ""
+    say "WICHTIG: Öffne jetzt in Termius eine zweite Verbindung über Tailscale und führe dort aus:"
+    say "    $SELF confirm"
+    say "Ohne Bestätigung schaltet sich die Firewall in $ROLLBACK_SECONDS Sekunden wieder aus."
+  fi
+}
+
+cmd_confirm() {
+  DRY=0
+  require_tailscale_session
+  have ufw || die "ufw fehlt"
+  local again="Warte eine Minute, dann '$SELF lockdown --apply' erneut."
+  if rollback_pending; then
+    local origin
+    origin="$(as_root cat "$LOCKDOWN_SESSION" 2>/dev/null || true)"
+    [ -n "$origin" ] \
+      || die "Unbekannt, aus welcher Verbindung lockdown lief; ohne diesen Nachweis wird nicht bestätigt. $again"
+    [ "$origin" != "${SSH_CONNECTION:-}" ] \
+      || die "Das ist dieselbe Verbindung, aus der lockdown lief. Sie bleibt offen, auch wenn neue Verbindungen gesperrt wären. Öffne in Termius eine zweite Verbindung und bestätige dort."
+    refuse_public_rules "SSH wäre weiter öffentlich erreichbar; nicht bestätigt, das Sicherheitsnetz bleibt gestellt."
+    as_root systemctl stop "$ROLLBACK_UNIT.timer" \
+      || die "Das Sicherheitsnetz ließ sich nicht stoppen; die Firewall schaltet sich gleich ab. $again"
+  fi
+  ! rollback_pending || die "Das Sicherheitsnetz ist noch gestellt. $again"
+  # The timer may have fired just before it was stopped: then the rollback is
+  # queued or running, and confirming now would report a firewall about to go off.
+  case "$(systemctl is-active "$ROLLBACK_UNIT.service" 2>/dev/null || true)" in
+    active|activating|deactivating|reloading)
+      die "Das Sicherheitsnetz hat schon ausgelöst und schaltet die Firewall gerade ab. $again" ;;
+  esac
+  [ -z "$(systemctl list-jobs --no-legend "$ROLLBACK_UNIT.service" 2>/dev/null)" ] \
+    || die "Das Sicherheitsnetz hat schon ausgelöst und schaltet die Firewall gerade ab. $again"
+  ufw_active || die "Die Firewall ist nicht aktiv (das Sicherheitsnetz hat sie schon ausgeschaltet). $again"
+  as_root rm -f "$LOCKDOWN_SESSION"
+  say "Bestätigt: das Sicherheitsnetz ist entfernt, die Firewall bleibt an."
+  ufw_c status verbose | sed 's/^/  /'
+}
+
+# ---------------------------------------------------------------- deck
+
+# deck_unit IP PORT PYTHON [NAME]: the systemd unit for the Control Deck. It
+# binds to the Tailscale address only; the deck itself refuses anything but
+# loopback and 100.64.0.0/10 (docs/CONTROL-DECK.md). --repo is explicit because
+# the deck otherwise falls back to a built-in default path, not to its working
+# directory. PATH leads with the interpreter's directory so the test and demo
+# actions, which call a bare python3, get the venv's pinned dependencies.
+deck_unit() {
+  local ip="$1" port="$2" python="$3" name="${4:-}" allow=""
+  [ -z "$name" ] || allow=" --allow-host $name --allow-host $name:$port"
+  cat <<UNIT
+# Managed by genius-server.
+[Unit]
+Description=GeniusNew Control Deck (read-only, Tailscale only)
+After=network-online.target tailscaled.service
+Wants=network-online.target tailscaled.service
+
+[Service]
+Type=simple
+User=$TARGET_USER
+WorkingDirectory=$REPO_ROOT
+Environment=PATH=$(dirname "$python"):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=$python -m tools.control_deck --host $ip --port $port --repo $REPO_ROOT$allow
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+}
+
+cmd_deck() {
+  refuse_wsl
+  resolve_user
+  have systemctl || die "systemd wird gebraucht"
+  have tailscale || die "Tailscale fehlt; erst '$SELF setup --apply'"
+  # Checked up front: the firewall step comes after the start, and a missing
+  # ufw there would stop the run with the service already up.
+  have ufw || die "ufw fehlt; erst '$SELF setup --apply'"
+  local ip name python tmp old_port="" cleaned
+  ip="$(tailscale_ip)"
+  [ -n "$ip" ] || die "Tailscale ist nicht verbunden (kein 'tailscale ip -4'); erst setup"
+  # The address goes into the unit unquoted, like the paths below.
+  case "$ip" in *[!0-9.]*) die "Unerwartete Tailscale-Adresse: $ip" ;; esac
+  case "$DECK_PORT" in ''|*[!0-9]*) die "GENIUS_DECK_PORT muss eine Zahl sein" ;; esac
+  { [ "$DECK_PORT" -ge 1024 ] && [ "$DECK_PORT" -le 65535 ]; } \
+    || die "GENIUS_DECK_PORT muss zwischen 1024 und 65535 liegen"
+  # The path goes into the unit unquoted; anything beyond plain path characters
+  # could change what systemd runs.
+  case "$REPO_ROOT" in /*) ;; *) die "Repository-Pfad muss absolut sein: $REPO_ROOT" ;; esac
+  case "$REPO_ROOT" in *[!A-Za-z0-9._/-]*) die "Repository-Pfad enthält Zeichen, die eine systemd-Unit nicht sicher trägt: $REPO_ROOT" ;; esac
+  [ -f "$REPO_ROOT/tools/control_deck/__main__.py" ] \
+    || die "Control Deck fehlt in $REPO_ROOT (tools/control_deck); Repository aktualisieren"
+  # The project venv carries the pinned dependencies the deck's checks import.
+  if [ -x "$REPO_ROOT/.venv/bin/python3" ]; then
+    python="$REPO_ROOT/.venv/bin/python3"
+  else
+    python="$(command -v python3 || true)"
+  fi
+  [ -n "$python" ] || die "python3 fehlt"
+  case "$python" in /*) ;; *) die "python3-Pfad muss absolut sein: $python" ;; esac
+  case "$python" in *[!A-Za-z0-9._/-]*) die "python3-Pfad enthält Zeichen, die eine systemd-Unit nicht sicher trägt: $python" ;; esac
+  name="$(tailscale_dns)"
+  case "$name" in *[!a-z0-9.-]*) name="" ;; esac
+  # ufw only ever adds on "allow"; the rule for a port the deck no longer uses
+  # stays open on tailscale0 until it is deleted.
+  if [ -r "$DECK_UNIT" ]; then
+    old_port="$(sed -n 's/^ExecStart=.* --port \([0-9][0-9]*\)\( .*\)\{0,1\}$/\1/p' "$DECK_UNIT" | head -n 1)"
+  fi
+  TOTAL=3
+  say "Control Deck als Dienst, nur über Tailscale erreichbar: http://$ip:$DECK_PORT"
+  if [ "$DRY" -eq 1 ]; then say "TROCKENLAUF: es wird nichts verändert. Zum Ausführen: $SELF deck --apply"; fi
+  step "Dienst-Datei schreiben" \
+    "startet das Dashboard beim Booten, als Benutzer $TARGET_USER, gebunden an die Tailscale-Adresse"
+  tmp="$(mktemp)"
+  deck_unit "$ip" "$DECK_PORT" "$python" "$name" >"$tmp"
+  show "$(sudo_prefix)install -m 0644 <Inhalt> $DECK_UNIT"
+  sed 's/^/        | /' "$tmp"
+  if [ "$DRY" -eq 0 ]; then
+    as_root install -d -m 0755 "$(dirname "$DECK_UNIT")"
+    as_root install -m 0644 "$tmp" "$DECK_UNIT"
+  fi
+  rm -f "$tmp"
+  # The firewall opens last: a start that fails at any point leaves no rule
+  # behind for whatever else might hold the port.
+  step "Dienst starten" "neu laden, beim Booten aktivieren, jetzt (neu) starten"
+  root systemctl daemon-reload
+  root systemctl enable geniusnew-deck
+  root systemctl restart geniusnew-deck
+  if [ "$DRY" -eq 0 ]; then
+    # A deck that cannot bind exits right after start; give it a moment to do so.
+    sleep "$DECK_SETTLE"
+    if [ "$(systemctl is-active geniusnew-deck 2>/dev/null)" != "active" ]; then
+      # Whatever holds the port instead must not stay reachable through a
+      # rule left from an earlier deck run.
+      cleaned="Dienst gestoppt, Firewall-Regel für Port $DECK_PORT entfernt"
+      { as_root systemctl disable --now geniusnew-deck >/dev/null 2>&1 \
+          && as_root ufw delete allow in on tailscale0 to any port "$DECK_PORT" proto tcp >/dev/null 2>&1; } \
+        || cleaned="Aufräumen fehlgeschlagen, bitte selbst: sudo systemctl disable --now geniusnew-deck; sudo ufw delete allow in on tailscale0 to any port $DECK_PORT proto tcp"
+      die "Das Dashboard läuft nicht ($cleaned). Ursache: sudo journalctl -u geniusnew-deck -n 30"
+    fi
+  fi
+  step "Firewall-Regel" "nur über tailscale0; wirkt, sobald lockdown die Firewall eingeschaltet hat"
+  root ufw allow in on tailscale0 to any port "$DECK_PORT" proto tcp
+  if [ -n "$old_port" ] && [ "$old_port" != "$DECK_PORT" ]; then
+    root ufw delete allow in on tailscale0 to any port "$old_port" proto tcp
+  fi
+  if [ "$DRY" -eq 0 ]; then
+    say ""
+    say "Dashboard läuft. Auf dem iPad (Tailscale an): http://$ip:$DECK_PORT"
+    [ -z "$name" ] || say "  oder: http://$name:$DECK_PORT"
+  fi
+}
+
+# ---------------------------------------------------------------- status
+
+# classify_ports: label each listening TCP socket by how far its address reaches.
+classify_ports() {
+  awk '{
+    addr = $4; sub(/:[0-9]+$/, "", addr); gsub(/[\[\]]/, "", addr)
+    if (addr ~ /^127\./ || addr == "::1") scope = "nur lokal"
+    else if (addr ~ /^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./ || tolower(addr) ~ /^fd7a:115c:a1e0:/) scope = "nur Tailscale"
+    else scope = "ALLE ADRESSEN (die Firewall entscheidet)"
+    printf "  tcp  %-28s %s\n", $4, scope
+  }'
+}
+
+next_step() {
+  section "Nächster Schritt" "was als Nächstes dran ist"
+  if ! have tailscale || [ -z "$(tailscale_ip)" ]; then
+    say "  $SELF setup --apply"; return
+  fi
+  if user_ok; then
+    resolve_user
+    if ! have_valid_key; then
+      say "  Schlüssel in Termius erzeugen, dann: $SELF add-key"; return
+    fi
+  fi
+  if [ ! -e "$SSHD_DROPIN" ]; then
+    say "  $SELF setup --apply   (schaltet den Passwort-Login ab)"; return
+  fi
+  if rollback_pending; then
+    say "  $SELF confirm   (aus einer zweiten Termius-Verbindung über Tailscale; sonst schaltet sich die Firewall wieder ab)"; return
+  fi
+  if ! ufw_enabled; then
+    say "  $SELF lockdown --apply   (aus einer Termius-Verbindung über Tailscale)"; return
+  fi
+  say "  Alles eingerichtet. Verbinden: $SELF termius"
+  [ -e "$DECK_UNIT" ] || say "  Optional, Dashboard als Dienst: $SELF deck --apply"
+}
+
+status_once() {
+  section "System" "Rechner, Last, Speicher, Platz"
+  say "  Name      : $(hostname)"
+  say "  Läuft seit: $(uptime -p 2>/dev/null || uptime)"
+  say "  Last      : $(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || echo unbekannt)"
+  if have free; then free -h | sed -n '2p' | awk '{print "  Speicher  : " $3 " von " $2 " belegt"}'; fi
+  df -h / | awk 'NR==2 {print "  Platte /  : " $3 " von " $2 " belegt (" $5 ")"}'
+
+  section "Tailscale" "das private Netz, über das du von Termius kommst"
+  if have tailscale; then
+    say "  Adresse   : $(tailscale_ip)"
+    say "  Name      : $(tailscale_dns)"
+    tailscale status 2>&1 | head -n 12 | sed 's/^/  /'
+  else
+    say "  nicht installiert -> $SELF setup --apply"
+  fi
+
+  section "SSH" "wer sich anmelden darf und wie"
+  local svc; svc="$(ssh_service 2>/dev/null || echo ssh)"
+  say "  Dienst    : $(systemctl is-active "$svc" 2>/dev/null || echo unbekannt)"
+  if can_root; then
+    as_root "$(sshd_bin)" -T 2>/dev/null | grep -E '^(port|passwordauthentication|permitrootlogin|pubkeyauthentication) ' | sed 's/^/  /'
+  else
+    say "  Einstellungen: brauchen sudo (Befehl mit sudo-Rechten starten)"
+  fi
+  if user_ok; then
+    resolve_user
+    say "  Schlüssel : $(key_fingerprints | wc -l | tr -d ' ') in $AUTH_KEYS (Benutzer $TARGET_USER)"
+  fi
+
+  section "Sitzungen" "wer ist gerade angemeldet, welche tmux-Sitzungen laufen"
+  who 2>/dev/null | sed 's/^/  /'
+  if have tmux; then tmux ls 2>&1 | sed 's/^/  tmux: /'; fi
+  if have last; then
+    say "  Letzte Anmeldungen:"
+    last -n 5 2>/dev/null | head -n 5 | sed 's/^/    /'
+  fi
+
+  section "Firewall" "was von außen erreichbar ist"
+  if have ufw && can_root; then
+    ufw_c status 2>/dev/null | head -n 12 | sed 's/^/  /'
+    firewall_warnings
+  else
+    say "  unbekannt (ufw fehlt oder sudo nötig)"
+  fi
+
+  section "Offene Ports" "was lauscht, und wie weit es erreichbar ist"
+  if have ss; then ss -H -tln 2>/dev/null | classify_ports; else say "  ss fehlt"; fi
+
+  section "Dienste" "systemd-Dienste, die für GeniusNew eine Rolle spielen"
+  local u
+  for u in ssh sshd tailscaled docker postgresql geniusnew geniusnew-anchor geniusnew-deck; do
+    if systemctl cat "$u.service" >/dev/null 2>&1; then
+      printf '  %-16s %s\n' "$u" "$(systemctl is-active "$u" 2>/dev/null || true)"
+    fi
+  done
+  say "  fehlgeschlagene Dienste: $(systemctl --failed --no-legend 2>/dev/null | wc -l | tr -d ' ')"
+
+  section "Was gerade rechnet" "die fünf Prozesse mit der höchsten CPU-Last"
+  ps -eo pid,user,pcpu,pmem,etime,comm --sort=-pcpu 2>/dev/null | head -n 6 | sed 's/^/  /'
+
+  next_step
+}
+
+cmd_status() {
+  local interval=5
+  if [ "${1:-}" = "--watch" ]; then
+    interval="${2:-5}"
+    case "$interval" in ''|*[!0-9]*) die "Sekunden müssen eine Zahl sein" ;; esac
+    [ "$interval" -ge 1 ] || die "Sekunden müssen mindestens 1 sein"
+    while true; do
+      clear 2>/dev/null || true
+      # A failing probe (a stopped service, a missing tool) must not end the view.
+      ( set +e +o pipefail; status_once )
+      say ""
+      say "(alle ${interval}s neu; Strg-C beendet)"
+      sleep "$interval"
+    done
+  elif [ -n "${1:-}" ]; then
+    die "unbekannte Option für status: $1"
+  else
+    ( set +e +o pipefail; status_once )
+  fi
+}
+
+# ---------------------------------------------------------------- main
+
+usage() {
+  cat <<EOF
+genius-server: Server für Termius und Tailscale einrichten und beobachten
+
+Aufruf:  $SELF <befehl> [--apply]
+
+setup, lockdown und deck ändern nur mit --apply etwas. add-key und confirm wirken sofort.
+
+  status [--watch [s]]  Was läuft gerade? Nur lesen. --watch aktualisiert alle s Sekunden.
+  setup                 Zeigt alle Schritte mit Befehl und Grund (Trockenlauf).
+  setup --apply         Führt sie aus: Pakete, Tailscale, SSH nur mit Schlüssel.
+  add-key               Öffentlichen Schlüssel aus Termius eintragen.
+  lockdown [--apply]    Firewall: nur Tailscale erreicht SSH. Nur aus einer Tailscale-Sitzung.
+  confirm               Aus einer zweiten, neuen Tailscale-Verbindung: Firewall behalten.
+  termius               Zeigt die Angaben für den Termius-Host.
+  deck [--apply]        Control Deck (Dashboard) als Dienst, nur über Tailscale.
+
+Reihenfolge beim ersten Mal:
+  1. setup (ansehen), 2. setup --apply, 3. Schlüssel in Termius erzeugen,
+  4. add-key, 5. setup --apply (härtet SSH), 6. in Termius über Tailscale verbinden,
+  7. lockdown --apply, 8. confirm.
+
+Umgebung (optional):
+  GENIUS_HOSTNAME           Name im Tailscale-Netz (Standard geniusnew-server)
+  GENIUS_USER               Benutzer, dessen Schlüssel gelten (Standard: aufrufender Benutzer)
+  GENIUS_TS_AUTHKEY_FILE    Datei mit Tailscale-Auth-Key, Modus 600 (sonst Anmelde-Link)
+  GENIUS_DECK_PORT          Port des Dashboards (Standard 8787)
+EOF
+}
+
+main() {
+  local cmd="${1:-help}"
+  shift || true
+  local arg rest=()
+  for arg in "$@"; do
+    if [ "$arg" = "--apply" ]; then DRY=0; else rest+=("$arg"); fi
+  done
+  if [ "$cmd" != "status" ] && [ "${#rest[@]}" -gt 0 ]; then
+    die "unbekannte Option für $cmd: ${rest[0]}"
+  fi
+  case "$cmd" in
+    status)   cmd_status "${rest[@]+"${rest[@]}"}" ;;
+    setup)    cmd_setup ;;
+    add-key)  cmd_add_key ;;
+    lockdown) cmd_lockdown ;;
+    confirm)  cmd_confirm ;;
+    termius)  resolve_user; print_termius ;;
+    deck)     cmd_deck ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; die "unbekannter Befehl: $cmd" ;;
+  esac
+}
+
+main "$@"

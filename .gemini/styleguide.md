@@ -1,7 +1,8 @@
-# Review-Leitfaden für Gemini Code Assist
+# Review-Leitfaden für Gemini (Antigravity-CLI, Gemini CLI, Code Assist)
 
 GeniusNew ist ein Zero-Trust-Agentensystem in Python. Regeln: `AGENTS.md`, Rollen:
-`docs/COLLABORATION.md`. Reviews bitte **auf Deutsch**.
+`docs/COLLABORATION.md`. Reviews bitte **auf Deutsch**, im Format
+„Gemini-Review“ aus `docs/COLLABORATION.md`.
 
 ## Schweregrad
 
@@ -28,7 +29,7 @@ GeniusNew ist ein Zero-Trust-Agentensystem in Python. Regeln: `AGENTS.md`, Rolle
    `requirements.txt` hash-gepinnt? Ohne Kaans OK gilt das als *High*.
 8. **Wissensblock:** Enthält die Beschreibung eines Codex-PRs den ausgefüllten Block
    „## Für die Wissensdatenbank“? Fehlt er: *High*. Ändert ein Codex-PR
-   `docs/STATUS.md`? Diese Datei gehört Gemini: *Medium*. Ändert er
+   `docs/STATUS.md`? Diese Datei gehört Claude Code: *Medium*. Ändert er
    `docs/COLLABORATION.md`, `docs/DECISIONS.md` oder `docs/DATABASE.md`? Diese Dateien
    gehören Claude Code beziehungsweise ChatGPT (im Auftrag von Kaan), nicht Codex:
    *High*.
@@ -39,6 +40,7 @@ GeniusNew ist ein Zero-Trust-Agentensystem in Python. Regeln: `AGENTS.md`, Rolle
    Stehen Zugangsdaten oder DB-Dateien im Repository? *Critical*. Weicht das Schema von
    `docs/DATABASE.md` ab? *High*. Die Freigabe für diese PRs gibt Claude Code
    (`Claude DB Review: APPROVED`/`CHANGES REQUESTED`), nicht Gemini.
+10. **Stapel-PR:** Basiert der PR auf einem anderen PR-Branch statt auf `main`? *Medium*
 
 ## Nicht bemängeln
 
