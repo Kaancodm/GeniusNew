@@ -76,6 +76,7 @@ case "$1" in
       [ -n "${FAKE_STOP_NOOP:-}" ] || echo inactive >"$STATE/timer"
     fi ;;
   reload) [ -z "${FAKE_RELOAD_FAIL:-}" ] || exit 1 ;;
+  disable) [ -z "${FAKE_DISABLE_FAIL:-}" ] || exit 1 ;;
   list-jobs) cat "$STATE/jobs" 2>/dev/null || true ;;
 esac
 """,
@@ -147,6 +148,14 @@ case "$1" in
     echo "Added user rules (see 'ufw status' for running firewall):"
     cat "$STATE/ufw_added" 2>/dev/null || true ;;
   allow|limit) echo "ufw $*" >>"$STATE/ufw_added" ;;
+  delete)
+    shift
+    rule="ufw $*"
+    if [ -f "$STATE/ufw_added" ]; then
+      grep -vxF "$rule" "$STATE/ufw_added" >"$STATE/ufw_added.new" || true
+      cat "$STATE/ufw_added.new" >"$STATE/ufw_added"
+      rm -f "$STATE/ufw_added.new"
+    fi ;;
   --force)
     if [ "$2" = enable ]; then
       { echo "Status: active"; echo; echo "To Action From"; echo "22/tcp on tailscale0 ALLOW Anywhere"; } >"$STATE/ufw_status"
@@ -1075,8 +1084,12 @@ class DeckTest(ServerToolTestCase):
         unit = self.sb.deck_unit.read_text()
         self.assertIn("User=tester\n", unit)
         self.assertIn(f"WorkingDirectory={self.sb.repo}\n", unit)
-        self.assertIn("-m tools.control_deck --host 100.101.102.103 --port 8787", unit)
+        self.assertIn(f"-m tools.control_deck --host 100.101.102.103 --port 8787 --repo {self.sb.repo}", unit)
         self.assertIn("NoNewPrivileges=yes", unit)
+        self.assertIn("ProtectHome=read-only\n", unit)
+        python_dir = Path(shutil.which("python3", path=str(self.sb.bin))).parent
+        self.assertIn(f"Environment=PATH={python_dir}:/usr/local/sbin:", unit)
+        self.assertFalse(self.sb.called("ufw delete"))
         order = [
             self.sb.index("ufw allow in on tailscale0 to any port 8787 proto tcp"),
             self.sb.index("systemctl daemon-reload"),
@@ -1101,7 +1114,25 @@ class DeckTest(ServerToolTestCase):
         (venv / "python3").symlink_to(shutil.which("python3"))
         result = self.sb.run("deck", "--apply")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(f"ExecStart={venv / 'python3'} -m tools.control_deck", self.sb.deck_unit.read_text())
+        unit = self.sb.deck_unit.read_text()
+        self.assertIn(f"ExecStart={venv / 'python3'} -m tools.control_deck", unit)
+        self.assertIn(f"Environment=PATH={venv}:", unit)
+
+    def test_a_port_change_removes_the_rule_for_the_old_port(self):
+        self.assertEqual(self.sb.run("deck", "--apply").returncode, 0)
+        result = self.sb.run("deck", "--apply", GENIUS_DECK_PORT="9000")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.sb.called("ufw delete allow in on tailscale0 to any port 8787 proto tcp"))
+        added = (self.sb.state / "ufw_added").read_text()
+        self.assertNotIn("port 8787 ", added)
+        self.assertIn("port 9000 ", added)
+
+    def test_rerunning_on_the_same_port_keeps_its_rule(self):
+        self.assertEqual(self.sb.run("deck", "--apply").returncode, 0)
+        result = self.sb.run("deck", "--apply")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.sb.called("ufw delete"))
+        self.assertIn("port 8787 ", (self.sb.state / "ufw_added").read_text())
 
     def test_bad_ports_are_refused(self):
         for port, message in (("abc", "Zahl"), ("80", "zwischen"), ("70000", "zwischen")):
@@ -1185,7 +1216,18 @@ class DeckTest(ServerToolTestCase):
         result = self.sb.run("deck", "--apply")
         self.assertEqual(result.returncode, 1)
         self.assertIn("journalctl -u geniusnew-deck", result.stderr)
+        self.assertIn("Firewall-Regel für Port 8787 entfernt", result.stderr)
         self.assertNotIn("Dashboard läuft", result.stdout)
+        self.assertTrue(self.sb.called("systemctl disable --now geniusnew-deck"))
+        self.assertTrue(self.sb.called("ufw delete allow in on tailscale0 to any port 8787 proto tcp"))
+        self.assertNotIn("port 8787 ", (self.sb.state / "ufw_added").read_text())
+
+    def test_a_failed_cleanup_after_a_failed_start_is_reported(self):
+        (self.sb.state / "deck").write_text("failed\n")
+        result = self.sb.run("deck", "--apply", FAKE_DISABLE_FAIL="1")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Aufräumen fehlgeschlagen", result.stderr)
+        self.assertNotIn("entfernt", result.stderr)
 
     def test_status_suggests_the_deck_once_everything_else_is_done(self):
         self.sb.add_key()

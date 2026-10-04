@@ -86,12 +86,19 @@ Aufruf: `bash genius-server <befehl>`. Beispiele unten nutzen `bash ops/server/g
 `deck --apply` schreibt `/etc/systemd/system/geniusnew-deck.service`, gibt in der Firewall
 Port 8787 **nur auf `tailscale0`** frei und startet den Dienst. Er startet beim Booten neu.
 
-- Er läuft als dein Benutzer, nicht als root, mit `NoNewPrivileges`, `PrivateTmp` und
-  `ProtectSystem=full`.
+- Er läuft als dein Benutzer, nicht als root, mit `NoNewPrivileges`, `PrivateTmp`,
+  `ProtectSystem=full` und `ProtectHome=read-only`: Test und Demo aus dem Dashboard können
+  das Repository und dein Home nicht verändern.
+- Er bekommt das Repository ausdrücklich (`--repo`), nicht über einen eingebauten Standardpfad.
 - Er ist nur an die Tailscale-Adresse gebunden. Das Control Deck selbst lehnt jede andere Adresse ab
   (`docs/CONTROL-DECK.md`).
 - Gibt es im Repository `.venv`, nimmt der Dienst dessen Python, sonst `python3` des Systems.
-- Port ändern: `GENIUS_DECK_PORT=9000 bash ops/server/genius-server deck --apply`.
+  Dieses Verzeichnis steht im `PATH` des Dienstes vorn, damit Test und Demo dieselben
+  Abhängigkeiten finden.
+- Port ändern: `GENIUS_DECK_PORT=9000 bash ops/server/genius-server deck --apply`. Die
+  Firewall-Regel für den alten Port wird dabei gelöscht.
+- Startet der Dienst nicht, stoppt das Werkzeug ihn wieder und löscht die neue
+  Firewall-Regel, damit kein anderes Programm auf dem Port über Tailscale erreichbar bleibt.
 - Hat sich die Tailscale-Adresse geändert, einfach `deck --apply` erneut ausführen.
 - Wieder entfernen:
   ```sh
@@ -133,7 +140,7 @@ Port 8787 **nur auf `tailscale0`** frei und startet den Dienst. Er startet beim 
 | Meldung | Bedeutung |
 | --- | --- |
 | `als root gestartet` | Als normaler Benutzer mit sudo starten, oder `GENIUS_USER=<benutzer>` setzen |
-| `Das Dashboard läuft nicht` | Ursache mit `sudo journalctl -u geniusnew-deck -n 30` ansehen |
+| `Das Dashboard läuft nicht` | Ursache mit `sudo journalctl -u geniusnew-deck -n 30` ansehen; meist ist der Port belegt (`GENIUS_DECK_PORT` ändern) |
 | `Das ist WSL (Laptop), kein Server` | Auf dem Server ausführen, nicht im Laptop-WSL |
 | `nur Debian oder Ubuntu` | Andere Systeme sind nicht unterstützt (fail closed) |
 | `ÜBERSPRUNGEN … kein gültiger Schlüssel` | Erst `add-key`, dann `setup --apply` erneut |

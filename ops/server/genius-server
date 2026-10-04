@@ -576,7 +576,10 @@ cmd_confirm() {
 
 # deck_unit IP PORT PYTHON [NAME]: the systemd unit for the Control Deck. It
 # binds to the Tailscale address only; the deck itself refuses anything but
-# loopback and 100.64.0.0/10 (docs/CONTROL-DECK.md).
+# loopback and 100.64.0.0/10 (docs/CONTROL-DECK.md). --repo is explicit because
+# the deck otherwise falls back to a built-in default path, not to its working
+# directory. PATH leads with the interpreter's directory so the test and demo
+# actions, which call a bare python3, get the venv's pinned dependencies.
 deck_unit() {
   local ip="$1" port="$2" python="$3" name="${4:-}" allow=""
   [ -z "$name" ] || allow=" --allow-host $name --allow-host $name:$port"
@@ -591,12 +594,14 @@ Wants=network-online.target tailscaled.service
 Type=simple
 User=$TARGET_USER
 WorkingDirectory=$REPO_ROOT
-ExecStart=$python -m tools.control_deck --host $ip --port $port$allow
+Environment=PATH=$(dirname "$python"):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=$python -m tools.control_deck --host $ip --port $port --repo $REPO_ROOT$allow
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=full
+ProtectHome=read-only
 
 [Install]
 WantedBy=multi-user.target
@@ -608,7 +613,7 @@ cmd_deck() {
   resolve_user
   have systemctl || die "systemd wird gebraucht"
   have tailscale || die "Tailscale fehlt; erst '$SELF setup --apply'"
-  local ip name python tmp
+  local ip name python tmp old_port="" cleaned
   ip="$(tailscale_ip)"
   [ -n "$ip" ] || die "Tailscale ist nicht verbunden (kein 'tailscale ip -4'); erst setup"
   case "$DECK_PORT" in ''|*[!0-9]*) die "GENIUS_DECK_PORT muss eine Zahl sein" ;; esac
@@ -631,6 +636,11 @@ cmd_deck() {
   case "$python" in *[!A-Za-z0-9._/-]*) die "python3-Pfad enthält Zeichen, die eine systemd-Unit nicht sicher trägt: $python" ;; esac
   name="$(tailscale_dns)"
   case "$name" in *[!a-z0-9.-]*) name="" ;; esac
+  # ufw only ever adds on "allow"; the rule for a port the deck no longer uses
+  # stays open on tailscale0 until it is deleted.
+  if [ -r "$DECK_UNIT" ]; then
+    old_port="$(sed -n 's/^ExecStart=.* --port \([0-9][0-9]*\)\( .*\)\{0,1\}$/\1/p' "$DECK_UNIT" | head -n 1)"
+  fi
   TOTAL=3
   say "Control Deck als Dienst, nur über Tailscale erreichbar: http://$ip:$DECK_PORT"
   if [ "$DRY" -eq 1 ]; then say "TROCKENLAUF: es wird nichts verändert. Zum Ausführen: $SELF deck --apply"; fi
@@ -647,6 +657,9 @@ cmd_deck() {
   rm -f "$tmp"
   step "Firewall-Regel" "nur über tailscale0; wirkt, sobald lockdown die Firewall eingeschaltet hat"
   root ufw allow in on tailscale0 to any port "$DECK_PORT" proto tcp
+  if [ -n "$old_port" ] && [ "$old_port" != "$DECK_PORT" ]; then
+    root ufw delete allow in on tailscale0 to any port "$old_port" proto tcp
+  fi
   step "Dienst starten" "neu laden, beim Booten aktivieren, jetzt (neu) starten"
   root systemctl daemon-reload
   root systemctl enable geniusnew-deck
@@ -654,8 +667,15 @@ cmd_deck() {
   if [ "$DRY" -eq 0 ]; then
     # A deck that cannot bind exits right after start; give it a moment to do so.
     sleep "$DECK_SETTLE"
-    [ "$(systemctl is-active geniusnew-deck 2>/dev/null)" = "active" ] \
-      || die "Das Dashboard läuft nicht. Ursache: sudo journalctl -u geniusnew-deck -n 30"
+    if [ "$(systemctl is-active geniusnew-deck 2>/dev/null)" != "active" ]; then
+      # Whatever holds the port instead must not stay reachable through the
+      # rule opened for the deck.
+      cleaned="Dienst gestoppt, Firewall-Regel für Port $DECK_PORT entfernt"
+      { as_root systemctl disable --now geniusnew-deck >/dev/null 2>&1 \
+          && as_root ufw delete allow in on tailscale0 to any port "$DECK_PORT" proto tcp >/dev/null 2>&1; } \
+        || cleaned="Aufräumen fehlgeschlagen, bitte selbst: sudo systemctl disable --now geniusnew-deck; sudo ufw delete allow in on tailscale0 to any port $DECK_PORT proto tcp"
+      die "Das Dashboard läuft nicht ($cleaned). Ursache: sudo journalctl -u geniusnew-deck -n 30"
+    fi
     say ""
     say "Dashboard läuft. Auf dem iPad (Tailscale an): http://$ip:$DECK_PORT"
     [ -z "$name" ] || say "  oder: http://$name:$DECK_PORT"
