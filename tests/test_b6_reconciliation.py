@@ -20,6 +20,8 @@ from geniusnew.workers import DeterministicSummarizer, WorkerRunner
 from postgres_support import PostgresDatabase
 from test_end_to_end import API_KEY, ROOT_SECRET, Fixture
 
+APPROVER_KEY = b"APPROVER-KEY-CANARY-B6-RECONCILIATION"
+
 
 class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
     def setUp(self):
@@ -42,7 +44,9 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
         return build(
             root_secret=ROOT_SECRET,
             policy=self.policy_for(requires_approval=requires_approval),
-            api_keys={API_KEY: "subject-demo"}, workers=(DeterministicSummarizer(),),
+            api_keys={API_KEY: "subject-demo", APPROVER_KEY: "subject-approver"},
+            approvers={"subject-approver": "user-approver"},
+            workers=(DeterministicSummarizer(),),
             anchor=AuditAnchor() if anchor is None else anchor, clock=lambda: 1_700_000_000,
             job_ledger=database.PostgresJobLedger(self.connection),
             acceptance_ledger=database.PostgresAcceptanceLedger(acceptance_connection),
@@ -611,7 +615,7 @@ class LedgerAuditReconciliationTest(Fixture, unittest.TestCase):
         service.close()
 
         service = self.start(requires_approval=True)
-        token = service.approve(job_id)
+        token = service.approve(job_id, approver_subject="subject-approver")
         service.close()
 
         service = self.start(requires_approval=True)
