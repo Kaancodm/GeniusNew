@@ -1,9 +1,15 @@
-# Betrieb und Recovery — Gate C5, prüfbarer Entwurf
+# Betrieb und Recovery — Gate C5
 
 Dieser Entwurf aktiviert keinen Dienst. B3/B4/B5/B6/B7, unabhängige Reviews und
 der frische Host-Nachweis müssen am selben vollständigen Commit bestanden sein.
 Der bestehende Server ist ein Entwicklungsserver. Der vorhandene PostgreSQL-
 Testcluster ist keine Produktivdatenbank.
+
+Kaan hat am 04.10.2026 für C5 entschieden: Der unabhängig gesicherte Ankerstand
+ist eine nicht absenkbare Untergrenze. Fehlt bei einem älteren DB-Backup die
+Historie bis zu diesem Stand und ist sie nicht rekonstruierbar, bleibt der Dienst
+im Zustand **HOLD**. Die eigene Worker-OS-UID wird für C5 ausdrücklich
+verschoben; bis zur gesonderten Umsetzung gilt das getestete Landlock-Mindestziel.
 
 ## Installationsvertrag
 
@@ -21,8 +27,63 @@ ausschließlich die geprüfte Runtime-DSN. Ein fehlendes Feld verhindert den Sta
 Die Worker laufen heute noch als Kindprozess des Kerns. Eine eigene systemd-
 User-Zeile allein ändert ihre Identität nicht. Der gesonderte Worker-OS-Nutzer
 braucht einen tatsächlich unterstützten Startpfad und einen Negativtest.
-Bis dahin ist lediglich das Landlock-Mindestziel belegt. Eine Verschiebung der
-vollen Nutzertrennung ist nach ROADMAP-V02 ausdrücklich Kaans Entscheidung.
+Bis dahin ist lediglich das Landlock-Mindestziel belegt. Diese Verschiebung ist
+Kaans Entscheidung für C5 vom 04.10.2026, keine Behauptung über den Ist-Zustand.
+
+### Dienst-Installation nach Freigabe
+
+Die zwei Beispiele unter `docs/examples/` sind Vorlagen für einen eigens
+freigegebenen Host, keine ausführbare Erstinstallation. Der geprüfte Commit wird
+unveränderlich unter `/opt/geniusnew` bereitgestellt. Danach legt der Operator
+die beiden Systemnutzer `geniusnew-anchor` und `geniusnew` sowie die gemeinsame
+Socketgruppe `geniusnew-audit` an. Der Kernnutzer erhält diese Gruppe ergänzend,
+der Ankernutzer bekommt keinen Zugriff auf die Core-DB oder das Root-Secret.
+
+`/var/lib/geniusnew-anchor` gehört nur `geniusnew-anchor` und ist `0700`;
+`/etc/geniusnew` gehört `geniusnew` und ist `0700`. Darin liegen
+`geniusnew.toml` und die privaten Dateien `root_secret` und `database_dsn`.
+Die beiden privaten Dateien gehören `geniusnew`, sind reguläre Dateien mit
+Modus `0600` und keine Symlinks. Die TOML nennt ausschließlich
+`anchor_socket` und `anchor_reply_public_key`, nie zusätzlich `anchor_state`.
+Ihr `listen_host` ist `127.0.0.1`; der Reverse-Proxy aus
+`docs/REVERSE-PROXY.md` übernimmt TLS und äußere Limits.
+
+Nach Abgleich von Pfaden, Nutzern, Schlüsseln und vollständigem Commit-SHA:
+
+```sh
+sudo install -m 0644 docs/examples/geniusnew-anchor.service /etc/systemd/system/geniusnew-anchor.service
+sudo install -m 0644 docs/examples/geniusnew-core.service /etc/systemd/system/geniusnew-core.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now geniusnew-anchor.service
+sudo systemctl is-active geniusnew-anchor.service
+sudo systemctl enable --now geniusnew-core.service
+sudo systemctl is-active geniusnew-core.service
+```
+
+Der Platzhalter `AUDIT_PUBLIC_KEY_HEX` in der Anker-Unit muss vorher durch den
+öffentlichen Audit-Schlüssel ersetzt sein; seine private Hälfte und das
+Root-Secret erscheinen nie in Unit, Kommandozeile oder Journal. Die Antwort-
+Schlüsseldatei des Ankers bleibt unter seiner UID. Der öffentliche Antwort-
+Schlüssel aus `anchor_process public-key` gehört in die Core-TOML. Ein fehlender
+Socket oder ein falscher Antwortschlüssel muss den Core-Start verweigern.
+`systemctl enable` ist erst nach der gesonderten Deployment-Freigabe erlaubt.
+
+Den öffentlichen Audit-Schlüssel leitet der Core-Nutzer lokal aus seiner
+privaten Root-Datei ab. Nur die öffentliche Ausgabe wird in die Anker-Unit
+übernommen:
+
+```sh
+cd /opt/geniusnew
+sudo -u geniusnew .venv/bin/python - <<'PY'
+from geniusnew.audit import AuditAuthority
+from geniusnew.config import read_root_secret
+from geniusnew.keys import derive_keys
+
+root = read_root_secret('/etc/geniusnew/root_secret')
+audit = AuditAuthority(audit_key=derive_keys(root).audit_key)
+print(audit.verifier().public_key.hex())
+PY
+```
 
 Vor der Aktivierung nachweisen:
 
@@ -54,14 +115,65 @@ Reihenfolge für einen konsistenten Wartungsbackup:
    Lesbarkeit/Integrität dort prüfen. Fehlende Bestätigung ergibt kein Backup-PASS.
 8. Kern nur nach erneut erfolgreicher Startprüfung freigeben.
 
+Der Gleichstand aus Schritt 4 lässt sich nach dem Stop aller Core-Schreiber
+lesend prüfen. Der Befehl läuft aus `/opt/geniusnew` als Core-Nutzer und gibt
+weder DSN noch Schlüssel aus. Er muss mit `HEAD_EQUAL` enden; sonst bleibt
+der Dienst gestoppt.
+
+```sh
+cd /opt/geniusnew
+sudo -u geniusnew .venv/bin/python - <<'PY'
+import psycopg
+from geniusnew.anchor_process import AnchorClient
+from geniusnew.config import load_config
+
+config = load_config('/etc/geniusnew/geniusnew.toml')
+with psycopg.connect(config.database_dsn) as connection:
+    row = connection.execute(
+        'SELECT count, head_hash FROM public.audit_heads ORDER BY count DESC LIMIT 1'
+    ).fetchone()
+anchor = AnchorClient(socket_path=config.anchor_socket,
+                      reply_public_key=config.anchor_reply_public_key)
+if row is None or tuple(row) != anchor.committed:
+    raise SystemExit('HOLD: database and anchor heads differ')
+print('HEAD_EQUAL', row[0], row[1])
+PY
+```
+
 Das konkrete Backupziel, Retention, Zugang und verantwortlicher Operator sind
 noch nicht angegeben. Der Entwurf eröffnet keine neue externe Speicherung.
 
+Für den Datenbank-Snapshot dient `pg_dump -Fc`; für die Probe wird mit
+`pg_restore` ausschließlich in eine **neue, wegwerfbare Datenbank** restauriert.
+Die Sicherungsrolle erhält eine eigene, geprüfte Leseberechtigung. Ihre libpq-
+Service- und Passwortdateien liegen privat außerhalb des Repositories; DSN und
+Passwort erscheinen nicht als Kommandozeilenargument, im Manifest oder im PR.
+Nach dem Stop aller Core-Schreiber und dem Gleichstandsvergleich lautet der
+Kern der Sicherung beispielsweise (als Operator mit `sudo`, `private_dir` zeigt
+auf einen zuvor bestimmten Pfad auf verschlüsseltem Speicher):
+
+```sh
+sudo install -d -m 0700 -o root -g root "$private_dir"
+sudo env PGSERVICEFILE=/etc/geniusnew/backup.pg_service.conf PGPASSFILE=/etc/geniusnew/backup.pgpass pg_dump --dbname='service=geniusnew-backup' --format=custom --file="$private_dir/core.dump"
+sudo chmod 0600 "$private_dir/core.dump"
+sudo systemctl stop geniusnew-anchor.service
+sudo install -m 0600 -o root -g root /var/lib/geniusnew-anchor/anchor.state "$private_dir/anchor.state"
+sudo sha256sum "$private_dir/core.dump" "$private_dir/anchor.state" | sudo tee "$private_dir/SHA256SUMS" >/dev/null
+sudo chmod 0600 "$private_dir/SHA256SUMS"
+```
+
+Die Befehle sind erst nach der getrennten Freigabe
+für Backupziel und DB-Sicherungsrolle auszuführen. `anchor.key`, Root-Secret und
+DB-Zugangsdaten werden getrennt verschlüsselt gesichert und mit demselben
+Backupstand verbunden. Ein Dump ohne diese Schlüssel kann die signierte Historie
+nicht als derselbe Dienst fortsetzen. Nach dem Kopieren startet der Operator
+zuerst den Anker, dann den Kern; beide müssen ihre Startprüfungen bestehen.
+
 ## Restore und Anker-Vorlauf
 
-Vorschlag zur Architekturentscheidung: Der neueste unabhängig festgehaltene
-Ankerstand bleibt eine nicht absenkbare Untergrenze. Ein älteres DB-Backup
-berechtigt niemals zum Zurücksetzen oder Neuerzeugen des Ankers.
+Der neueste unabhängig festgehaltene Ankerstand bleibt die von Kaan entschiedene
+nicht absenkbare Untergrenze. Ein älteres DB-Backup berechtigt niemals zum
+Zurücksetzen oder Neuerzeugen des Ankers.
 
 1. Dienst bleibt offline; zuerst Restore in eine isolierte Prüf-DB.
 2. Code, Migrationen, bytegenaue Wires, Signaturen und bidirektionale Ledger-/
@@ -76,8 +188,17 @@ berechtigt niemals zum Zurücksetzen oder Neuerzeugen des Ankers.
 7. Fehlende Historie nicht rekonstruierbar: HOLD. Kein stiller Epochenwechsel,
    kein neuer Anker und keine Freigabe alter job_id-Werte.
 
+Die Restore-Probe nutzt eine neue Datenbank und eine Kopie des Ankerzustands.
+`pg_restore` und der Starttest dürfen niemals auf die laufende Produktions-DB
+oder den aktiven Anker zeigen. Das private Protokoll hält Dump- und
+Anker-Prüfsummen, den vor dem Restore beobachteten Ankerkopf, den restaurierten
+DB-Kopf und den Start-/Refusal-Ausgang fest. Bei einem älteren DB-Dump wird die
+Kopie des Ankers **nicht** zurückgesetzt: Der Start muss mit `ContractError`
+scheitern. Danach werden die wegwerfbaren Ressourcen entfernt; die aktive
+Historie bleibt unverändert.
+
 Eine andere Loss-/Epoch-Recovery würde einen eigenen Sicherheitsvertrag mit
-Kaans ausdrücklicher Architekturentscheidung benötigen.
+Kaans neuer ausdrücklicher Architekturentscheidung benötigen.
 
 ## Schlüsselrotation
 
@@ -106,6 +227,7 @@ auf dem Entwicklungsserver ersetzt diesen Betriebsnachweis nicht.
 ## Noch offene konkrete Freigaben
 
 Nach den fertigen Code-/Review-Nachweisen: Anker/Core-Installation mit eigenen
-OS-Nutzern, tatsächlicher Worker-Startpfad oder ausdrücklich verschobene volle
-Nutzertrennung, bestätigtes Backupziel und die oben vorgeschlagene Recoveryregel.
+OS-Nutzern, bestätigtes Backupziel und eine ausgeführte Restore-Probe gegen die
+wegwerfbare CI-Datenbank. Die Worker-UID ist für C5 ausdrücklich verschoben;
+sie bleibt eine offene Sicherheitsgrenze.
 AGENTS.md verlangt für Deployment, Zugriffsrechte und Secret-Rotation Kaans OK.
