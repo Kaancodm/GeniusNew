@@ -2,7 +2,7 @@
 
 Gilt für jeden Assistenten, der in diesem Repository arbeitet: Claude Code, ChatGPT /
 Codex, GitHub Copilot, Gemini. **Wer was macht, steht in `docs/COLLABORATION.md`:**
-Codex setzt Kerncode um und mergt, Gemini Pro prüft (Antigravity-CLI), NotebookLM gibt Auskunft,
+Codex setzt Kerncode um und mergt, Gemini Pro prüft (Antigravity- oder Abacus-CLI), NotebookLM gibt Auskunft,
 Kaan entscheidet Ziele und Architektur, ChatGPT übernimmt neue Werkzeuge, Server-Pflege,
 Infrastruktur und erstellt die Datenbank-Dokumentation (`docs/DATABASE.md`) in Kaans
 Auftrag, Claude Code besitzt `docs/COLLABORATION.md`, `docs/DECISIONS.md` und
