@@ -45,6 +45,6 @@ Keine Secrets, keine Tokens. Nur Aussagen, die du belegen kannst (SHA, PR-Link,
 Befehlsausgabe).
 ```
 
-Die Antwort auf Prompt 2 geht an Gemini Pro und Claude Code. Gemini überträgt sie nach
-`docs/STATUS.md` und NotebookLM, Claude Code nach `docs/DECISIONS.md`, bevor das
-nächste Werkzeug Prompt 1 bekommt.
+Die Antwort auf Prompt 2 geht an Claude Code. Claude Code überträgt sie nach
+`docs/STATUS.md` und `docs/DECISIONS.md`, bevor das nächste Werkzeug Prompt 1 bekommt;
+NotebookLM liest beide danach aus `main`.
