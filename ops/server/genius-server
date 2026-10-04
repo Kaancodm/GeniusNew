@@ -616,6 +616,8 @@ cmd_deck() {
   local ip name python tmp old_port="" cleaned
   ip="$(tailscale_ip)"
   [ -n "$ip" ] || die "Tailscale ist nicht verbunden (kein 'tailscale ip -4'); erst setup"
+  # The address goes into the unit unquoted, like the paths below.
+  case "$ip" in *[!0-9.]*) die "Unerwartete Tailscale-Adresse: $ip" ;; esac
   case "$DECK_PORT" in ''|*[!0-9]*) die "GENIUS_DECK_PORT muss eine Zahl sein" ;; esac
   { [ "$DECK_PORT" -ge 1024 ] && [ "$DECK_PORT" -le 65535 ]; } \
     || die "GENIUS_DECK_PORT muss zwischen 1024 und 65535 liegen"
@@ -655,11 +657,8 @@ cmd_deck() {
     as_root install -m 0644 "$tmp" "$DECK_UNIT"
   fi
   rm -f "$tmp"
-  step "Firewall-Regel" "nur über tailscale0; wirkt, sobald lockdown die Firewall eingeschaltet hat"
-  root ufw allow in on tailscale0 to any port "$DECK_PORT" proto tcp
-  if [ -n "$old_port" ] && [ "$old_port" != "$DECK_PORT" ]; then
-    root ufw delete allow in on tailscale0 to any port "$old_port" proto tcp
-  fi
+  # The firewall opens last: a start that fails at any point leaves no rule
+  # behind for whatever else might hold the port.
   step "Dienst starten" "neu laden, beim Booten aktivieren, jetzt (neu) starten"
   root systemctl daemon-reload
   root systemctl enable geniusnew-deck
@@ -668,14 +667,21 @@ cmd_deck() {
     # A deck that cannot bind exits right after start; give it a moment to do so.
     sleep "$DECK_SETTLE"
     if [ "$(systemctl is-active geniusnew-deck 2>/dev/null)" != "active" ]; then
-      # Whatever holds the port instead must not stay reachable through the
-      # rule opened for the deck.
+      # Whatever holds the port instead must not stay reachable through a
+      # rule left from an earlier deck run.
       cleaned="Dienst gestoppt, Firewall-Regel für Port $DECK_PORT entfernt"
       { as_root systemctl disable --now geniusnew-deck >/dev/null 2>&1 \
           && as_root ufw delete allow in on tailscale0 to any port "$DECK_PORT" proto tcp >/dev/null 2>&1; } \
         || cleaned="Aufräumen fehlgeschlagen, bitte selbst: sudo systemctl disable --now geniusnew-deck; sudo ufw delete allow in on tailscale0 to any port $DECK_PORT proto tcp"
       die "Das Dashboard läuft nicht ($cleaned). Ursache: sudo journalctl -u geniusnew-deck -n 30"
     fi
+  fi
+  step "Firewall-Regel" "nur über tailscale0; wirkt, sobald lockdown die Firewall eingeschaltet hat"
+  root ufw allow in on tailscale0 to any port "$DECK_PORT" proto tcp
+  if [ -n "$old_port" ] && [ "$old_port" != "$DECK_PORT" ]; then
+    root ufw delete allow in on tailscale0 to any port "$old_port" proto tcp
+  fi
+  if [ "$DRY" -eq 0 ]; then
     say ""
     say "Dashboard läuft. Auf dem iPad (Tailscale an): http://$ip:$DECK_PORT"
     [ -z "$name" ] || say "  oder: http://$name:$DECK_PORT"

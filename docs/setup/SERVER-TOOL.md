@@ -83,8 +83,9 @@ Aufruf: `bash genius-server <befehl>`. Beispiele unten nutzen `bash ops/server/g
 
 ## Dashboard (Control Deck) als Dienst
 
-`deck --apply` schreibt `/etc/systemd/system/geniusnew-deck.service`, gibt in der Firewall
-Port 8787 **nur auf `tailscale0`** frei und startet den Dienst. Er startet beim Booten neu.
+`deck --apply` schreibt `/etc/systemd/system/geniusnew-deck.service`, startet den Dienst und
+gibt erst danach in der Firewall Port 8787 **nur auf `tailscale0`** frei. Er startet beim
+Booten neu.
 
 - Er läuft als dein Benutzer, nicht als root, mit `NoNewPrivileges`, `PrivateTmp`,
   `ProtectSystem=full` und `ProtectHome=read-only`: Test und Demo aus dem Dashboard können
@@ -97,8 +98,9 @@ Port 8787 **nur auf `tailscale0`** frei und startet den Dienst. Er startet beim 
   Abhängigkeiten finden.
 - Port ändern: `GENIUS_DECK_PORT=9000 bash ops/server/genius-server deck --apply`. Die
   Firewall-Regel für den alten Port wird dabei gelöscht.
-- Startet der Dienst nicht, stoppt das Werkzeug ihn wieder und löscht die neue
-  Firewall-Regel, damit kein anderes Programm auf dem Port über Tailscale erreichbar bleibt.
+- Startet der Dienst nicht, öffnet das Werkzeug keinen Port, stoppt den Dienst wieder und
+  löscht eine Firewall-Regel für diesen Port aus einem früheren Lauf, damit kein anderes
+  Programm auf dem Port über Tailscale erreichbar bleibt.
 - Hat sich die Tailscale-Adresse geändert, einfach `deck --apply` erneut ausführen.
 - Wieder entfernen:
   ```sh

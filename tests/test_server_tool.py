@@ -77,6 +77,7 @@ case "$1" in
     fi ;;
   reload) [ -z "${FAKE_RELOAD_FAIL:-}" ] || exit 1 ;;
   disable) [ -z "${FAKE_DISABLE_FAIL:-}" ] || exit 1 ;;
+  daemon-reload) [ -z "${FAKE_DAEMON_RELOAD_FAIL:-}" ] || exit 1 ;;
   list-jobs) cat "$STATE/jobs" 2>/dev/null || true ;;
 esac
 """,
@@ -95,7 +96,7 @@ echo "tailscale $*" >>"$LOG"
 case "$1" in
   ip)
     [ -e "$STATE/ts_up" ] || exit 1
-    [ "${2:-}" = -6 ] || echo 100.101.102.103
+    [ "${2:-}" = -6 ] || echo "${FAKE_TS_IP4:-100.101.102.103}"
     [ "${2:-}" = -4 ] || echo fd7a:115c:a1e0::1 ;;
   up) touch "$STATE/ts_up" ;;
   status)
@@ -1091,10 +1092,11 @@ class DeckTest(ServerToolTestCase):
         self.assertIn(f"Environment=PATH={python_dir}:/usr/local/sbin:", unit)
         self.assertFalse(self.sb.called("ufw delete"))
         order = [
-            self.sb.index("ufw allow in on tailscale0 to any port 8787 proto tcp"),
             self.sb.index("systemctl daemon-reload"),
             self.sb.index("systemctl enable geniusnew-deck"),
             self.sb.index("systemctl restart geniusnew-deck"),
+            self.sb.index("systemctl is-active geniusnew-deck"),
+            self.sb.index("ufw allow in on tailscale0 to any port 8787 proto tcp"),
         ]
         self.assertEqual(order, sorted(order))
         for call in self.sb.calls():
@@ -1220,7 +1222,19 @@ class DeckTest(ServerToolTestCase):
         self.assertNotIn("Dashboard läuft", result.stdout)
         self.assertTrue(self.sb.called("systemctl disable --now geniusnew-deck"))
         self.assertTrue(self.sb.called("ufw delete allow in on tailscale0 to any port 8787 proto tcp"))
-        self.assertNotIn("port 8787 ", (self.sb.state / "ufw_added").read_text())
+        self.assertFalse(self.sb.called("ufw allow"))
+
+    def test_a_failure_before_the_start_opens_no_firewall_rule(self):
+        result = self.sb.run("deck", "--apply", FAKE_DAEMON_RELOAD_FAIL="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.sb.called("ufw allow"))
+        self.assertNotIn("Dashboard läuft", result.stdout)
+
+    def test_an_unexpected_tailscale_address_is_refused(self):
+        result = self.sb.run("deck", "--apply", FAKE_TS_IP4="100.1.2.3 --repo /tmp")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Unerwartete Tailscale-Adresse", result.stderr)
+        self.assertFalse(self.sb.deck_unit.exists())
 
     def test_a_failed_cleanup_after_a_failed_start_is_reported(self):
         (self.sb.state / "deck").write_text("failed\n")
