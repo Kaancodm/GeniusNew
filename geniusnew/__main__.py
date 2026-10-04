@@ -55,13 +55,16 @@ def _serve(config_path: str) -> int:
     from .database import PostgresAcceptanceLedger, PostgresJobLedger, open_database
     from .audit_store import PostgresAuditChain
 
-    # Acceptance uses a separate connection; the other stores share one lock.
-    with open_database(config.database_dsn) as jobs, open_database(config.database_dsn) as results:
-        return _run_service(config, job_ledger=PostgresJobLedger(jobs),
-                            acceptance_ledger=PostgresAcceptanceLedger(results),
-                            database_connection=jobs,
-                            audit_chain_factory=lambda audit: PostgresAuditChain(
-                                jobs, authority=audit))
+    # B6: every durable security mutation shares the audit connection
+    # so its signed event can commit in the same PostgreSQL transaction.
+    with open_database(config.database_dsn) as database_connection:
+        return _run_service(
+            config,
+            job_ledger=PostgresJobLedger(database_connection),
+            acceptance_ledger=PostgresAcceptanceLedger(database_connection),
+            database_connection=database_connection,
+            audit_chain_factory=lambda audit: PostgresAuditChain(
+                database_connection, authority=audit))
 
 
 def _run_service(config: ServiceConfig, *, job_ledger: JobLedger,

@@ -167,7 +167,8 @@ class Gateway:
         return self._gateway_id
 
     def admit(self, wire: Any, *, subject: str, job_id: str, policy: Policy,
-              now: int, approval_token: bytes | None = None) -> DispatchPermit:
+              now: int, approval_token: bytes | None = None,
+              transaction=None) -> DispatchPermit:
         """Revalidate the raw wire and mint a one-job dispatch capability.
 
         Policy, identity, job id and time are trusted server-side inputs. The
@@ -205,8 +206,9 @@ class Gateway:
                     wire, subject=subject, job_id=job_id, policy=policy,
                     verifier=self._handoff_verifier, now=now,
                 )
-                receipt = self._approvals.consume(approval_token, scope, now=now,
-                                                 subject=subject)
+                receipt = self._approvals.consume(
+                    approval_token, scope, now=now, subject=subject,
+                    transaction=transaction)
             except ContractError as refusal:
                 raise GatewayRejected(
                     str(refusal), gateway_id=self._gateway_id,
