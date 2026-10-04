@@ -3,8 +3,8 @@
 Ziel: So wenig Abstimmung wie möglich. Jede Sache hat **genau einen Verantwortlichen**:
 
 - **Code und Regeln:** der `main`-Zweig dieses Repositories. Codex setzt um und mergt.
-- **Wissen — Projektstand:** `docs/STATUS.md`, geführt von **Gemini Pro und
-  NotebookLM**.
+- **Wissen — Projektstand:** `docs/STATUS.md`, geführt von **Claude Code** (seit
+  04.10.2026); NotebookLM gibt daraus Auskunft.
 - **Wissen — Regeln und Entscheidungen:** `docs/COLLABORATION.md` (dieses Dokument) und
   `docs/DECISIONS.md` gehören **ausschließlich Claude Code**.
 - **Datenbank im Code:** **Kaan entscheidet** Ziele, Architektur und offene Fragen;
@@ -27,25 +27,31 @@ Code“ unten). Ein vorheriger Entwurf (PR #64), der Gemini vollständig durch C
 Head der Datenbank ersetzt hätte, ist weiterhin **nicht übernommen** — er diente nur
 als Übergabestand. Siehe `docs/DECISIONS.md` für beide Begründungen.
 
+**Seit 04.10.2026 (Kaan), schlankere Abläufe:** `docs/STATUS.md` führt Claude Code statt
+Gemini. Gemini prüft nur noch, über die **Antigravity-CLI** oder die Gemini CLI (Format
+„Gemini-Review“ unten), weil die GitHub-App Gemini Code Assist in diesem Repository nie
+ein Review abgegeben hat. **Keine Stapel-PRs:** Jeder PR basiert auf `main`. Begründung:
+`docs/DECISIONS.md`.
+
 ## Rollen
 
 | Wer | Macht | Macht nicht |
 | --- | --- | --- |
 | **Kaan** | entscheidet Produktziele, Architektur und Ausnahmen (Portal/Kern-Betriebsort, DB-Technologie, neue Dependencies, `SECURITY.md`-Grenzen, Tags, Deployment-/Produktionsfreigaben); gibt ChatGPT den Auftrag für DB-/Infra-Entwürfe; entscheidet offene Architekturfragen und gibt den DB-Entwurf frei; mergt Claudes und ChatGPTs eigene PRs | `docs/DATABASE.md` selbst schreiben zu müssen — das übernimmt ChatGPT in seinem Auftrag |
-| **Gemini Pro** | pflegt mit NotebookLM `docs/STATUS.md`; **reviewt jeden PR automatisch** (Gemini Code Assist, Maßstab `.gemini/styleguide.md`); ist **Pflicht-Zweitmeinung** bei den Ausnahmen und prüft Designs vorab bei Prozessgrenzen und Kryptografie. Kontext: `GEMINI.md` | Code ändern, `docs/COLLABORATION.md` oder `docs/DECISIONS.md` ändern, die Datenbank entwerfen oder freigeben |
+| **Gemini Pro** | **Prüfer:** ist **Pflicht-Zweitmeinung** bei den Ausnahmen und prüft Designs vorab bei Prozessgrenzen und Kryptografie, auf Anforderung auch andere PRs. Läuft über die **Antigravity-CLI** oder die Gemini CLI; das Ergebnis steht als PR-Kommentar im Format „Gemini-Review“ (unten), Maßstab `.gemini/styleguide.md`. Kontext: `GEMINI.md` | irgendeine Datei im Repository ändern (auch `docs/STATUS.md` nicht mehr), die Datenbank entwerfen oder freigeben |
 | **NotebookLM** | **Auskunft für alle:** beantwortet Fragen zu Stand, Entscheidungen, Grenzen und Datenbank-Schema (aus `docs/DATABASE.md`) aus seinen Quellen, jede Antwort mit Quellenangabe; Quellen strikt getrennt von ChatGPTs eigenem Recherche-Notebook | Entscheidungen treffen, Inhalte ohne Quelle |
 | **Codex** (ChatGPT Pro) | setzt **Kerncode** um, implementiert den von Kaan freigegebenen DB-Code, und **mergt selbst**: ein Thema pro PR, Branch `codex/<thema>`, mit einem **Wissensblock** in der PR-Beschreibung (siehe unten) | `docs/STATUS.md`, `docs/COLLABORATION.md`, `docs/DECISIONS.md` und `docs/DATABASE.md` ändern, einen DB-Code-PR ohne `Claude DB Review: APPROVED` mergen, Ausnahmen ohne Kaans OK mergen, Tags anlegen |
 | **ChatGPT** (Chat) | **neue Werkzeuge, laufende Server-Pflege, Dashboards, Monitoring, externe Integrationen** (eigener Abschnitt unten), **inklusive technischer Architekturentwürfe im Infra-/DB-Bereich und der Erstellung/Pflege von `docs/DATABASE.md` im Auftrag von Kaan**; plant, formuliert Prompts, erklärt | Kerncode (`geniusnew/`, `tests/`, `scripts/refusals.py`, `scripts/demo.*`, `schemas/`), Core-Tests, `SECURITY.md` eigenständig ändern, `requirements.txt`, Governance-/Wissensdateien (siehe unten) ändern; Änderungen ohne Kaans Auftrag; den eigenen DB-Entwurf sicherheitstechnisch freigeben; selbst mergen |
 | **GitHub Copilot Pro** | Vervollständigung im Editor; Review jedes PRs nach der Checkliste in `.github/copilot-instructions.md` | eigene PRs ohne Auftrag |
 | **Microsoft 365 Copilot** | Berichte, E-Mails, Folien aus dem OneDrive-Ordner `GeniusNew` | Inhalte erfinden, die dort nicht stehen |
-| **Claude Code** | **Ordnung, Struktur und Konfliktlöser zwischen den Plattformen, mit Überschreibrecht:** besitzt `docs/COLLABORATION.md` und `docs/DECISIONS.md` sowie die übrigen Regeln (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.gemini/*`, `docs/HANDOVER.md`); entscheidet Konflikte zwischen Werkzeugen verbindlich; **unabhängiger Security-Reviewer**: reviewt ChatGPTs `docs/DATABASE.md`-Entwurf und Codex' DB-Code-PRs sicherheitstechnisch, ebenso Server-/Deployment-/Netzwerk-Sicherheitsfragen; darf jede Datei korrigieren, auch die von Gemini, wenn sie den Regeln oder dem Code widerspricht; **hilft, wenn Codex feststeckt** | Kaans Entscheidungen oder die Ausnahmen überstimmen; die eigene Arbeit selbst freigeben; `docs/DATABASE.md` selbst entwerfen oder Head der Datenbank sein; regulärer Kerncode-Implementierer sein; eigene PRs selbst mergen |
+| **Claude Code** | **Ordnung, Struktur und Konfliktlöser zwischen den Plattformen, mit Überschreibrecht:** besitzt `docs/COLLABORATION.md`, `docs/DECISIONS.md` und `docs/STATUS.md` sowie die übrigen Regeln (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.gemini/*`, `docs/HANDOVER.md`); entscheidet Konflikte zwischen Werkzeugen verbindlich; **unabhängiger Security-Reviewer**: reviewt ChatGPTs `docs/DATABASE.md`-Entwurf und Codex' DB-Code-PRs sicherheitstechnisch, ebenso Server-/Deployment-/Netzwerk-Sicherheitsfragen; darf jede Datei korrigieren, auch die anderer Werkzeuge, wenn sie den Regeln oder dem Code widerspricht; **hilft, wenn Codex feststeckt** | Kaans Entscheidungen oder die Ausnahmen überstimmen; die eigene Arbeit selbst freigeben; `docs/DATABASE.md` selbst entwerfen oder Head der Datenbank sein; regulärer Kerncode-Implementierer sein; eigene PRs selbst mergen |
 
 ## Die Wissensdatenbank
 
-**`docs/STATUS.md`** (Stand, Grenzen, nächste Schritte) pflegt weiterhin **Gemini**, mit
-NotebookLM als Auskunft. **`docs/COLLABORATION.md` und `docs/DECISIONS.md`** (jede
-Entscheidung mit Datum, Begründung und Quelle) gehören **Claude Code**. Beide Dateien
-zusammen sind das Gedächtnis des Projekts; niemand sonst schreibt sie.
+**`docs/STATUS.md`** (Stand, Grenzen, nächste Schritte), **`docs/COLLABORATION.md`** und
+**`docs/DECISIONS.md`** (jede Entscheidung mit Datum, Begründung und Quelle) gehören
+**Claude Code**; NotebookLM gibt daraus Auskunft. Zusammen sind sie das Gedächtnis des
+Projekts; niemand sonst schreibt sie.
 
 **Quellen in NotebookLM** (Notebook „GeniusNew“): `docs/STATUS.md`,
 `docs/DECISIONS.md`, `docs/DATABASE.md` (sobald sie existiert), `SECURITY.md`,
@@ -56,18 +62,17 @@ die Rohdateien in `main` eingebunden werden, zum Beispiel
 **Wer fragt wen:** Jedes Werkzeug und Kaan fragen bei Wissensfragen zuerst NotebookLM,
 also „Was wurde zu X entschieden?“, „Warum ist Y so?“ oder „Was ist der nächste
 Schritt?“. Steht es dort nicht, ist es noch nicht entschieden. Dann geht die Frage an
-Kaan; Claude Code trägt die Antwort in `docs/DECISIONS.md` ein, Gemini spiegelt sie bei
+Kaan; Claude Code trägt die Antwort in `docs/DECISIONS.md` ein und spiegelt sie bei
 Bedarf in `docs/STATUS.md`.
 
-**Pflege nach jedem Merge:**
-1. **Gemini** liest den Wissensblock des gemergten PRs und aktualisiert `docs/STATUS.md`
-   auf einem Branch `gemini/wissen-<datum>`; ein solcher PR ändert nur diese Datei.
-   Gemini mergt ihn selbst, sobald `contracts` grün ist.
-2. **Claude Code** trägt neue Entscheidungen und Konfliktergebnisse in
-   `docs/DECISIONS.md` ein, auf einem eigenen `claude/<thema>`-Branch; Kaan mergt (siehe
-   „Konflikte“ unten).
-3. Die Quellen in NotebookLM aktualisieren und Widersprüche zwischen den Dokumenten als
-   Issue melden.
+**Pflege nach Merges** (gesammelt, höchstens ein PR am Tag):
+1. **Claude Code** überträgt die Wissensblöcke gemergter PRs nach `docs/STATUS.md` und
+   neue Entscheidungen und Konfliktergebnisse nach `docs/DECISIONS.md`, auf einem Branch
+   `claude/wissen-<datum>`; ein solcher PR ändert nur diese beiden Dateien. Zahlen
+   (Tests, Angriffe der Demo, Module im Refusal-Guard) kommen nur aus einem Wissensblock
+   oder einer Befehlsausgabe, nie geschätzt. Kaan mergt (siehe „Konflikte“ unten).
+2. Kaan aktualisiert danach die Quellen in NotebookLM. Widersprüche zwischen den
+   Dokumenten meldet jedes Werkzeug als Issue.
 
 ## Die Datenbank im Code (Entwurf: ChatGPT im Auftrag von Kaan)
 
@@ -189,11 +194,14 @@ DB-Entwurf sicherheitstechnisch frei und mergt nie eigene PRs.
    ChatGPT, Regel- oder Konfliktfragen an Claude Code.
 2. Der Umsetzer öffnet einen Draft-PR auf dem eigenen Branch-Präfix
    (`codex/<thema>`, `chatgpt/<thema>` oder `claude/<thema>`) und schreibt den Plan in
-   die PR-Beschreibung. Ändert das Thema eine Prozessgrenze oder Kryptografie, fragt
-   Codex im PR mit `@gemini-code-assist` nach einer Design-Vorprüfung, bevor Code
-   entsteht.
-3. **Gemini reviewt automatisch**, Copilot zusätzlich. Ein neues Review nach
-   Änderungen fordert der Umsetzer mit `/gemini review` im PR an.
+   die PR-Beschreibung. **Der PR basiert auf `main`, nie auf einem anderen PR-Branch:**
+   Braucht das Thema einen noch offenen PR, wartet es auf dessen Merge oder gehört in
+   denselben PR. Ändert das Thema eine Prozessgrenze oder Kryptografie, fordert Codex
+   im PR eine Design-Vorprüfung durch Gemini an, bevor Code entsteht.
+3. **Copilot reviewt jeden PR.** Ein **Gemini-Review** gibt es dort, wo es Pflicht ist
+   (Ausnahmen, Design-Vorprüfung), oder wenn Kaan es anfordert: Der Umsetzer fragt es im
+   PR an, Kaan (oder ChatGPT in seinem Auftrag) startet es über die Antigravity-CLI und
+   stellt das Ergebnis als PR-Kommentar ein.
 4. **Codex mergt eigene PRs selbst**, sobald die CI grün ist (`contracts`), der
    Wissensblock ausgefüllt ist und kein blockierender Review-Befund offen ist.
    Blockierend sind Gemini-Befunde der Stufe **Critical** oder **High** und
@@ -203,8 +211,9 @@ DB-Entwurf sicherheitstechnisch frei und mergt nie eigene PRs.
    vorher ein Gemini-Sicherheits-Review im PR stehen. **DB-Code-PRs** brauchen
    zusätzlich `Claude DB Review: APPROVED` am exakten Head-SHA (siehe oben). **PRs von
    ChatGPT und Claude mergt Kaan**, keines der beiden mergt selbst.
-5. Gemini überträgt den Wissensblock in `docs/STATUS.md`; Claude Code trägt
-   Entscheidungen und Konfliktergebnisse in `docs/DECISIONS.md` ein.
+5. Claude Code überträgt den Wissensblock in `docs/STATUS.md` und trägt Entscheidungen
+   und Konfliktergebnisse in `docs/DECISIONS.md` ein (gesammelt, siehe „Pflege nach
+   Merges“).
 
 **Kommunikation läuft über den PR**, nicht über Kopieren zwischen Chats. Plan,
 Rückfragen an Gemini oder Claude, Reviews, Begründungen und der Wissensblock stehen im
@@ -220,6 +229,24 @@ PR. Jedes Werkzeug und Kaan sehen so denselben Stand.
 - Messwerte: <Anzahl Tests, Ergebnis der Demo>
 - Nächster Schritt: <Vorschlag>
 ```
+
+### Gemini-Review (Format, seit 04.10.2026)
+
+Ein Gemini-Review zählt, wenn es als PR-Kommentar so aussieht. Es gilt für genau den
+genannten Head-SHA; ein späterer Push, der die geprüften Bereiche ändert, braucht ein
+neues Review. Ein reiner Merge von `main` braucht keins, wenn der Umsetzer im PR belegt,
+dass der Diff gegenüber `main` in diesen Bereichen gleich geblieben ist.
+
+```text
+Gemini-Review GeniusNew
+Werkzeug und Modell: <z. B. Antigravity-CLI, gemini-3.1-pro-high>
+PR und Head-SHA: <#nummer, voller SHA>
+Bereiche: <A: … PASS|FAIL; B: … PASS|FAIL>
+Befunde: <keine | Schweregrad, Datei:Zeile, Beleg>
+```
+
+Critical oder High blockiert den Merge (`.gemini/styleguide.md`). Installiert Kaan
+später die GitHub-App Gemini Code Assist, zählen auch ihre Reviews.
 
 ## Konflikte zwischen den Plattformen (Claude Code entscheidet)
 
@@ -302,7 +329,7 @@ Schritt, weil es Workflow-Schreibrechte braucht.
 
 Ordner `GeniusNew` mit genau vier Dateien, die nach jeder Pflege der Wissensdatenbank
 ersetzt werden: `STATUS.md`, `DECISIONS.md`, `SECURITY.md`, `ROADMAP-V01.md`. Keine
-eigenen Kopien bearbeiten: Was an `STATUS.md` falsch ist, korrigiert Gemini, was an
+eigenen Kopien bearbeiten: Was an `STATUS.md` oder
 `DECISIONS.md` falsch ist, korrigiert Claude Code; danach werden die Dateien neu
 abgelegt. Die Git-Arbeitskopie liegt **außerhalb** des synchronisierten
 OneDrive-Ordners, damit sich Synchronisation und Git nicht in die Quere kommen. In
