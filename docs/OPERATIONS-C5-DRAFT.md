@@ -143,8 +143,10 @@ PY
 Das konkrete Backupziel, Retention, Zugang und verantwortlicher Operator sind
 noch nicht angegeben. Der Entwurf eröffnet keine neue externe Speicherung.
 
-Für den Datenbank-Snapshot dient `pg_dump -Fc`; für die Probe wird mit
-`pg_restore` ausschließlich in eine **neue, wegwerfbare Datenbank** restauriert.
+Für den Datenbank-Snapshot dient
+[`pg_dump -Fc`](https://www.postgresql.org/docs/17/app-pgdump.html); für die Probe
+wird mit [`pg_restore`](https://www.postgresql.org/docs/17/app-pgrestore.html)
+ausschließlich in eine **neue, wegwerfbare Datenbank** restauriert.
 Die Sicherungsrolle erhält eine eigene, geprüfte Leseberechtigung. Ihre libpq-
 Service- und Passwortdateien liegen privat außerhalb des Repositories; DSN und
 Passwort erscheinen nicht als Kommandozeilenargument, im Manifest oder im PR.
