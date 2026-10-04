@@ -262,9 +262,8 @@ oder den aktiven Anker zeigen. Das private Protokoll hält Dump- und
 Anker-Prüfsummen, die bestätigten B2-File-IDs, den vor dem Restore beobachteten
 Ankerkopf, den restaurierten DB-Kopf und den Start-/Refusal-Ausgang fest. Bei
 einem älteren DB-Dump wird die Kopie des Ankers **nicht** zurückgesetzt: Der
-Start muss mit `ContractError`
-scheitern. Danach werden die wegwerfbaren Ressourcen entfernt; die aktive
-Historie bleibt unverändert.
+Start muss mit `ContractError` scheitern. Danach werden die wegwerfbaren
+Ressourcen entfernt; die aktive Historie bleibt unverändert.
 
 Eine andere Loss-/Epoch-Recovery würde einen eigenen Sicherheitsvertrag mit
 Kaans neuer ausdrücklicher Architekturentscheidung benötigen.
@@ -290,6 +289,20 @@ hinter Anker verweigert; DB-Vorlauf wird ausschließlich mit vorhandenem gültig
 signierten Kopf nachverankert; manipulierte Bytes oder Kopf-Signatur verweigern.
 Nach jeder Probe bleibt jede bereits reservierte ID verbrannt.
 
+Die lokale `pg_dump`/`pg_restore`-Probe gegen den Wegwerf-PostgreSQL-Service
+lief in der CI von PR #119 am Head `c177dc124d8e9e7102fc2a1ab7e56eac7481c468`
+mit `contracts` und der letzten Zeile `PASS — C5 disposable PostgreSQL and anchor
+restore drill.` Die Offsite-Probe steht noch aus: Nach Kaans Bucket- und
+Zugriffsfreigabe, aber **vor dem ersten echten Backup**, lädt der benannte
+Restore-Operator ein kleines verschlüsseltes Testobjekt hoch, hält dessen
+File-ID und Prüfsumme im unabhängigen Katalog fest, erzeugt mit dem
+Upload-Schlüssel einen Hide-Marker und liest genau die bestätigte Version mit
+dem getrennten Restore-Zugang per ID zurück. Er prüft auch Compliance-Retention
+und setzt einen Legal Hold mit dem getrennten Operatorzugang; der
+Upload-Schlüssel muss das Entfernen verweigern. Der Operator protokolliert
+File-IDs, Prüfsummen, Retention, Hold und Ergebnis ohne Schlüssel oder DSN.
+Fehlt ein Nachweis, erfolgt kein produktiver Upload.
+
 E3 folgt dieser Anleitung auf einem frischen Linux-Host. Ein neuer Worktree
 auf dem Entwicklungsserver ersetzt diesen Betriebsnachweis nicht.
 
@@ -297,7 +310,7 @@ auf dem Entwicklungsserver ersetzt diesen Betriebsnachweis nicht.
 
 Nach den fertigen Code-/Review-Nachweisen: Anker/Core-Installation mit eigenen
 OS-Nutzern, B2-Bucket und Schlüsselverwaltung nach separater Freigabe sowie
-eine ausgeführte Restore-Probe gegen die wegwerfbare CI-Datenbank. Die
+die oben beschriebene Offsite-Probe durch den benannten Restore-Operator. Die
 Worker-UID ist für C5 ausdrücklich verschoben;
 sie bleibt eine offene Sicherheitsgrenze.
 AGENTS.md verlangt für Deployment, Zugriffsrechte und Secret-Rotation Kaans OK.
