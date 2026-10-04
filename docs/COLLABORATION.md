@@ -44,6 +44,7 @@ ein Review abgegeben hat. **Keine Stapel-PRs:** Jeder PR basiert auf `main`. Beg
 | **ChatGPT** (Chat) | **neue Werkzeuge, laufende Server-Pflege, Dashboards, Monitoring, externe Integrationen** (eigener Abschnitt unten), **inklusive technischer Architekturentwürfe im Infra-/DB-Bereich und der Erstellung/Pflege von `docs/DATABASE.md` im Auftrag von Kaan**; plant, formuliert Prompts, erklärt | Kerncode (`geniusnew/`, `tests/`, `scripts/refusals.py`, `scripts/demo.*`, `schemas/`), Core-Tests, `SECURITY.md` eigenständig ändern, `requirements.txt`, Governance-/Wissensdateien (siehe unten) ändern; Änderungen ohne Kaans Auftrag; den eigenen DB-Entwurf sicherheitstechnisch freigeben; selbst mergen |
 | **GitHub Copilot Pro** | Vervollständigung im Editor; Review jedes PRs nach der Checkliste in `.github/copilot-instructions.md` | eigene PRs ohne Auftrag |
 | **Microsoft 365 Copilot** | Berichte, E-Mails, Folien aus dem OneDrive-Ordner `GeniusNew` | Inhalte erfinden, die dort nicht stehen |
+| **Kiro-CLI** | **unabhängige Zweitprüfung für Claudes eigenen Code**: prüft Claude-PRs, die Code oder Skripte ändern, nur lesend im Projektverzeichnis, auf Anforderung von Kaan; Ergebnis als PR-Kommentar im Format „Review GeniusNew“ (unten) | Dateien ändern, Befehle mit Schreibwirkung ausführen, ein Gemini-Pflichtreview oder `Claude DB Review` ersetzen |
 | **Claude Code** | **Ordnung, Struktur und Konfliktlöser zwischen den Plattformen, mit Überschreibrecht:** besitzt `docs/COLLABORATION.md`, `docs/DECISIONS.md` und `docs/STATUS.md` sowie die übrigen Regeln (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.gemini/*`, `docs/HANDOVER.md`); entscheidet Konflikte zwischen Werkzeugen verbindlich; **unabhängiger Security-Reviewer**: reviewt ChatGPTs `docs/DATABASE.md`-Entwurf und Codex' DB-Code-PRs sicherheitstechnisch, ebenso Server-/Deployment-/Netzwerk-Sicherheitsfragen; darf jede Datei korrigieren, auch die anderer Werkzeuge, wenn sie den Regeln oder dem Code widerspricht; **hilft, wenn Codex feststeckt** | Kaans Entscheidungen oder die Ausnahmen überstimmen; die eigene Arbeit selbst freigeben; `docs/DATABASE.md` selbst entwerfen oder Head der Datenbank sein; regulärer Kerncode-Implementierer sein; eigene PRs selbst mergen |
 
 ## Die Wissensdatenbank
@@ -210,7 +211,10 @@ DB-Entwurf sicherheitstechnisch frei und mergt nie eigene PRs.
    `SECURITY.md` (offen gehaltener Test umgekehrt) und Tags. Bei diesen Ausnahmen muss
    vorher ein Gemini-Sicherheits-Review im PR stehen. **DB-Code-PRs** brauchen
    zusätzlich `Claude DB Review: APPROVED` am exakten Head-SHA (siehe oben). **PRs von
-   ChatGPT und Claude mergt Kaan**, keines der beiden mergt selbst.
+   ChatGPT und Claude mergt Kaan**, keines der beiden mergt selbst. **Claude-PRs, die Code
+   oder Skripte ändern,** brauchen vorher ein unabhängiges Review ohne offenen Befund der
+   Stufe Critical/High: ein Codex-Review oder ein Kiro- oder Gemini-Review im Format unten.
+   Claude gibt eigenen Code nie selbst frei.
 5. Claude Code überträgt den Wissensblock in `docs/STATUS.md` und trägt Entscheidungen
    und Konfliktergebnisse in `docs/DECISIONS.md` ein (gesammelt, siehe „Pflege nach
    Merges“).
@@ -232,7 +236,8 @@ PR. Jedes Werkzeug und Kaan sehen so denselben Stand.
 
 ### Gemini-Review (Format, seit 04.10.2026)
 
-Ein Gemini-Review zählt, wenn es als PR-Kommentar so aussieht. Es gilt für genau den
+Ein Gemini-Review zählt, wenn es als PR-Kommentar so aussieht. Ein Kiro-Review nutzt
+dasselbe Format mit der Kopfzeile `Review GeniusNew`. Es gilt für genau den
 genannten Head-SHA; ein späterer Push, der die geprüften Bereiche ändert, braucht ein
 neues Review. Ein reiner Merge von `main` braucht keins, wenn der Umsetzer im PR belegt,
 dass der Diff gegenüber `main` in diesen Bereichen gleich geblieben ist.
