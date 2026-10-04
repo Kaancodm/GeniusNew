@@ -69,7 +69,8 @@ Bedarf in `docs/STATUS.md`.
 **Pflege nach Merges** (gesammelt, höchstens ein PR am Tag):
 1. **Claude Code** überträgt die Wissensblöcke gemergter PRs nach `docs/STATUS.md` und
    neue Entscheidungen und Konfliktergebnisse nach `docs/DECISIONS.md`, auf einem Branch
-   `claude/wissen-<datum>`; ein solcher PR ändert nur diese beiden Dateien. Zahlen
+   `claude/wissen-<datum>`; ein solcher PR ändert nur diese beiden Dateien und die
+   Stand-Spalte der Gates in `docs/ROADMAP-V02.md`. Zahlen
    (Tests, Angriffe der Demo, Module im Refusal-Guard) kommen nur aus einem Wissensblock
    oder einer Befehlsausgabe, nie geschätzt. Kaan mergt (siehe „Konflikte“ unten).
 2. Kaan aktualisiert danach die Quellen in NotebookLM. Widersprüche zwischen den
