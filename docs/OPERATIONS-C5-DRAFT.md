@@ -10,6 +10,9 @@ ist eine nicht absenkbare Untergrenze. Fehlt bei einem älteren DB-Backup die
 Historie bis zu diesem Stand und ist sie nicht rekonstruierbar, bleibt der Dienst
 im Zustand **HOLD**. Die eigene Worker-OS-UID wird für C5 ausdrücklich
 verschoben; bis zur gesonderten Umsetzung gilt das getestete Landlock-Mindestziel.
+Am 05.10.2026 legte Kaan Backblaze B2 EU Central mit Object Lock und zunächst
+30 Tagen Aufbewahrung als Offsite-Ziel fest. Ein Konto oder Bucket wurde damit
+noch nicht angelegt.
 
 ## Installationsvertrag
 
@@ -144,8 +147,39 @@ print('HEAD_EQUAL', row[0], row[1])
 PY
 ```
 
-Das konkrete Backupziel, Retention, Zugang und verantwortlicher Operator sind
-noch nicht angegeben. Der Entwurf eröffnet keine neue externe Speicherung.
+### Externes Backupziel
+
+Das Ziel ist ein privater Backblaze-B2-Bucket in einem **separaten Konto** in der
+[Region EU Central](https://www.backblaze.com/docs/cloud-storage-data-regions).
+Diese Region wird bei der Kontoerstellung festgelegt und lässt sich danach
+nicht umstellen. Der Bucket erhält
+[Object Lock](https://www.backblaze.com/docs/cloud-storage-object-lock) mit
+30 Tagen Standardaufbewahrung im Compliance-Modus. Ein solcher Schutz kann
+während seiner Laufzeit auch vom Kontoinhaber nicht verkürzt werden. Vor dem
+ersten Upload müssen Bucket, Retention und Wiederherstellungszugang mit einem
+kleinen verschlüsselten Testobjekt und Rücklesen geprüft sein.
+
+Jeder bestätigte Backupstand bekommt einen eigenen unveränderlichen Objektnamen:
+verschlüsselter DB-Dump, verschlüsselter Ankerzustand und Manifest mit
+Code-SHA, UTC, `count`, `head_hash` und Prüfsummen. Ein fehlender Upload oder
+ein fehlgeschlagenes Rücklesen ergibt kein Backup-PASS. Der Upload-Zugang darf
+keine Objekte löschen und keinen Retentionsschutz aufheben; der Restore-Zugang
+ist getrennt. Zugangsdaten und der private Entschlüsselungsschlüssel bleiben
+außerhalb des Repositories und außerhalb des Upload-Buckets.
+
+**Anker-Untergrenze:** Zusätzlich zum 30-Tage-Backup bleibt der zuletzt
+unabhängig bestätigte Ankerkopf in einem eigenen Objekt unter
+[Legal Hold](https://www.backblaze.com/docs/cloud-storage-object-lock).
+Ein alter Hold wird erst entfernt, nachdem ein neuerer Ankerkopf hochgeladen,
+zurückgelesen und unabhängig bestätigt wurde. Kann das nicht belegt werden,
+bleibt der alte Hold bestehen und ein Restore hinter diesen Stand in HOLD.
+Damit löscht der Ablauf den letzten unabhängigen Ankerbeleg auch dann nicht,
+wenn normale 30-Tage-Backups auslaufen.
+
+Der konkrete Bucket-Name, der eingeschränkte Upload-Schlüssel, der getrennte
+Restore-Zugang, der Ort des privaten Entschlüsselungsschlüssels und der
+verantwortliche Operator fehlen noch. Die Einrichtung und jeder externe Upload
+brauchen Kaans gesonderte Deployment- und Zugriffsfreigabe.
 
 Für den Datenbank-Snapshot dient
 [`pg_dump -Fc`](https://www.postgresql.org/docs/17/app-pgdump.html); für die Probe
@@ -235,7 +269,8 @@ auf dem Entwicklungsserver ersetzt diesen Betriebsnachweis nicht.
 ## Noch offene konkrete Freigaben
 
 Nach den fertigen Code-/Review-Nachweisen: Anker/Core-Installation mit eigenen
-OS-Nutzern, bestätigtes Backupziel und eine ausgeführte Restore-Probe gegen die
-wegwerfbare CI-Datenbank. Die Worker-UID ist für C5 ausdrücklich verschoben;
+OS-Nutzern, B2-Bucket und Schlüsselverwaltung nach separater Freigabe sowie
+eine ausgeführte Restore-Probe gegen die wegwerfbare CI-Datenbank. Die
+Worker-UID ist für C5 ausdrücklich verschoben;
 sie bleibt eine offene Sicherheitsgrenze.
 AGENTS.md verlangt für Deployment, Zugriffsrechte und Secret-Rotation Kaans OK.
