@@ -178,6 +178,18 @@ class PostgresAuditChain(AuditChain):
                         _fail("job ledger subject has no signed audit binding")
                     if len(matching) != 1:
                         _fail("job ledger has duplicate audit issuance")
+                pending_issuances = Counter(
+                    (event.job_id, event.handoff_sha256)
+                    for events in issued.values() for event in events
+                    if event.reason_code == "PENDING_APPROVAL")
+                ledger_issuances = Counter(
+                    (_audit_safe(job_id, "job_id"), digest)
+                    for job_id, _, digest, _, _, _ in jobs
+                    if issued.get((_audit_safe(job_id, "job_id"), digest), ())
+                    and issued[(_audit_safe(job_id, "job_id"), digest)][0].reason_code
+                    == "PENDING_APPROVAL")
+                if pending_issuances != ledger_issuances:
+                    _fail("pending issuance has no job ledger row")
                 admitted = Counter(
                     (record.event.job_id, record.event.handoff_sha256,
                      record.event.occurred_at,

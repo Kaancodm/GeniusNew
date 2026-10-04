@@ -23,6 +23,12 @@ GatewayRejected carrying audit metadata. For each such direct raise, replace
 the translation with a bare re-raise: rejection must not quietly lose its
 structured evidence while tests still pass because ContractError was raised.
 
+Shell scripts in the guarded list refuse with `die "..."`. Each such line is
+rewritten to `: "..."` — the message is still evaluated, but nothing stops —
+and the test module that runs the script must fail. Only that module runs per
+mutant (GUARDED_SHELL): the whole suite per line would take an hour, and no
+other module executes the script.
+
 This is deliberately not general-purpose mutation testing. Flipping arbitrary
 operators produces mutants that change nothing observable, and the survivors are
 then argued about rather than fixed. Here every mutant has one meaning — this
@@ -41,6 +47,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import re
 import shutil
 import subprocess
 import sys
@@ -62,7 +69,15 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/http_entry.py", "geniusnew/wiring.py",
            "geniusnew/anchor_process.py", "geniusnew/config.py",
            "geniusnew/__main__.py", "geniusnew/database.py",
-           "geniusnew/audit_store.py", "tools/control_deck/actions.py")
+           "geniusnew/audit_store.py", "tools/control_deck/actions.py",
+           "ops/server/genius-server")
+
+# Guarded shell scripts and the one test module that runs each of them.
+GUARDED_SHELL = {"ops/server/genius-server": "test_server_tool.py"}
+
+# `die "` as a command, not as the German article inside a message, a comment
+# or the definition `die() {`.
+_SHELL_DIE = re.compile(r'(?<![\w-])die(\s+")')
 
 # Each module's own way of refusing counts. `_deny` is `orchestrator.py`'s
 # helper, `Rejected` is `verifier.py`'s exception type, `GatewayRejected`
@@ -121,7 +136,20 @@ def _gateway_wrappers(handler: ast.ExceptHandler) -> list[ast.Raise]:
             and statement.exc.func.id == "GatewayRejected"]
 
 
+def _find_shell_refusals(path: Path) -> list[Refusal]:
+    found = []
+    for number, text in enumerate(path.read_text().splitlines(), start=1):
+        if text.lstrip().startswith("#") or not _SHELL_DIE.search(text):
+            continue
+        message = text[_SHELL_DIE.search(text).end():].split('"', 1)[0]
+        found.append(Refusal(path=str(path.relative_to(ROOT)), line=number,
+                             condition=text.strip(), message=message, kind="shell_die"))
+    return found
+
+
 def find_refusals(path: Path) -> list[Refusal]:
+    if path.suffix != ".py":
+        return _find_shell_refusals(path)
     source = path.read_text()
     tree = ast.parse(source)
     lines = source.splitlines()
@@ -167,6 +195,13 @@ def _replace_node(source: str, node: ast.AST, replacement: str) -> str:
 
 def _disable(source: str, refusal: Refusal) -> str:
     """Disable a condition or strip only a gateway refusal's audit metadata."""
+    if refusal.kind == "shell_die":
+        lines = source.splitlines(keepends=True)
+        target = lines[refusal.line - 1] if refusal.line <= len(lines) else ""
+        if target.lstrip().startswith("#") or not _SHELL_DIE.search(target):
+            raise SystemExit(f"could not locate the refusal at {refusal.label()}")
+        lines[refusal.line - 1] = _SHELL_DIE.sub(r":\1", target)
+        return "".join(lines)
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if refusal.kind == "gateway_metadata" and isinstance(node, ast.ExceptHandler):
@@ -182,10 +217,12 @@ def _disable(source: str, refusal: Refusal) -> str:
 
 
 def _suite_passes(cwd: Path, *, failfast: bool = False,
-                  show_failure: bool = False) -> bool:
+                  show_failure: bool = False, pattern: str | None = None) -> bool:
     # A mutant is caught by its first failing test. The unmutated baseline
     # still runs every test so an unrelated failure cannot validate a mutant.
     command = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"]
+    if pattern:
+        command += ["-p", pattern]
     if failfast:
         command.append("-f")
     completed = subprocess.run(
@@ -223,7 +260,8 @@ def check(paths: list[str]) -> int:
             # not locate the refusal" after ten minutes of work.
             original = target.read_text()
             target.write_text(_disable(original, refusal))
-            survived = _suite_passes(workspace, failfast=True)
+            survived = _suite_passes(workspace, failfast=True,
+                                     pattern=GUARDED_SHELL.get(refusal.path))
             target.write_text(original)
 
             mark = "SURVIVED" if survived else "caught  "

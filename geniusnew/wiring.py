@@ -592,7 +592,8 @@ def _submitter(*, orchestrator: Orchestrator,
                 handoff, trace_id=trace_id,
                 actor=recorder.audit.actor("orchestrator", orchestrator.orchestrator_id),
                 action=issued.action, decision=issued.decision,
-                reason_code=issued.reason_code, occurred_at=issued.occurred_at,
+                reason_code=("PENDING_APPROVAL" if handoff.approval_state == "PENDING_APPROVAL"
+                             else issued.reason_code), occurred_at=issued.occurred_at,
                 api_subject=subject)
 
         if policy.grant_for(subject).requires_approval:
