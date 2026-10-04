@@ -41,6 +41,10 @@ jobs:
         run: ./scripts/demo.sh
       - name: Refuse persistence attacks after the HTTP demo
         run: python scripts/demo_persistence.py
+      - name: Restore a disposable database against its independent anchor
+        env:
+          GENIUSNEW_TEST_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: python scripts/demo_restore.py
 
   guarded:
     runs-on: ubuntu-latest
