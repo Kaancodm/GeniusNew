@@ -738,6 +738,15 @@ class PostgresApprovalStore(ApprovalStore):
             if connection.execute("SELECT 1 FROM public.approval_tokens WHERE token_digest=%s",
                                   (record.token_digest.hex(),)).fetchone():
                 _fail("approval token collision")
+            # The job row lock serializes approvers across service instances.
+            # A lost response may be replaced only after its raw token expires.
+            if connection.execute(
+                    "SELECT 1 FROM public.approval_tokens t "
+                    "JOIN public.approval_records r ON r.token_digest=t.token_digest "
+                    "AND r.record_hash=t.current_record_hash "
+                    "WHERE r.scope=%s AND r.state='GRANTED' AND r.expires_at>%s LIMIT 1",
+                    (canonical(scope.to_dict()), now)).fetchone():
+                _fail("pending job already has an active approval grant")
             self._insert(connection, record)
             connection.execute("INSERT INTO public.approval_tokens VALUES (%s,%s)",
                                (record.token_digest.hex(), record.record_hash))

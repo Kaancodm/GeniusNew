@@ -12,7 +12,7 @@ behind and requires, at every boundary:
   and no audit event of the job appears twice;
 - a job that was still waiting can still be completed: with the token the operator
   already holds, or, if the crash cost the operator the token, by approving the
-  job again;
+  job again after the lost token expires;
 - the service still takes and completes a new job.
 
 The boundaries are not listed here. A dry run records every crossing with the
@@ -21,12 +21,9 @@ token, and each distinct combination is killed once: the committed state, and wh
 reached the outside, is all a crash leaves behind. A boundary added to the flow
 later is therefore covered without touching this file.
 
-Recovery rule for a lost token: the operator approves the waiting job again. That
-issues a second token for the same job and leaves the first record GRANTED until
-it expires. The decision is made when the job is consumed, so whichever token
-comes first completes the job once and the other is refused
-(`RegrantTest`). Allowing a second grant is a property C3 has to keep or replace
-deliberately; it is not a side effect.
+Recovery rule for a lost token: the operator waits for the token to expire and
+then approves the still waiting job again. A concurrent live grant is refused.
+The expired token cannot complete the job, regardless of presentation order.
 """
 
 import json
@@ -269,7 +266,8 @@ def check(service, db, log_path, events, mode):
         # Whether or not the crash cut the refusal short, the job ends REFUSED,
         # once, and is never approved.
         try:
-            service.approve(harness.CRASH_JOB_ID)
+            service.approve(harness.CRASH_JOB_ID,
+                            approver_subject=harness.APPROVER_SUBJECT)
             problems.append("an expired job was approved")
         except ContractError:
             pass
@@ -283,10 +281,12 @@ def check(service, db, log_path, events, mode):
         if "token" in announced:
             token = bytes.fromhex(announced["token"]["token"])
         elif before == "PENDING_APPROVAL":
-            # The crash cost the operator the token. The recovery rule is to
-            # approve the waiting job again, so no waiting job is lost.
+            # The crash cost the operator the token. Wait for that capability
+            # to expire before replacing it while the handoff remains valid.
             try:
-                token = service.approve(harness.CRASH_JOB_ID)
+                service.clock.now = harness.NOW + 31
+                token = service.approve(harness.CRASH_JOB_ID,
+                                        approver_subject=harness.APPROVER_SUBJECT)
             except ContractError as refusal:
                 problems.append(f"a waiting job could not be approved again: {refusal}")
         if token is not None:
@@ -345,7 +345,7 @@ class CrashRecoveryTest(unittest.TestCase):
 
 
 class RegrantTest(unittest.TestCase):
-    """A waiting job with two live tokens is decided once, whichever token comes first."""
+    """A lost token is replaced only after expiry; either presentation order is safe."""
 
     def run_order(self, new_token_first):
         db = PostgresDatabase()
@@ -361,14 +361,22 @@ class RegrantTest(unittest.TestCase):
                     waiting = service.entry.handle(
                         method="POST", path="/jobs", headers=harness.headers(), body=body)
                     self.assertEqual(waiting.body["status"], "PENDING_APPROVAL")
-                    lost = service.approve(harness.CRASH_JOB_ID)
-                    again = service.approve(harness.CRASH_JOB_ID)
+                    lost = service.approve(harness.CRASH_JOB_ID,
+                                           approver_subject=harness.APPROVER_SUBJECT)
+                    with self.assertRaises(ContractError):
+                        service.approve(harness.CRASH_JOB_ID,
+                                        approver_subject=harness.APPROVER_SUBJECT)
+                    service.clock.now = harness.NOW + 31
+                    again = service.approve(harness.CRASH_JOB_ID,
+                                            approver_subject=harness.APPROVER_SUBJECT)
                     self.assertNotEqual(lost, again)
                     first, second = (again, lost) if new_token_first else (lost, again)
-                    won = harness.complete(service, harness.CRASH_JOB_ID, first)
-                    refused = harness.complete(service, harness.CRASH_JOB_ID, second)
-                    self.assertEqual((won.status, won.body["status"]), (202, "SUCCEEDED"))
-                    self.assertEqual(refused.status, 409)
+                    first_response = harness.complete(service, harness.CRASH_JOB_ID, first)
+                    second_response = harness.complete(service, harness.CRASH_JOB_ID, second)
+                    self.assertEqual((first_response.status, second_response.status),
+                                     (202, 409) if new_token_first else (409, 202))
+                    winner = first_response if new_token_first else second_response
+                    self.assertEqual(winner.body["status"], "SUCCEEDED")
                     self.assertEqual(harness.executions(log_path, harness.CRASH_TEXT), 1)
                     records = service.chain.records
                     self.assertEqual(verify(records, service.head(), authority=service.audit,
@@ -382,7 +390,7 @@ class RegrantTest(unittest.TestCase):
     def test_the_new_token_first_completes_the_job_and_the_lost_one_is_refused(self):
         self.run_order(new_token_first=True)
 
-    def test_the_old_token_first_completes_the_job_and_the_new_one_is_refused(self):
+    def test_the_expired_token_first_is_refused_and_the_new_one_completes_the_job(self):
         self.run_order(new_token_first=False)
 
 
