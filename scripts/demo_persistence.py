@@ -160,7 +160,7 @@ def anchor_ahead_of_database(directory: str) -> None:
                 service, connection = start(older, anchor_state, log_path)
             except ContractError as refusal:
                 require(str(refusal) ==
-                        f"anchor committed {anchor_count} records; this chain has 0",
+                        f"anchor already committed {anchor_count} records; head claims 0",
                         "the older database met an unrelated refusal")
             else:
                 service.close()
