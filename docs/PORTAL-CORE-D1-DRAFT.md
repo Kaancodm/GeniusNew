@@ -160,7 +160,9 @@ Listenbildung verweigert.
 Nach jedem D1-Request wird die Core-Verbindung geschlossen; zusätzliche gepufferte Bytes
 werden nie als nächster Request geparst. Ein unsicher gerahmter, unvollständiger oder
 nicht vollständig konsumierbarer Request schließt die Verbindung ohne Verarbeitung.
-HTTP/2-Framing muss ein vorgeschalteter Proxy eindeutig terminieren. **Tatsächlich
+Der Core-Adapter nimmt nur eindeutig gerahmtes HTTP/1.1 an. HTTP/2-Framing muss ein
+vorgeschalteter Proxy eindeutig terminieren; dieser verweigert auch tatsächliche
+Request-Trailer, selbst wenn kein `Trailer`-Header angekündigt wurde. **Tatsächlich
 empfangene Body-Bytes** sind die HTTP-Inhaltsbytes, die der Core-Adapter als
 Request-Body erhält: keine HTTP/1.1-Chunk-Marker und keine HTTP/2-Frames. D1 verbietet
 Content-Encoding; der Digest gilt daher den unveränderten Inhaltsbytes.
@@ -261,8 +263,9 @@ ausdrückliche Nutzerentscheidung und einen separaten Status-/Idempotenzvertrag.
 schützt denselben signierten Request gegen Replay; Ende-zu-Ende-Idempotenz einer
 menschlichen Absicht ist nicht Teil von D1.
 
-Vor einem aktiven Code-PR: unabhängiger Security-Review dieses exakten Heads, Kaans
-Entscheidungen unten, freigegebener DB-/Rollback-Vertrag und Tests für alle
+Vor einem aktiven Code-PR stehen der unabhängige Security-Review dieses exakten Heads,
+Kaans Entscheidungen unten und der freigegebene DB-/Rollback-Vertrag. Für dessen
+spätere Abnahme sind Tests nötig für alle
 positiven/negativen Vektoren, Header-Duplikate vor Dictionary-Bildung, Framing,
 Misch-Auth, Zeit-/Lock-/Commit-Crashpunkte, parallele Inserts, Restart/Restore und
 unveränderte Last-/Policy-/Approval-/Audit-Gates. Jede neue Ablehnung braucht einen
