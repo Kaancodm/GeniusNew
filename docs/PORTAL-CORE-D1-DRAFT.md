@@ -146,6 +146,19 @@ bei gleichen Werten. Kommagetrennt zusammengeführte Werte ersetzen diese Prüfu
 Obs-fold, Whitespace vor dem Doppelpunkt und nicht-ASCII-Headernamen werden vor der
 Listenbildung verweigert.
 
+Diese Prüfung gilt bereits am **ersten HTTP-Hop** auf dessen unveränderter Headerliste,
+einschließlich eines TLS-terminierenden Proxys und vor jeder HTTP/2-zu-HTTP/1.1-
+Übersetzung. Jeder weitere Hop und der Core-Adapter prüfen erneut vor eigener
+Zusammenführung oder Mapping-Bildung. Ein Proxy darf D1-relevante Duplikate weder
+entfernen noch zu einem Wert zusammenführen. Bei HTTP/2 sind `:method`, `:path`,
+`:scheme` und `:authority` jeweils genau einmal erforderlich; `:scheme` ist exakt
+`https`, und gleichzeitige `Host`- und `:authority`-Felder sind auch bei gleichen
+Werten REFUSE. Die Grenze von 8192 Oktetten gilt für die dekomprimierte Headerliste
+an jedem Hop, einschließlich Pseudo-Headern. Der Core ist nur über diesen geprüften
+Ingress erreichbar und prüft die bei ihm empfangene rohe HTTP/1.1-Liste nochmals.
+Kann der erste Hop diese Ablehnungen nicht vor Normalisierung belegen, bleibt D1
+deaktiviert (**Betriebsgate**).
+
 | Eingang | D1-Regel |
 | --- | --- |
 | Request-Zeile / `:path` | exakt `POST /jobs`; origin-form, kein Query `?`, Fragment `#`, Prozentkodierung, absolute URI, Dot-Segment, Suffix oder Redirect |
@@ -215,6 +228,12 @@ Der bestehende Connection-Limit-Gate greift bereits beim Annehmen der Verbindung
 Header- und Body-Limits greifen vor teurer JSON-/Signaturarbeit. Verbindliche
 Reihenfolge eines D1-Requests:
 
+0. Nach billiger Framing- und Größenprüfung, **vor** JSON-Parsen, Body-Digest und
+   Ed25519-Prüfung, ein begrenztes, authentisierungsunabhängiges D1-Eingangsbudget
+   belasten. Auch ungültige und nicht signierte Versuche verbrauchen dieses Budget;
+   Erschöpfung ist REFUSE. Kapazität und Rate müssen für alle aktiven Core-Instanzen
+   vor Code als Last-Gate festgelegt und geprüft sein. Dieses Vorab-Budget ersetzt
+   weder den Dienst- noch den späteren Nutzer-Token-Bucket.
 1. HTTP-Framing, Header, Route, Größen, vollständigen Body und kanonische JSON-Form
    prüfen; `method`/`path` mit der tatsächlich empfangenen Route und
    `body_sha256` mit den Body-Bytes vergleichen; keine Job-/Audit-Mutation.
@@ -267,8 +286,9 @@ Vor einem aktiven Code-PR stehen der unabhängige Security-Review dieses exakten
 Kaans Entscheidungen unten und der freigegebene DB-/Rollback-Vertrag. Für dessen
 spätere Abnahme sind Tests nötig für alle
 positiven/negativen Vektoren, Header-Duplikate vor Dictionary-Bildung, Framing,
-Misch-Auth, Zeit-/Lock-/Commit-Crashpunkte, parallele Inserts, Restart/Restore und
-unveränderte Last-/Policy-/Approval-/Audit-Gates. Jede neue Ablehnung braucht einen
+HTTP/2-Proxy-Übersetzung, Misch-Auth, erschöpftes Vorab-Lastbudget,
+Zeit-/Lock-/Commit-Crashpunkte, parallele Inserts, Restart/Restore und unveränderte
+Last-/Policy-/Approval-/Audit-Gates. Jede neue Ablehnung braucht einen
 Test, der ihr Fehlen bemerkt, und das Modul gehört in `scripts/refusals.py::GUARDED`.
 Ein DB-Code-PR benötigt zusätzlich `Claude DB Review: APPROVED` am exakten Head und
 grüne `contracts`.
@@ -277,4 +297,5 @@ grüne `contracts`.
 und Alias-/Key-Verknüpfung; (2) Kaans JA/NEIN zur fünfsekündigen Vorlauftoleranz; (3)
 unabhängiger, restart- und instanzfester Zeit-Rollback-Nachweis; (4) unabhängiger
 Replay-Restore-/Rollback-Nachweis mit freigegebenem DB-Design und Betriebsprofil; (5)
-erneuter unabhängiger Review am neuen Head.
+Nachweis der Header-Ablehnung am ersten Proxy-Hop; (6) festgelegtes und geprüftes
+Vorab-Lastbudget; (7) erneuter unabhängiger Review am neuen Head.
