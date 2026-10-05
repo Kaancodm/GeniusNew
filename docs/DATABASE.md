@@ -385,17 +385,29 @@ nicht Eigentümerin der Tabelle, nicht Superuser, hat kein `BYPASSRLS`,
 `CREATEROLE` oder `CREATEDB` und ist weder direkt noch über Mitgliedschaften,
 geerbte Rollen, `SET ROLE`, Schemaprivilegien oder ausführbare
 `SECURITY DEFINER`-Funktionen zu diesen verbotenen Operationen fähig.
-Default-Privileges und Grants sind beim Start zu prüfen. Nur die getrennte
-Migrations-/Betriebsrolle darf Schemaänderungen vornehmen; D1 sieht keinen
+Das schließt effektive Rechte über `PUBLIC`, `pg_write_all_data` und, soweit
+verfügbar, `pg_maintain` ein. Default-Privileges und Grants sind beim Start
+zu prüfen. Nur die getrennte Migrations-/Betriebsrolle darf Schemaänderungen
+vornehmen; D1 sieht keinen
 automatischen History-Löschpfad vor.
+
+Alle Core-Instanzen, die dasselbe `(issuer, audience)` akzeptieren, müssen
+dieselbe autoritative, transaktionale Replay-Tabelle auf demselben schreibbaren
+Primary benutzen. Getrennte schreibbare Kopien, Split-Brain und Failover auf
+einen Stand ohne bereits bestätigte Reservationen sperren D1. Bei unbekanntem
+Replikations- oder Failover-Stand wird die Annahme verweigert.
 
 Die Reservation ist ein einzelner transaktionaler Insert gegen den Primary Key.
 Nur ein **tatsächlich neu eingefügter** Datensatz gewinnt; `INSERT ... ON
 CONFLICT DO NOTHING RETURNING ...` muss exakt eine Zeile liefern. Ein COMMIT
 mit null eingefügten Zeilen ist Replay und darf keinen Job erzeugen. Die
-Transaktion bestätigt erst mit `synchronous_commit=on` auf dauerhaftem WAL;
-`fsync=on`, `full_page_writes=on` und kein Failover auf einen Stand ohne die
-bestätigte Reservation sind Betriebsanforderungen. Ein unbekannter Commit-Ausgang
+Replay-Transaktion setzt `SET LOCAL synchronous_commit TO on` nach `BEGIN` und
+prüft den wirksamen Wert unmittelbar vor `COMMIT`; dazwischen darf kein Befehl
+oder Savepoint-Rollback ihn ändern. `fsync=on` und `full_page_writes=on` sind
+beim Start und vor jeder Reservation als wirksame Serverwerte zu prüfen.
+Kann eine Prüfung oder die unveränderte Betriebs-Konfiguration bis zum COMMIT
+nicht sichergestellt werden, sperrt D1. Erst ein bestätigter synchroner COMMIT
+auf dauerhaftem WAL erlaubt die Fortsetzung. Ein unbekannter Commit-Ausgang
 wird nicht automatisch wiederholt. Nach bestätigtem Insert bleibt der Nonce
 auch bei Crash vor Job-Erzeugung verbraucht.
 
@@ -412,6 +424,20 @@ nicht als sicher gestartet werden. Kein stilles Zurücksetzen, keine automatisch
 Neuinitialisierung, keine History-Löschung und kein Anchor-Reset. Der bestehende
 Audit-Anker darf nicht ohne eigenen geprüften Vertrag zum Replay-Anker erklärt
 werden.
+
+Nach der ersten D1-Aktivierung darf eine fehlende D1-Migration bei Start,
+Deployment oder Restore **nicht** automatisch als frische Installation behandelt
+und mit leerer Tabelle nachgezogen werden. Eine erstmalige Installation oder
+spätere Migration braucht einen getrennt freigegebenen Ablauf, der vorhandene
+Replay-Historie erhält beziehungsweise deren Fehlen unabhängig belegt; bei
+ungewissem Vorzustand bleibt D1 gesperrt.
+
+**Architektur-Gate:** Der Beschluss vom 30.09.2026 in
+[`DECISIONS.md`](DECISIONS.md) verwirft einen allgemeinen Schema-Fingerprint.
+Ob die hier verlangte D1-spezifische Startprüfung von Primary Key, Zeilenform und
+Rechten damit vereinbar ist, muss Kaan vor aktivem D1-Code ausdrücklich klären.
+Bis dahin ist diese Prüfung eine Entwurfsanforderung, keine stillschweigende
+Änderung des bestehenden Beschlusses.
 
 ## 5. Portal-Schema
 
@@ -593,6 +619,9 @@ Eine spätere, separat freizugebende D1-Migration legt die Tabelle aus 4.9 an.
 Sie erhält eine neue Version nach den bestehenden Migrationen; D1-Code darf
 nicht vorher aktiviert und die Tabelle nicht beim Dienststart ad hoc erzeugt
 werden.
+Der automatische Migrationslauf darf nach früherer D1-Aktivierung oder bei
+unklarer Replay-Historie keine fehlende D1-Tabelle neu anlegen; es gilt das
+Restore- und Installations-Gate aus 4.9.
 
 Migrationen laufen vor Dienststart, einzeln in Transaktionen. Kein automatisches
 „drop and recreate“ bei Fehlern.

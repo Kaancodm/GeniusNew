@@ -18,9 +18,13 @@ Service-Principal. Portal-Login, Session und Portalrolle werden dadurch **nicht*
 Core-Nutzeridentität. Der gemeinsame Service-Principal beweist weder Job-Eigentum einer
 Einzelperson noch deren Approval-Berechtigung oder individuelle Quote.
 
-**D3-Zielabbildung zur Entscheidung durch Kaan:** Der Portal-Server müsste eine aus der
-geprüften Session ermittelte, stabile Portal-Nutzerreferenz als eigene signierte Aussage
-liefern. Der Kern müsste `(verifizierter Portal-Dienst, Portal-Nutzerreferenz)` in einer
+**D3-Grundregel, von Kaan am 05.10.2026 bestätigt:** Core vergibt eine stabile
+kanonische Personen-ID und verwaltet die Bindung von Portal-Konten, direkten
+API-Keys und Approver-Subjects an diese ID. Unbekannte oder mehrdeutige
+Bindungen werden abgelehnt. Für die spätere D3-Umsetzung muss der Portal-Server
+eine aus der geprüften Session ermittelte, stabile Portal-Nutzerreferenz als
+eigene signierte Aussage liefern. Der Kern müsste
+`(verifizierter Portal-Dienst, Portal-Nutzerreferenz)` in einer
 **Core-seitig verwalteten** Registry eindeutig auf einen Core-`subject` und eine
 kanonische Personen-ID (`user_id` im heutigen Policy-Grant) abbilden. Unbekannte,
 mehrdeutige, deaktivierte oder nicht mehr gebundene Referenzen werden verweigert.
@@ -36,10 +40,10 @@ wird die Freigabe verweigert. Job-Eigentum, Verlauf, Nutzer-Token-Buckets und Qu
 beziehen sich auf die gebundene Core-Identität; ein zusätzlicher Dienst-Bucket begrenzt
 das Portal insgesamt.
 
-**HOLD D3:** Kaan muss entscheiden, welche Instanz die kanonische Personen-ID ausstellt
-und wie Portal-Konten, direkte API-Keys und Approver-Subjects derselben natürlichen
-Person verlässlich zusammengeführt und gesperrt werden. Danach brauchen Nutzer-Aussage
-und Core-Registry einen eigenen versionierten Vertrag. Das unten geschlossene
+**HOLD D3:** Der konkrete Nachweis, dass mehrere Aliasse derselben natürlichen
+Person gehören, sowie Aufnahme, Änderung, Sperrung und Wiederherstellung ihrer
+Core-Bindungen sind noch nicht freigegeben. Nutzer-Aussage und Core-Registry
+brauchen dafür einen eigenen versionierten Vertrag. Das unten geschlossene
 D1-Envelope enthält **keine** Nutzer-Aussage und darf nicht still um `user_id` ergänzt
 werden. D1 begründet bis dahin keine nutzergetrennten Jobs oder Freigaben. C3 bleibt
 unverändert.
@@ -210,7 +214,8 @@ expires_at - issued_at <= 60
 issued_at - 5 <= now < expires_at
 ```
 
-Kaan hat am 05.10.2026 **JA** zu diesem Fünf-Sekunden-Profil entschieden. Die fünf
+Kaan hat am 05.10.2026 [im PR #120](https://github.com/Kaancodm/GeniusNew/pull/120#issuecomment-5999610879)
+**JA** zu diesem Fünf-Sekunden-Profil entschieden. Die fünf
 Sekunden gelten ausschließlich vor `issued_at`; nach `expires_at` gibt es keine
 Nachfrist. Der unabhängige Nachweis gegen Core-Uhr-Rücksprünge bleibt ein separates
 Security-Gate vor aktivem D1-Code.
@@ -249,7 +254,8 @@ Reihenfolge eines D1-Requests:
    Kapazitätsgrenze vor der Reservation erwerben. Kein Aufruf von `_dispatch()` unter
    Umgehung dieser Gates.
 5. Unmittelbar vor der Replay-Reservation Zeit erneut prüfen, dann den Schlüssel
-   `(domain, issuer, nonce)` in der Core-PostgreSQL-Tabelle einzufügen versuchen.
+   `(domain, issuer, nonce)` in der gemeinsamen autoritativen
+   Core-PostgreSQL-Tabelle einzufügen versuchen.
 6. Nur wenn **diese** Transaktion exakt einen neuen Datensatz eingefügt hat
    (`INSERT ... RETURNING` oder äquivalenter Zeilennachweis), Zeit nach Wartezeit
    erneut prüfen und dauerhaften COMMIT bestätigen. `ON CONFLICT DO NOTHING` mit
@@ -259,11 +265,19 @@ Reihenfolge eines D1-Requests:
    Audit- und PostgreSQL-Gates. Kein Worker läuft in der Replay-Transaktion. Die
    erworbene `max_in_flight`-Kapazität wird auf jedem Ausgang wieder freigegeben.
 
-Für die Replay-Transaktion sind `synchronous_commit=on`, `fsync=on`,
-`full_page_writes=on` und tatsächlich dauerhafte WAL-Speicherung Pflicht; asynchroner
-COMMIT oder Failover auf einen Stand ohne bestätigte Reservation ist unzulässig. Der
-konkrete PostgreSQL-/Failover-Nachweis ist ein **Betriebsgate**. Bei DB-Ausfall, vollem
-Speicher, Konflikt, unbekanntem COMMIT-Ausgang oder Verbindungsabbruch während COMMIT:
+Alle gleichzeitig annehmenden Core-Instanzen für dasselbe `(issuer, audience)`
+verwenden denselben schreibbaren PostgreSQL-Primary und dieselbe Replay-Tabelle.
+Getrennte schreibbare Kopien, Split-Brain und ein Failover ohne bestätigte
+Reservationen sperren D1; unbekannter Replikationsstand ist REFUSE.
+
+Die Replay-Transaktion setzt `SET LOCAL synchronous_commit TO on` nach `BEGIN`
+und prüft den wirksamen Wert unmittelbar vor COMMIT, ohne dazwischenliegende
+Änderung. `fsync=on` und `full_page_writes=on` werden beim Start und vor jeder
+Reservation wirksam geprüft. Kann das Betriebsprofil nicht bis zum COMMIT
+garantiert werden, sperrt D1. Tatsächlich dauerhafte WAL-Speicherung ist Pflicht;
+asynchroner COMMIT ist unzulässig. Der konkrete PostgreSQL-/Failover-Nachweis
+ist ein **Betriebsgate**. Bei DB-Ausfall, vollem Speicher, Konflikt,
+unbekanntem COMMIT-Ausgang oder Verbindungsabbruch während COMMIT:
 kein Job, kein Erfolg, kein automatischer Retry desselben Requests.
 
 Nach bestätigter Reservation, aber vor Job-Erzeugung, bleibt der Nonce bei Crash
@@ -298,9 +312,14 @@ Test, der ihr Fehlen bemerkt, und das Modul gehört in `scripts/refusals.py::GUA
 Ein DB-Code-PR benötigt zusätzlich `Claude DB Review: APPROVED` am exakten Head und
 grüne `contracts`.
 
-**Offene Gates (HOLD):** (1) Kaans minimale D3-Entscheidung zu kanonischer Personen-ID
-und Alias-/Key-Verknüpfung; (2) unabhängiger, restart- und instanzfester
+**Offene Gates (HOLD):** (1) D3-Nachweis und Lifecycle für Alias-/Key-Bindungen
+an die von Core vergebene Personen-ID; (2) unabhängiger, restart- und instanzfester
 Zeit-Rollback-Nachweis; (3) unabhängiger Replay-Restore-/Rollback-Nachweis mit
 freigegebenem DB-Design und Betriebsprofil; (4) Nachweis der Header-Ablehnung am
 ersten Proxy-Hop; (5) festgelegtes und geprüftes Vorab-Lastbudget; (6) erneuter
-unabhängiger Review am neuen Head.
+unabhängiger Review am neuen Head; (7) Kaans Klärung, ob die D1-spezifische
+Startprüfung von PK und Rechten trotz des Beschlusses gegen einen allgemeinen
+Schema-Fingerprint zulässig ist; (8) Entscheidung und Testvertrag, ob abgelehnte
+Replay-/Zeitversuche die authentifizierten Rate-/Quota-Budgets aus Schritt 4
+verbrauchen oder zurückerhalten. Bis dahin darf diese Buchung nicht still eine
+Nutzerquote erschöpfen oder die bestehenden Last-Gates umgehen.
