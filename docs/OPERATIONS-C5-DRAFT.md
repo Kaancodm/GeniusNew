@@ -202,10 +202,11 @@ Hold-Änderung.
 Kaan gab am 05.10.2026 die kleine Offsite-Probe frei und benannte den privaten
 Bucket `geniusnew`. Upload- und Restore-Zugang wurden getrennt und auf diesen
 Bucket begrenzt; Kaan führte die nötigen Master- und Operatorhandlungen aus.
-Zugangsdaten bleiben außerhalb des Repositories. Der dauerhafte Ort des privaten
-Entschlüsselungsschlüssels und die Kopie des Restore-Katalogs außerhalb des
-Servers sind weiterhin offen. Jeder produktive externe Upload braucht Kaans
-gesonderte Deployment-Freigabe.
+Zugangsdaten bleiben außerhalb des Repositories. Der private
+Entschlüsselungsschlüssel und der Restore-Katalog liegen als privates
+Wiederherstellungspaket bereit; dessen bestätigte Kopie außerhalb des Servers
+ist weiterhin offen. Jeder produktive externe Upload braucht Kaans gesonderte
+Deployment-Freigabe.
 
 Für den Datenbank-Snapshot dient
 [`pg_dump -Fc`](https://www.postgresql.org/docs/17/app-pgdump.html); für die Probe
@@ -305,12 +306,15 @@ erneute Abfrage bestätigte ihn. Der Upload-Schlüssel verweigerte den Versuch,
 diesen Hold zu entfernen, und der Hold blieb aktiv. Der private Katalog enthält
 File-IDs, SHA-256, Retention und Hold-Zustand ohne Zugangsdaten.
 
-Die Probe ist noch kein vollständiger Offsite-PASS: Der einmalige private
-Entschlüsselungsschlüssel wurde nicht aufbewahrt, daher wurde die
-Entschlüsselung nach dem Rücklesen nicht belegt. Außerdem ist eine bestätigte
-Katalogkopie außerhalb des Servers noch offen. Vor dem ersten echten Backup
-müssen eine neue kleine Probe mit erfolgreicher Entschlüsselung und die externe
-Katalogkopie belegt sein. Fehlt ein Nachweis, erfolgt kein produktiver Upload.
+Eine zweite kleine Probe behob die Lücke der ersten: Ihr privater
+Entschlüsselungsschlüssel wurde mit Modus `0600` aufbewahrt; die per File-ID
+zurückgelesenen Bytes wurden gegen SHA-256 geprüft, erfolgreich entschlüsselt
+und mit dem ursprünglichen Klartext verglichen. Legal Hold und die verweigerte
+Entfernung durch den Upload-Schlüssel wurden auch für diese Version erneut
+belegt. Der technische Offsite-Test ist damit bestanden. Für den vollständigen
+Offsite-PASS fehlt nur noch die bestätigte Kopie des privaten
+Wiederherstellungspakets außerhalb des Servers. Bis dahin erfolgt kein
+produktiver Upload.
 
 E3 folgt dieser Anleitung auf einem frischen Linux-Host. Ein neuer Worktree
 auf dem Entwicklungsserver ersetzt diesen Betriebsnachweis nicht.
@@ -319,7 +323,7 @@ auf dem Entwicklungsserver ersetzt diesen Betriebsnachweis nicht.
 
 Nach den fertigen Code-/Review-Nachweisen: Anker/Core-Installation mit eigenen
 OS-Nutzern, dauerhafte Schlüsselverwaltung und Abschluss der oben beschriebenen
-Offsite-Probe durch Entschlüsselungsnachweis und externe Katalogkopie. Die
+Offsite-Probe durch die externe Kopie des Wiederherstellungspakets. Die
 Worker-UID ist für C5 ausdrücklich verschoben;
 sie bleibt eine offene Sicherheitsgrenze.
 AGENTS.md verlangt für Deployment, Zugriffsrechte und Secret-Rotation Kaans OK.
