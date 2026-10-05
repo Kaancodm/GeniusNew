@@ -204,11 +204,10 @@ expires_at - issued_at <= 60
 issued_at - 5 <= now < expires_at
 ```
 
-Die letzte Zeile ist das **noch von Kaan zu bestätigende** Fünf-Sekunden-Profil. Die
-fünf Sekunden gelten nur vor `issued_at`; nach `expires_at` gibt es keine Nachfrist.
-Bis Kaan fünf Sekunden **JA oder NEIN** entschieden hat, bleibt das Zeitprofil HOLD.
-Bei NEIN muss der Vertrag vor Code mit `issued_at <= now < expires_at` revidiert
-werden.
+Kaan hat am 05.10.2026 **JA** zu diesem Fünf-Sekunden-Profil entschieden. Die fünf
+Sekunden gelten ausschließlich vor `issued_at`; nach `expires_at` gibt es keine
+Nachfrist. Der unabhängige Nachweis gegen Core-Uhr-Rücksprünge bleibt ein separates
+Security-Gate vor aktivem D1-Code.
 
 Der Kern liest `now` erstmals nach vollständiger HTTP-/Body-/Envelope-Prüfung und
 unmittelbar vor der Signaturprüfung. Nach verifizierter Signatur und vorgelagerten
@@ -294,8 +293,8 @@ Ein DB-Code-PR benötigt zusätzlich `Claude DB Review: APPROVED` am exakten Hea
 grüne `contracts`.
 
 **Offene Gates (HOLD):** (1) Kaans minimale D3-Entscheidung zu kanonischer Personen-ID
-und Alias-/Key-Verknüpfung; (2) Kaans JA/NEIN zur fünfsekündigen Vorlauftoleranz; (3)
-unabhängiger, restart- und instanzfester Zeit-Rollback-Nachweis; (4) unabhängiger
-Replay-Restore-/Rollback-Nachweis mit freigegebenem DB-Design und Betriebsprofil; (5)
-Nachweis der Header-Ablehnung am ersten Proxy-Hop; (6) festgelegtes und geprüftes
-Vorab-Lastbudget; (7) erneuter unabhängiger Review am neuen Head.
+und Alias-/Key-Verknüpfung; (2) unabhängiger, restart- und instanzfester
+Zeit-Rollback-Nachweis; (3) unabhängiger Replay-Restore-/Rollback-Nachweis mit
+freigegebenem DB-Design und Betriebsprofil; (4) Nachweis der Header-Ablehnung am
+ersten Proxy-Hop; (5) festgelegtes und geprüftes Vorab-Lastbudget; (6) erneuter
+unabhängiger Review am neuen Head.
