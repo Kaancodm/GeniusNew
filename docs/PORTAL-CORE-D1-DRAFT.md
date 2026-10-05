@@ -257,9 +257,11 @@ Reihenfolge eines D1-Requests:
    `(domain, issuer, nonce)` in der gemeinsamen autoritativen
    Core-PostgreSQL-Tabelle einzufügen versuchen.
 6. Nur wenn **diese** Transaktion exakt einen neuen Datensatz eingefügt hat
-   (`INSERT ... RETURNING` oder äquivalenter Zeilennachweis), Zeit nach Wartezeit
-   erneut prüfen und dauerhaften COMMIT bestätigen. `ON CONFLICT DO NOTHING` mit
-   null eingefügten Zeilen ist REFUSE, auch bei erfolgreichem COMMIT.
+   (`ON CONFLICT (domain, issuer, nonce) DO NOTHING RETURNING domain, issuer,
+   nonce`: genau eine Zeile, deren Werte den Insert-Werten entsprechen), Zeit
+   nach Wartezeit erneut prüfen und dauerhaften COMMIT bestätigen. Null Zeilen,
+   abweichende Rückgabe oder SQL-/Serialisierungsfehler sind REFUSE ohne
+   automatischen Retry, auch falls ein COMMIT erfolgreich wäre.
 7. Nach bestätigtem COMMIT und letzter Zeitprüfung erst die Job-ID erzeugen.
 8. Danach erst Handoff, Job-Ledger und Audit verändern, über die bestehenden Approval-,
    Audit- und PostgreSQL-Gates. Kein Worker läuft in der Replay-Transaktion. Die
@@ -279,6 +281,17 @@ asynchroner COMMIT ist unzulässig. Der konkrete PostgreSQL-/Failover-Nachweis
 ist ein **Betriebsgate**. Bei DB-Ausfall, vollem Speicher, Konflikt,
 unbekanntem COMMIT-Ausgang oder Verbindungsabbruch während COMMIT:
 kein Job, kein Erfolg, kein automatischer Retry desselben Requests.
+
+Die Replay-Transaktion begrenzt `lock_timeout`, `statement_timeout` und
+`idle_in_transaction_session_timeout` jeweils auf höchstens die beim Start
+verbleibende Request-Gültigkeit und zusätzlich auf einen konfigurierten
+Maximalwert von höchstens 60 Sekunden. Ein unabhängiges Gesamtzeitlimit
+begrenzt die Transaktion einschließlich mehrerer Statements; Timeout oder
+unklarer Wartezustand sind REFUSE ohne automatischen Retry. Damit darf ein
+hängender DB-/Lock-Versuch `max_in_flight` nicht unbegrenzt halten. Der D1-Last-
+und Betriebsnachweis muss außerdem D1 vor Erschöpfung des gemeinsamen Core-
+Speichers sperren, damit Job-Ledger und Audit nicht durch Replay-Wachstum
+ausfallen; Schwelle und Überwachung sind vor Code festzulegen.
 
 Nach bestätigter Reservation, aber vor Job-Erzeugung, bleibt der Nonce bei Crash
 verbraucht; kein Job wird rückwirkend erzeugt. Diese Verfügbarkeitseinbuße schützt die
@@ -316,10 +329,14 @@ grüne `contracts`.
 an die von Core vergebene Personen-ID; (2) unabhängiger, restart- und instanzfester
 Zeit-Rollback-Nachweis; (3) unabhängiger Replay-Restore-/Rollback-Nachweis mit
 freigegebenem DB-Design und Betriebsprofil; (4) Nachweis der Header-Ablehnung am
-ersten Proxy-Hop; (5) festgelegtes und geprüftes Vorab-Lastbudget; (6) erneuter
+ersten Proxy-Hop; (5) festgelegtes und geprüftes Vorab-Lastbudget samt
+Replay-Speicherschwelle; (6) erneuter
 unabhängiger Review am neuen Head; (7) Kaans Klärung, ob die D1-spezifische
-Startprüfung von PK und Rechten trotz des Beschlusses gegen einen allgemeinen
+Startprüfung von PK, Schemaform und Rechten trotz des Beschlusses gegen einen allgemeinen
 Schema-Fingerprint zulässig ist; (8) Entscheidung und Testvertrag, ob abgelehnte
 Replay-/Zeitversuche die authentifizierten Rate-/Quota-Budgets aus Schritt 4
 verbrauchen oder zurückerhalten. Bis dahin darf diese Buchung nicht still eine
-Nutzerquote erschöpfen oder die bestehenden Last-Gates umgehen.
+Nutzerquote erschöpfen oder die bestehenden Last-Gates umgehen. (9) Ein
+Audit-/Recovery-Vertrag für authentifizierte Replay-Ablehnung, Ablauf nach
+bestätigtem Nonce-COMMIT und Crash zwischen COMMIT und Job-Erzeugung, ohne die
+vorgeschriebene Commit-Reihenfolge oder bestehende Audit-Gates zu verletzen.

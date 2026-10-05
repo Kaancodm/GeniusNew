@@ -386,21 +386,33 @@ nicht Eigentümerin der Tabelle, nicht Superuser, hat kein `BYPASSRLS`,
 geerbte Rollen, `SET ROLE`, Schemaprivilegien oder ausführbare
 `SECURITY DEFINER`-Funktionen zu diesen verbotenen Operationen fähig.
 Das schließt effektive Rechte über `PUBLIC`, `pg_write_all_data` und, soweit
-verfügbar, `pg_maintain` ein. Default-Privileges und Grants sind beim Start
+verfügbar, `pg_maintain` sowie das Tabellenrecht `MAINTAIN` ein.
+Die Portal-Runtime hat **keine** effektiven Rechte auf die Tabelle, auch nicht
+über `PUBLIC`, Mitgliedschaften oder `SECURITY DEFINER`-Funktionen. Beide
+Runtime-Rollen und ihre indirekten Rechte sind beim D1-Start zu prüfen.
+Default-Privileges und Grants sind beim Start
 zu prüfen. Nur die getrennte Migrations-/Betriebsrolle darf Schemaänderungen
 vornehmen; D1 sieht keinen
 automatischen History-Löschpfad vor.
+
+Alle D1-Zugriffe benennen Core-Schema und Tabelle vollständig. Der D1-DB-Zugang
+hat einen festgelegten sicheren `search_path` und kein `TEMP`-Recht, sodass
+Namensauflösung nicht auf eine andere Tabelle oder Funktion ausweichen kann.
 
 Alle Core-Instanzen, die dasselbe `(issuer, audience)` akzeptieren, müssen
 dieselbe autoritative, transaktionale Replay-Tabelle auf demselben schreibbaren
 Primary benutzen. Getrennte schreibbare Kopien, Split-Brain und Failover auf
 einen Stand ohne bereits bestätigte Reservationen sperren D1. Bei unbekanntem
 Replikations- oder Failover-Stand wird die Annahme verweigert.
+`audience` ist absichtlich nicht Teil des Unique Keys: Ein Nonce desselben
+`issuer` bleibt auch bei Wechsel des Core-Ziels verbraucht.
 
-Die Reservation ist ein einzelner transaktionaler Insert gegen den Primary Key.
-Nur ein **tatsächlich neu eingefügter** Datensatz gewinnt; `INSERT ... ON
-CONFLICT DO NOTHING RETURNING ...` muss exakt eine Zeile liefern. Ein COMMIT
-mit null eingefügten Zeilen ist Replay und darf keinen Job erzeugen. Die
+Die Reservation ist ein einzelner transaktionaler Insert gegen den Primary Key:
+`INSERT ... ON CONFLICT (domain, issuer, nonce) DO NOTHING RETURNING domain,
+issuer, nonce`. Nur genau eine zurückgegebene Zeile, deren drei Werte exakt mit
+den Insert-Werten übereinstimmen, ist ein Gewinnernachweis. Null Zeilen,
+abweichende Rückgabe oder jeder SQL-/Serialisierungsfehler sind REFUSE ohne
+automatischen Retry; ein COMMIT ohne diesen Nachweis erzeugt keinen Job. Die
 Replay-Transaktion setzt `SET LOCAL synchronous_commit TO on` nach `BEGIN` und
 prüft den wirksamen Wert unmittelbar vor `COMMIT`; dazwischen darf kein Befehl
 oder Savepoint-Rollback ihn ändern. `fsync=on` und `full_page_writes=on` sind
@@ -412,8 +424,11 @@ wird nicht automatisch wiederholt. Nach bestätigtem Insert bleibt der Nonce
 auch bei Crash vor Job-Erzeugung verbraucht.
 
 **Start, Backup und Restore — HOLD:** Vor D1-Listener-Freigabe müssen Tabelle,
-Migration, Unique Constraint, Zeilenform und effektive Runtime-Rechte geprüft
-werden. Eine fehlende, leere Ersatz- oder beschädigte Tabelle darf nicht
+Migration, nicht deferrable Primary Key, Zeilenform, effektive Rechte beider
+Runtime-Rollen sowie die Abwesenheit von Insert-umschreibenden Triggern, Rules,
+RLS-Policies und nicht freigegebenen Partitionen/Kindtabellen geprüft werden.
+Der Nachweis umfasst die tatsächliche Insert-Zieltabelle; unklare Katalog- oder
+Schemawerte sperren D1. Eine fehlende, leere Ersatz- oder beschädigte Tabelle darf nicht
 automatisch initialisiert werden. Ein älteres Backup kann alle späteren
 Reservationen verlieren; weder Primary Key noch die bestehende Audit-/Anchor-
 Prüfung belegen dann die Vollständigkeit der Replay-Historie. Ein von der
@@ -425,10 +440,9 @@ Neuinitialisierung, keine History-Löschung und kein Anchor-Reset. Der bestehend
 Audit-Anker darf nicht ohne eigenen geprüften Vertrag zum Replay-Anker erklärt
 werden.
 
-Nach der ersten D1-Aktivierung darf eine fehlende D1-Migration bei Start,
-Deployment oder Restore **nicht** automatisch als frische Installation behandelt
-und mit leerer Tabelle nachgezogen werden. Eine erstmalige Installation oder
-spätere Migration braucht einen getrennt freigegebenen Ablauf, der vorhandene
+Die D1-Migration ist **nie** Teil des automatischen Migrationslaufs vor
+Dienststart. Eine erstmalige Installation oder spätere Migration braucht einen
+getrennt freigegebenen Ablauf, der vorhandene
 Replay-Historie erhält beziehungsweise deren Fehlen unabhängig belegt; bei
 ungewissem Vorzustand bleibt D1 gesperrt.
 
@@ -616,12 +630,10 @@ Reihenfolge:
 6. `0006_portal_history`.
 
 Eine spätere, separat freizugebende D1-Migration legt die Tabelle aus 4.9 an.
-Sie erhält eine neue Version nach den bestehenden Migrationen; D1-Code darf
-nicht vorher aktiviert und die Tabelle nicht beim Dienststart ad hoc erzeugt
-werden.
-Der automatische Migrationslauf darf nach früherer D1-Aktivierung oder bei
-unklarer Replay-Historie keine fehlende D1-Tabelle neu anlegen; es gilt das
-Restore- und Installations-Gate aus 4.9.
+Sie erhält eine neue Version nach den bestehenden Migrationen, ist aber vom
+automatischen Lauf ausgenommen. D1-Code darf nicht vorher aktiviert und die
+Tabelle nicht beim Dienststart ad hoc erzeugt werden. Es gilt das Restore- und
+Installations-Gate aus 4.9.
 
 Migrationen laufen vor Dienststart, einzeln in Transaktionen. Kein automatisches
 „drop and recreate“ bei Fehlern.
