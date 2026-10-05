@@ -199,10 +199,13 @@ einem getrennten Operatorzugang außerhalb des Upload-Servers. Der Operator
 dokumentiert die File-ID des alten und des neuen Ankerobjekts vor jeder
 Hold-Änderung.
 
-Der konkrete Bucket-Name, der eingeschränkte Upload-Schlüssel, der getrennte
-Restore-Zugang, der Ort des privaten Entschlüsselungsschlüssels und der
-verantwortliche Operator fehlen noch. Die Einrichtung und jeder externe Upload
-brauchen Kaans gesonderte Deployment- und Zugriffsfreigabe.
+Kaan gab am 05.10.2026 die kleine Offsite-Probe frei und benannte den privaten
+Bucket `geniusnew`. Upload- und Restore-Zugang wurden getrennt und auf diesen
+Bucket begrenzt; Kaan führte die nötigen Master- und Operatorhandlungen aus.
+Zugangsdaten bleiben außerhalb des Repositories. Der dauerhafte Ort des privaten
+Entschlüsselungsschlüssels und die Kopie des Restore-Katalogs außerhalb des
+Servers sind weiterhin offen. Jeder produktive externe Upload braucht Kaans
+gesonderte Deployment-Freigabe.
 
 Für den Datenbank-Snapshot dient
 [`pg_dump -Fc`](https://www.postgresql.org/docs/17/app-pgdump.html); für die Probe
@@ -292,16 +295,22 @@ Nach jeder Probe bleibt jede bereits reservierte ID verbrannt.
 Die lokale `pg_dump`/`pg_restore`-Probe gegen den Wegwerf-PostgreSQL-Service
 lief in der CI von PR #119 am Head `c177dc124d8e9e7102fc2a1ab7e56eac7481c468`
 mit `contracts` und der letzten Zeile `PASS — C5 disposable PostgreSQL and anchor
-restore drill.` Die Offsite-Probe steht noch aus: Nach Kaans Bucket- und
-Zugriffsfreigabe, aber **vor dem ersten echten Backup**, lädt der benannte
-Restore-Operator ein kleines verschlüsseltes Testobjekt hoch, hält dessen
-File-ID und Prüfsumme im unabhängigen Katalog fest, erzeugt mit dem
-Upload-Schlüssel einen Hide-Marker und liest genau die bestätigte Version mit
-dem getrennten Restore-Zugang per ID zurück. Er prüft auch Compliance-Retention
-und setzt einen Legal Hold mit dem getrennten Operatorzugang; der
-Upload-Schlüssel muss das Entfernen verweigern. Der Operator protokolliert
-File-IDs, Prüfsummen, Retention, Hold und Ergebnis ohne Schlüssel oder DSN.
-Fehlt ein Nachweis, erfolgt kein produktiver Upload.
+restore drill.` Die am 05.10.2026 von Kaan freigegebene Offsite-Probe im privaten
+Bucket `geniusnew` belegte für ein kleines verschlüsseltes Testobjekt Upload,
+Hide-Marker, Wiederauffinden beider Versionen und bytegleiches Rücklesen der
+bestätigten Upload-Version per File-ID mit dem getrennten Restore-Zugang. Die
+Bucket- und Objektabfrage belegte Object Lock mit 30 Tagen Standardaufbewahrung
+im Compliance-Modus. Kaan setzte den Legal Hold auf der Upload-Version; eine
+erneute Abfrage bestätigte ihn. Der Upload-Schlüssel verweigerte den Versuch,
+diesen Hold zu entfernen, und der Hold blieb aktiv. Der private Katalog enthält
+File-IDs, SHA-256, Retention und Hold-Zustand ohne Zugangsdaten.
+
+Die Probe ist noch kein vollständiger Offsite-PASS: Der einmalige private
+Entschlüsselungsschlüssel wurde nicht aufbewahrt, daher wurde die
+Entschlüsselung nach dem Rücklesen nicht belegt. Außerdem ist eine bestätigte
+Katalogkopie außerhalb des Servers noch offen. Vor dem ersten echten Backup
+müssen eine neue kleine Probe mit erfolgreicher Entschlüsselung und die externe
+Katalogkopie belegt sein. Fehlt ein Nachweis, erfolgt kein produktiver Upload.
 
 E3 folgt dieser Anleitung auf einem frischen Linux-Host. Ein neuer Worktree
 auf dem Entwicklungsserver ersetzt diesen Betriebsnachweis nicht.
@@ -309,8 +318,8 @@ auf dem Entwicklungsserver ersetzt diesen Betriebsnachweis nicht.
 ## Noch offene konkrete Freigaben
 
 Nach den fertigen Code-/Review-Nachweisen: Anker/Core-Installation mit eigenen
-OS-Nutzern, B2-Bucket und Schlüsselverwaltung nach separater Freigabe sowie
-die oben beschriebene Offsite-Probe durch den benannten Restore-Operator. Die
+OS-Nutzern, dauerhafte Schlüsselverwaltung und Abschluss der oben beschriebenen
+Offsite-Probe durch Entschlüsselungsnachweis und externe Katalogkopie. Die
 Worker-UID ist für C5 ausdrücklich verschoben;
 sie bleibt eine offene Sicherheitsgrenze.
 AGENTS.md verlangt für Deployment, Zugriffsrechte und Secret-Rotation Kaans OK.
