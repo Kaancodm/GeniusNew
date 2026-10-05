@@ -149,8 +149,14 @@ Listenbildung verweigert.
 Diese Prüfung gilt bereits am **ersten HTTP-Hop** auf dessen unveränderter Headerliste,
 einschließlich eines TLS-terminierenden Proxys und vor jeder HTTP/2-zu-HTTP/1.1-
 Übersetzung. Jeder weitere Hop und der Core-Adapter prüfen erneut vor eigener
-Zusammenführung oder Mapping-Bildung. Ein Proxy darf D1-relevante Duplikate weder
-entfernen noch zu einem Wert zusammenführen. Bei HTTP/2 sind `:method`, `:path`,
+Zusammenführung oder Mapping-Bildung. Schon der erste Hop ordnet den Request anhand
+des rohen Pfads und der rohen Headerliste einem Authentisierungspfad zu und verweigert
+die gleichzeitige Präsenz von `Authorization` und `X-GeniusNew-D1-Envelope`, auch
+wenn einer der Werte ungültig ist. Jeder weitere Hop wiederholt diese Prüfung. Ein
+Proxy darf diese beiden Header weder entfernen, hinzufügen, umbenennen noch ihre Werte
+ändern; D1-relevante Duplikate und andere sicherheitsrelevante Header darf er nicht
+entfernen oder zu einem Wert zusammenführen. Kann ein Hop die Authentisierungsheader
+nicht unverändert weitergeben, verweigert er den Request. Bei HTTP/2 sind `:method`, `:path`,
 `:scheme` und `:authority` jeweils genau einmal erforderlich; `:scheme` ist exakt
 `https`, und gleichzeitige `Host`- und `:authority`-Felder sind auch bei gleichen
 Werten REFUSE. Die Grenze von 8192 Oktetten gilt für die dekomprimierte Headerliste
