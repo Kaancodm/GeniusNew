@@ -20,6 +20,7 @@ PYTHON_JOBS = ('tests', 'guarded', 'refusals')
 class VerifyWorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        """Extract top-level job bodies for the workflow assertions."""
         source = WORKFLOW.read_text(encoding='utf-8')
         # Anchoring indentation keeps service/step keys out of the job list.
         jobs = source.split('\njobs:\n', 1)[1]
@@ -32,6 +33,7 @@ class VerifyWorkflowTest(unittest.TestCase):
         }
 
     def preflight(self, job):
+        """Return the job's preflight match, requiring exactly one inline step."""
         matches = list(re.finditer(
             r'^      - name: Use system Python\n'
             r'        run: ([^\n]+)$', self.jobs[job], re.MULTILINE))
@@ -39,6 +41,7 @@ class VerifyWorkflowTest(unittest.TestCase):
         return matches[0]
 
     def test_all_jobs_use_self_hosted_runners(self):
+        """Require every expected job to select the self-hosted runner."""
         self.assertEqual(set(self.jobs), {*PYTHON_JOBS, 'contracts'})
         for job, body in self.jobs.items():
             with self.subTest(job=job):
@@ -47,6 +50,7 @@ class VerifyWorkflowTest(unittest.TestCase):
                     ['self-hosted'])
 
     def test_python_jobs_use_the_system_installation(self):
+        """Require system Python preflights without setup-python actions."""
         for job in PYTHON_JOBS:
             with self.subTest(job=job):
                 self.preflight(job)
@@ -54,6 +58,7 @@ class VerifyWorkflowTest(unittest.TestCase):
                                     r'uses:\s*actions/setup-python@')
 
     def test_preflight_runs_after_checkout_before_any_other_command(self):
+        """Keep the preflight after checkout and before other shell commands."""
         for job in PYTHON_JOBS:
             with self.subTest(job=job):
                 body = self.jobs[job]
@@ -69,6 +74,7 @@ class VerifyWorkflowTest(unittest.TestCase):
 
     def run_preflight(self, command, *, python_status=0, pip_status=0,
                       executable='python3'):
+        """Run with an isolated Python stub and return the result and call trace."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             trace = root / 'calls'
@@ -95,6 +101,7 @@ esac
             return result, calls
 
     def test_preflight_checks_python_and_its_pip_without_python_alias(self):
+        """Verify Python and pip checks succeed with only a python3 executable."""
         for job in PYTHON_JOBS:
             with self.subTest(job=job):
                 result, calls = self.run_preflight(self.preflight(job).group(1))
@@ -103,6 +110,7 @@ esac
                 self.assertEqual(result.stdout, 'Python fixture\npip fixture\n')
 
     def test_python_failure_stops_before_pip_and_preserves_exit_status(self):
+        """Ensure Python failures stop the preflight before pip is invoked."""
         for job in PYTHON_JOBS:
             for status in (1, 42, 127):
                 with self.subTest(job=job, status=status):
@@ -112,6 +120,7 @@ esac
                     self.assertEqual(calls, ['--version'])
 
     def test_missing_or_broken_pip_fails_the_preflight(self):
+        """Ensure pip failures propagate their exit status from the preflight."""
         for job in PYTHON_JOBS:
             for status in (1, 42, 127):
                 with self.subTest(job=job, status=status):
@@ -121,6 +130,7 @@ esac
                     self.assertEqual(calls, ['--version', '-m pip --version'])
 
     def test_missing_python3_fails_even_when_python_alias_exists(self):
+        """Reject missing python3 even when a python alias is available."""
         for job in PYTHON_JOBS:
             for executable in (None, 'python'):
                 with self.subTest(job=job, executable=executable):
