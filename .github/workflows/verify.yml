@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   tests:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     # Disposable CI database only; no production credentials or external endpoint.
     services:
       postgres:
@@ -47,7 +47,7 @@ jobs:
         run: python scripts/demo_restore.py
 
   guarded:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     outputs:
       modules: ${{ steps.list.outputs.modules }}
     steps:
@@ -63,7 +63,7 @@ jobs:
 
   refusals:
     needs: guarded
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     name: refusals (${{ matrix.module }})
     # Disposable CI database only; no production credentials or external endpoint.
     services:
@@ -102,7 +102,7 @@ jobs:
   contracts:
     needs: [tests, refusals]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Tests and every refusal check passed
         env:
