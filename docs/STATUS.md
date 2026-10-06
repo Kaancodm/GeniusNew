@@ -1,6 +1,6 @@
 # GeniusNew — Projektstand
 
-**Stand: 04.10.2026, `main` an `dd4a35e`.** Teil der Wissensdatenbank, seit 04.10.2026
+**Stand: 06.10.2026, `main` an `3497e69`.** Teil der Wissensdatenbank, seit 04.10.2026
 geführt von Claude Code (`docs/COLLABORATION.md`); Entscheidungen stehen in
 `docs/DECISIONS.md`. Dieses Dokument ist in sich geschlossen gedacht: als Quelle für
 NotebookLM, Microsoft 365 Copilot oder jeden anderen Assistenten, der das Repository
@@ -46,9 +46,9 @@ technisch beta-ready** (`docs/ROADMAP-V02.md`).
 | --- | --- | --- |
 | A — Worker-Sandbox | A1 Seccomp (#57), A2 Landlock-Allowlist (#76) | eigener OS-Nutzer für den Worker (mit C5) |
 | B — Persistenz | B0 Entwurf (#70), B1 PostgreSQL-Fundament (#78), B2 Job-Ledger (#90), B3 Annahmen (#93), B4 wartende Jobs (#94), B5 Audit-Kette (#95), B6 Abgleich Ledger ↔ Kette (#97, #98), B7 Absturztest (#106) | Claude DB Review für B4 und B5 nachholen (offene Entscheidung 6 in der Roadmap) |
-| C — Betrieb | C1 `serve` (#61), C2 Anker-Dienst (#62), C3 Rolle für Freigebende (#111), C4 HTTP-Grenzen (#71, #89) | **C5** Betriebsanleitung, systemd, Backup/Restore |
-| D — Portal | — | D1 Vertrag Portal↔Kern, D2 Identität, D3 Ansichten |
-| E — Nachweis | — | E1 Persistenz-Angriffe in der Demo (#112, CI läuft), E2 Review des vollständigen Heads, E3 frischer Host nach Anleitung |
+| C — Betrieb | C1 `serve` (#61), C2 Anker-Dienst (#62), C3 Rolle für Freigebende (#111), C4 HTTP-Grenzen (#71, #89); für C5 ein Restore-Drill in der CI (#119: `pg_dump`/`pg_restore` mit passendem und mit vorlaufendem Anker) | **C5** Betriebsanleitung, systemd, Backup-Ablauf (Entwurf #117) |
+| D — Portal | — | D1 Vertrag Portal↔Kern (Entwurf #120 zur Sicherheitsprüfung), D2 Identität, D3 Ansichten |
+| E — Nachweis | E1 Persistenz-Angriffe in der Demo (#112) | E2 Review des vollständigen Heads, E3 frischer Host nach Anleitung |
 
 **Reihenfolge seit 04.10.2026 (Kaan):** erst der echte Server, dann **C5 und E3**, danach
 das Portal mit **D1** zuerst (Python, Vorlage ist der Prototyp von Codex).
@@ -60,8 +60,10 @@ als Dienst nur über Tailscale (#110, #114, `docs/setup/SERVER-TOOL.md`). Das Co
 x86_64) und ist über Tailscale erreichbar; das Deck dort ist noch von Hand gestartet,
 nicht als Dienst.
 
-**Messbar (`main` an `dd4a35e`, lokal gemessen):**
-- 1078 Tests laufen in etwa 107 Sekunden (mit Test-PostgreSQL).
+**Messbar (`main` an `3497e69`, lokal gemessen):**
+- 1078 Tests laufen in etwa 110 Sekunden (mit Test-PostgreSQL).
+- Die CI führt zusätzlich die Persistenz-Demo (3 Angriffe, E1) und den Restore-Drill
+  (C5, #119) gegen ein echtes PostgreSQL aus.
 - Die Demo endet mit „PASS“, dabei werden **15 von 15 Angriffen** abgelehnt.
 - Der Refusal-Guard deckt 21 Python-Module und das Server-Werkzeug ab: Jede Ablehnung
   wird einzeln abgeschaltet, und die Suite muss jedes Mal rot werden.
@@ -93,21 +95,22 @@ Vollständig in `SECURITY.md`. Die wichtigsten:
 
 ## Nächste Schritte
 
-1. **E1 (#112)** mergen, sobald die CI grün ist.
-2. **Server:** das von Hand gestartete Control Deck stoppen und mit
+1. **Sicherheitsreviews (Claude):** C5-Betriebsentwurf #117 (ChatGPT) und
+   D1-Vertragsentwurf #120 (Codex) prüfen.
+2. **Self-hosted Runner (#121, #122):** Kaan entscheidet, ob die CI auf dem eigenen
+   Server läuft. Bei einem öffentlichen Repository dürfen fremde PRs dort nie Code
+   ausführen.
+3. **Server:** das von Hand gestartete Control Deck stoppen und mit
    `bash ops/server/genius-server deck --apply` als Dienst einrichten.
-3. **Portal-Prototyp sichern:** Der Branch `codex/portal-prototype-0927` liegt nur im
+4. **Portal-Prototyp sichern:** Der Branch `codex/portal-prototype-0927` liegt nur im
    Server-Checkout; vor jedem Branch-Wechsel dort `git status` prüfen und ihn nach
    GitHub pushen.
-4. **C5 (Betrieb):** systemd-Units für Kern und Anker unter getrennten Nutzern,
-   Backup und Restore von Datenbank und Ankerzustand, Ablauf für Schlüsselrotation und
-   Policy-Änderung; einmal einen Restore durchspielen.
-5. PostgreSQL auf dem Server nach der C5-Anleitung einrichten (ChatGPT).
+5. **C5 abschließen:** Betriebsanleitung (#117) mit dem Restore-Drill (#119) verbinden;
+   PostgreSQL auf dem Server danach einrichten (ChatGPT).
 6. **E3:** frischer Klon auf dem Server folgt der Anleitung wörtlich bis zum laufenden
    Dienst; Protokoll mit SHA.
-7. **D1 (Codex):** Vertrag Portal↔Kern mit signierten Requests (Ed25519, Ablauf,
-   Replay-Schutz); Plan zuerst mit Gemini-Design-Vorprüfung. Offene Entscheidung 2
-   der Roadmap (signierte Requests oder mTLS) braucht Kaans OK.
+7. **D1 umsetzen (Codex)**, sobald der Entwurf #120 freigegeben ist; offene
+   Entscheidung 2 der Roadmap (signierte Requests oder mTLS) braucht Kaans OK.
 8. Claude DB Review für B4 und B5 nachholen.
 9. D2 und D3 (Portal-Identität und Ansichten), danach E2 (Review des vollständigen
    Heads) und der Tag `v0.2`.

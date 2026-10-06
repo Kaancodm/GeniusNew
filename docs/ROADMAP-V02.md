@@ -77,7 +77,7 @@ anpassen.
 | C2 | Anker als eigener Dienst unter eigenem OS-Nutzer, Lebenszyklus außerhalb des Kerns, signierte Anker-Antworten mit Nonce (Teile aus #32, neu auf `main` gebaut) | Anker-Rückschnitt-Grenztest umgekehrt oder neu begründet | erledigt: #62 gemergt (`24f521b`): Anker-Dienst mit signierten Antworten, `serve` bindet ihn über `anchor_socket`/`anchor_reply_public_key` an; Grenztest neu begründet. Offen im Betriebsmodell (C5): eigener OS-Nutzer auf dem Server |
 | C3 | Rolle „Freigebende“ mit eigener HTTP-Route; keine Selbstfreigabe | Refusal-Tests für fremde Rolle, eigene Aufträge, Doppelentscheidung | erledigt: #111 (Codex) gemergt `b047798`, Claude DB Review APPROVED an `cc95586`, Gemini-Sicherheitsreview A–C, Merge-OK Kaan 04.10.2026 |
 | C4 | HTTP-Härtung: Body-Limit, Timeouts, Rate-Limit pro API-Key; TLS über Reverse-Proxy mit Beispielkonfiguration in `docs/` | Tests für Limits; Doku | Body-Limit und Socket-Timeout auf `main`; Rate-Limit, Job- und Verbindungsgrenze sowie geprüfte nginx-Vorlage: #71 gemergt (`080f1f4`); Limits in `[service.limits]` der TOML einstellbar: dieser PR (Claude) |
-| C5 | Betriebsanleitung: systemd-Units (Kern, Anker, Nutzer getrennt), Backup und Restore von DB und Anker-Zustand, Ablauf der Schlüsselrotation. Ein Backup, das hinter dem Anker liegt, startet nicht (richtig so); der auditierte Weg zurück in den Betrieb ohne stilles Zurücksetzen des Ankers braucht Kaans Entscheidung | Doku + einmal durchgespielter Restore gegen die CI-Datenbank | offen |
+| C5 | Betriebsanleitung: systemd-Units (Kern, Anker, Nutzer getrennt), Backup und Restore von DB und Anker-Zustand, Ablauf der Schlüsselrotation. Ein Backup, das hinter dem Anker liegt, startet nicht (richtig so); der auditierte Weg zurück in den Betrieb ohne stilles Zurücksetzen des Ankers braucht Kaans Entscheidung | Doku + einmal durchgespielter Restore gegen die CI-Datenbank | in Arbeit: Restore-Drill in der CI (#119, gemergt `3497e69`); Betriebsanleitung und Dienstvorlagen als Entwurf #117 |
 
 ### D — Portal (Vercel, nach `docs/MIGRATION-MATRIX.md` neu gebaut)
 
@@ -91,7 +91,7 @@ anpassen.
 
 | # | Gate | Nachweis | Stand |
 | --- | --- | --- | --- |
-| E1 | Demo erweitert um Persistenz-Angriffe (Replay nach Neustart, SQL-Manipulation, Anker-Vorlauf) | letzte Zeile `PASS` | in Arbeit: #112 (Codex) |
+| E1 | Demo erweitert um Persistenz-Angriffe (Replay nach Neustart, SQL-Manipulation, Anker-Vorlauf) | letzte Zeile `PASS` | erledigt: #112 (Codex) gemergt `122a690`; läuft in der CI nach der HTTP-Demo |
 | E2 | Unabhängiges Security-Review des vollständigen Heads (Claude und Copilot), `SECURITY.md` als „Bekannte Grenzen der Beta“ | Review-Kommentar am Head-SHA | offen |
 | E3 | Frischer Klon auf einem sauberen Linux-Host folgt der Betriebsanleitung wörtlich bis zum laufenden Dienst | Protokoll mit SHA | offen |
 
