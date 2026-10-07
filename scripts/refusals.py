@@ -70,6 +70,7 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/anchor_process.py", "geniusnew/config.py",
            "geniusnew/__main__.py", "geniusnew/database.py",
            "geniusnew/audit_store.py", "tools/control_deck/actions.py",
+           "geniusnew/llm_contracts.py", "geniusnew/llm_broker.py",
            "ops/server/genius-server")
 
 # Guarded shell scripts and the one test module that runs each of them.
