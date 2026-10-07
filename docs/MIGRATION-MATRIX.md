@@ -199,7 +199,7 @@ Rejected alternative, for the record: reusing the owner's existing `agentcommon.
 
 Changing the existing target schema is **not** part of Phase 0 and is not done here. It is recorded as the first concrete Phase 2 contract task, to be carried out as its own reviewed change.
 
-**Redaction note.** One legacy match is a private internal egress domain of the Agent-Common era. `SECURITY.md` forbids committing private endpoints to this repository (public when this evidence was recorded, private since 2026-10-07; the rule applies regardless) and permits only redacted examples, so the literal domain is deliberately not reproduced here. It is identifiable in the source repository at `docs/project-isolation-wp01.md:19` and is confirmed absent from the current source policy. The redaction removes no evidence: the security-relevant fact is that the target was removed and must never be reintroduced.
+**Redaction note.** One legacy match is a private internal egress domain of the Agent-Common era. `SECURITY.md` forbids committing private endpoints to this public repository and permits only redacted examples, so the literal domain is deliberately not reproduced here. It is identifiable in the source repository at `docs/project-isolation-wp01.md:19` and is confirmed absent from the current source policy. The redaction removes no evidence: the security-relevant fact is that the target was removed and must never be reintroduced.
 
 ### WP01 evidence re-verified against the exact current Source HEAD
 

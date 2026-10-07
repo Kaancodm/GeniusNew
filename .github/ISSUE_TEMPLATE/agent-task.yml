@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Dieses Repository ist privat; die Schutzregeln bleiben gleich. Keine Zugangsdaten, privaten Endpunkte,
+        Dieses Repository ist öffentlich. Keine Zugangsdaten, privaten Endpunkte,
         persönlichen Unterlagen oder sensiblen Schwachstellendetails eintragen.
         Rollen und Merge-Regeln: docs/COLLABORATION.md.
   - type: dropdown

@@ -102,9 +102,7 @@ Mindestens folgende Rollen bleiben logisch getrennt:
 
 ## 9. Public-Repository-Anforderung
 
-Das Repository ist seit dem 07.10.2026 privat (`docs/DECISIONS.md`); die Anforderungen
-gelten unverändert weiter, damit eine spätere Veröffentlichung oder ein Mirror nichts
-offenlegt:
+Da GeniusNew öffentlich ist:
 
 - keine produktiven Secrets
 - keine echten Zugangsdaten

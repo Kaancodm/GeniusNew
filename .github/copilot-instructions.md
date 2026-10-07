@@ -29,7 +29,7 @@ Werkzeugen.
 
 ## Sicherheitsregeln
 
-- Repository (seit 07.10.2026 privat; die Regel gilt unabhängig davon): keine Zugangsdaten, Tokens, privaten Schlüssel, echten
+- Öffentliches Repository: keine Zugangsdaten, Tokens, privaten Schlüssel, echten
   `.env`-Dateien, Produktionsdaten, privaten Endpunkte oder vertraulichen Unterlagen.
 - Fail closed: Eine unklare Eingabe oder ein fehlender Zustand führt zu `ContractError`,
   nie zu einer stillen Freigabe oder einem großzügigen Default.

@@ -56,7 +56,7 @@ Projekts; niemand sonst schreibt sie.
 
 **Quellen in NotebookLM** (Notebook „GeniusNew“): `docs/STATUS.md`,
 `docs/DECISIONS.md`, `docs/DATABASE.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`,
-`docs/COLLABORATION.md`, `AGENTS.md`. Das Repository ist **privat**: Raw-Links auf
+`docs/COLLABORATION.md`, `AGENTS.md`. Das Repository ist aktuell (GitHub-Stand 07.10.2026) **privat**: Raw-Links auf
 `raw.githubusercontent.com` liefern ohne Anmeldung HTTP 404 und sind **kein** Verfahren.
 Der Weg sind ausdrücklich ausgewählte Datei-Uploads (nächster Abschnitt).
 
@@ -356,7 +356,7 @@ um; Claude pusht nur, wenn Kaan es ausdrücklich sagt.
 
 Zugriff vom iPad auf den Laptop über SSH (z. B. mit Tailscale) in eine WSL-Sitzung mit
 `tmux`. Hostnamen, Zugangsdaten und private Adressen gehören nur in die private
-Zugangsdokumentation, nie in dieses Repository (auch nicht, solange es privat ist).
+Zugangsdokumentation, nie in dieses Repository.
 
 **Aufgaben** entstehen über das Issue-Formular „Begrenzte Aufgabe“
 (`.github/ISSUE_TEMPLATE/agent-task.yml`), **PRs** über

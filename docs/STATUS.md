@@ -6,8 +6,8 @@ NotebookLM, Microsoft 365 Copilot oder jeden anderen Assistenten, der das Reposi
 nicht selbst lesen kann. Verbindlich bleiben der Code, `SECURITY.md` und
 `docs/ROADMAP-V01.md`. Bei Widerspruch gilt das Repository.
 
-**Sichtbarkeit und Quellenweg (07.10.2026):** Das Repository ist dauerhaft **privat**
-(`docs/DECISIONS.md`); Raw-Links auf `main` liefern HTTP 404. NotebookLM bekommt Quellen
+**Sichtbarkeit und Quellenweg (07.10.2026):** Das Repository ist aktuell **privat**
+(GitHub-Stand; keine Aussage zur Dauer, Kaan klärt die Regeln); Raw-Links auf `main` liefern HTTP 404. NotebookLM bekommt Quellen
 nur über von Kaan hochgeladene, geprüfte Dateien aus einem exakten Commit
 (`docs/COLLABORATION.md`, „NotebookLM-Quellenpaket“). **Blocker:** Es gibt noch kein
 dokumentiertes, hochgeladenes Quellenpaket; eine NotebookLM-Importprüfung wurde nicht
