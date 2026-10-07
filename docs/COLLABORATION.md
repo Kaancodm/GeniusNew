@@ -66,9 +66,11 @@ Die Beschreibung autorisiert keinen tatsächlichen Upload; jeder Upload ist Kaan
 
 1. Mit dem vorhandenen, autorisierten GitHub-Zugang arbeiten; kein neuer Zugang.
 2. Einen exakten Commit auf `main` wählen (voller SHA) und **ausschließlich** diese sieben
-   Dateien aus ihm exportieren: `docs/STATUS.md`, `docs/DECISIONS.md`,
+   Quellen aus ihm exportieren: `docs/STATUS.md`, die Entscheidungen,
    `docs/DATABASE.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`,
-   `AGENTS.md`. Nie das vollständige Repository, `.git`, Secrets, Logs oder DB-Dateien.
+   `AGENTS.md`. Die Entscheidungen liegen einzeln in `docs/decisions/`; als Quelle
+   dient die Ausgabe von `python3 scripts/decisions_tool.py` (ein Dokument, als
+   `DECISIONS.md` hochladen). Der SHA-256 im Protokoll gilt für diese Ausgabe. Nie das vollständige Repository, `.git`, Secrets, Logs oder DB-Dateien.
 3. Vor der Übertragung jede Datei lesen. Bei sensiblem oder unklarem Inhalt stoppen und
    Kaan fragen. Jede Redaktion ausdrücklich im Paketprotokoll kennzeichnen.
 4. Pro Paket dokumentieren (im PR oder der Übergabe, nie mit Zugangsdaten):
