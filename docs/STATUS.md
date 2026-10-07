@@ -6,6 +6,13 @@ NotebookLM, Microsoft 365 Copilot oder jeden anderen Assistenten, der das Reposi
 nicht selbst lesen kann. Verbindlich bleiben der Code, `SECURITY.md` und
 `docs/ROADMAP-V01.md`. Bei Widerspruch gilt das Repository.
 
+**Sichtbarkeit und Quellenweg (07.10.2026):** Das Repository ist aktuell **privat**
+(GitHub-Stand; keine Aussage zur Dauer, Kaan klärt die Regeln); Raw-Links auf `main` liefern HTTP 404. NotebookLM bekommt Quellen
+nur über von Kaan hochgeladene, geprüfte Dateien aus einem exakten Commit
+(`docs/COLLABORATION.md`, „NotebookLM-Quellenpaket“). **Blocker:** Es gibt noch kein
+dokumentiertes, hochgeladenes Quellenpaket; eine NotebookLM-Importprüfung wurde nicht
+durchgeführt (UNKNOWN). Die übrigen Angaben unten stammen vom 26.09.2026.
+
 ## In einem Satz
 
 GeniusNew ist ein Zero-Trust-Agentensystem, in dem kein Bauteil seine eigene
@@ -81,7 +88,7 @@ Vollständig in `SECURITY.md`. Die wichtigsten:
 ## Nächste Schritte (v0.2)
 
 1. Tag `v0.1` auf `3a0e1bc`: **erledigt** (26.09.2026).
-2. `docs/STATUS.md` in NotebookLM als Quelle hochladen und in OneDrive/SharePoint für
+2. Quellenpaket aus einem exakten Commit exportieren, prüfen und durch Kaan in NotebookLM hochladen lassen (nicht per Raw-Link) und in OneDrive/SharePoint für
    Microsoft 365 Copilot ablegen.
 3. **Datenbank-Design (Kaan selbst, seit 27.09.2026):** `docs/DATABASE.md` mit
    Schema (auch für das Portal) und Migrationen, nach den Korrekturen aus Issue #44.
