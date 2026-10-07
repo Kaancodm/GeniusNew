@@ -55,10 +55,38 @@ ein Review abgegeben hat. **Keine Stapel-PRs:** Jeder PR basiert auf `main`. Beg
 Projekts; niemand sonst schreibt sie.
 
 **Quellen in NotebookLM** (Notebook „GeniusNew“): `docs/STATUS.md`,
-`docs/DECISIONS.md`, `docs/DATABASE.md` (sobald sie existiert), `SECURITY.md`,
-`docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`, `AGENTS.md`. Das Repository ist öffentlich, deshalb können die Quellen als Links auf
-die Rohdateien in `main` eingebunden werden, zum Beispiel
-`https://raw.githubusercontent.com/Kaancodm/GeniusNew/main/docs/STATUS.md`.
+`docs/DECISIONS.md`, `docs/DATABASE.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`,
+`docs/COLLABORATION.md`, `AGENTS.md`. Das Repository ist **privat**: Raw-Links auf
+`raw.githubusercontent.com` liefern ohne Anmeldung HTTP 404 und sind **kein** Verfahren.
+Der Weg sind ausdrücklich ausgewählte Datei-Uploads (nächster Abschnitt).
+
+### NotebookLM-Quellenpaket (Verfahren für das private Repository)
+
+Die Beschreibung autorisiert keinen tatsächlichen Upload; jeder Upload ist Kaans Handlung.
+
+1. Mit dem vorhandenen, autorisierten GitHub-Zugang arbeiten; kein neuer Zugang.
+2. Einen exakten Commit auf `main` wählen (voller SHA) und **ausschließlich** diese sieben
+   Dateien aus ihm exportieren: `docs/STATUS.md`, `docs/DECISIONS.md`,
+   `docs/DATABASE.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`,
+   `AGENTS.md`. Nie das vollständige Repository, `.git`, Secrets, Logs oder DB-Dateien.
+3. Vor der Übertragung jede Datei lesen. Bei sensiblem oder unklarem Inhalt stoppen und
+   Kaan fragen. Jede Redaktion ausdrücklich im Paketprotokoll kennzeichnen.
+4. Pro Paket dokumentieren (im PR oder der Übergabe, nie mit Zugangsdaten):
+
+   | Datum | Voller Commit-SHA | Originalpfad | SHA-256 der hochzuladenden Datei | Redaktion |
+   | --- | --- | --- | --- | --- |
+
+   Der SHA-256 gilt für die Datei, wie sie tatsächlich hochgeladen wird (`sha256sum`).
+5. Kaan lädt die geprüften MD-/TXT-Dateien über „Quellen hinzufügen“ in das
+   Projekt-Notebook hoch. Das Notebook wird nicht öffentlich geteilt; bestehende
+   Berechtigungen werden nicht erweitert.
+6. Nach relevanten Merges neu exportieren, neu prüfen und die betroffenen Quellen
+   ersetzen. Statische Uploads aktualisieren sich nicht durch Git.
+7. Das Repository bleibt maßgeblich. Eine fehlende Aussage im Notebook beweist nicht,
+   dass eine Entscheidung nie getroffen wurde.
+
+**Verboten:** Tokens in URLs, temporäre Raw-Token-Links, öffentliche Mirrors oder Gists,
+Freigabelinks und Authentifizierungs-Proxys.
 
 **Wer fragt wen:** Jedes Werkzeug und Kaan fragen bei Wissensfragen zuerst NotebookLM,
 also „Was wurde zu X entschieden?“, „Warum ist Y so?“ oder „Was ist der nächste
@@ -328,7 +356,7 @@ um; Claude pusht nur, wenn Kaan es ausdrücklich sagt.
 
 Zugriff vom iPad auf den Laptop über SSH (z. B. mit Tailscale) in eine WSL-Sitzung mit
 `tmux`. Hostnamen, Zugangsdaten und private Adressen gehören nur in die private
-Zugangsdokumentation, nie in dieses öffentliche Repository.
+Zugangsdokumentation, nie in dieses Repository (auch nicht, solange es privat ist).
 
 **Aufgaben** entstehen über das Issue-Formular „Begrenzte Aufgabe“
 (`.github/ISSUE_TEMPLATE/agent-task.yml`), **PRs** über

@@ -11,9 +11,13 @@ GeniusNew ist der saubere Neustart von Agent Genius.
 - Agent Common ist kein Bestandteil von GeniusNew.
 - Es gibt keinen automatischen oder pauschalen Import aus anderen Projekten.
 
-## Public-Repository-Regel
+## Repository-Sichtbarkeit und Schutzregel
 
-Dieses Repository ist öffentlich. Daher dürfen keine Secrets, privaten Konfigurationen, Zugangsdaten, internen Tokens, nicht freigegebener Altcode oder vertrauliche Projektartefakte übernommen werden.
+Dieses Repository ist seit der Entscheidung vom 07.10.2026 **dauerhaft privat**
+(`docs/DECISIONS.md`; die frühere Public-Entscheidung bleibt in
+`docs/ADR-001-restart-and-isolation.md` als Historie stehen). Die Schutzregeln gelten
+unabhängig von der Sichtbarkeit weiter, auch für die Eignungsprüfung vor jedem
+Altimport (Public-Safety-/Public-Repository-Eignung): Es dürfen keine Secrets, privaten Konfigurationen, Zugangsdaten, internen Tokens, nicht freigegebener Altcode oder vertrauliche Projektartefakte übernommen werden; ebenso keine echten `.env`-Dateien, personenbezogenen Daten oder Produktionsdumps.
 
 Jede Übernahme aus dem Altprojekt muss zuerst in der Migrationsmatrix
 `docs/MIGRATION-MATRIX.md` klassifiziert werden. Sie ist das kanonische

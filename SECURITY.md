@@ -2,7 +2,10 @@
 
 ## Scope
 
-GeniusNew ist ein öffentliches Zero-Trust-Projekt. Sicherheit hat Vorrang vor schneller Codeübernahme.
+GeniusNew ist ein Zero-Trust-Projekt. Das Repository ist seit dem 07.10.2026 dauerhaft privat
+(`docs/DECISIONS.md`); die Schutzregeln unten gelten unabhängig von der Sichtbarkeit weiter,
+weil sich Zugriffe, Mirrors und Sichtbarkeit ändern können. Sicherheit hat Vorrang vor
+schneller Codeübernahme.
 
 ## Keine Secrets im Repository
 
@@ -14,7 +17,7 @@ Niemals committen:
 - personenbezogene oder vertrauliche Daten
 - interne Zugangsdaten, Deployment-Secrets oder private Endpunkte
 
-Nur redigierte Beispiele mit eindeutig ungefährlichen Platzhaltern dürfen öffentlich versioniert werden.
+Nur redigierte Beispiele mit eindeutig ungefährlichen Platzhaltern dürfen versioniert werden.
 
 ## Altprojekt-Import
 

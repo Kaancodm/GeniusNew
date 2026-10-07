@@ -15,6 +15,11 @@ Die Referenz-Baseline enthält fachlich relevante Zero-Trust-Bausteine, ist aber
 
 `GeniusNew` bleibt auf ausdrückliche Entscheidung des Eigentümers öffentlich.
 
+> **Änderungsnotiz 07.10.2026:** Diese Public-Entscheidung gilt als historischer Stand.
+> Kaan hat das Repository dauerhaft privat gestellt (`docs/DECISIONS.md`, 07.10.2026). Die
+> Schutzregeln dieses ADR (Public-Safety-Review vor jedem Altimport, Import-Gate) bleiben
+> unverändert verbindlich.
+
 ## Entscheidung
 
 1. `GeniusNew` ist die neue, eigenständige Projektbasis.
@@ -23,7 +28,7 @@ Die Referenz-Baseline enthält fachlich relevante Zero-Trust-Bausteine, ist aber
 4. Die einzige initial zulässige Referenz ist der Commit `09496c94c064ae36ee98b1a21553c7b3b358e864`.
 5. Kein Quellcode wird 1:1 übernommen, bevor er im Import-Manifest geprüft wurde.
 6. Artefakte mit Agent-Common-Bezug werden nicht importiert. Nutzbare Konzepte daraus werden bei Bedarf neu implementiert.
-7. Weil das Ziel-Repository öffentlich ist, ist Public-Safety-Review vor jedem Altimport zwingend.
+7. Weil das Ziel-Repository öffentlich ist, ist Public-Safety-Review vor jedem Altimport zwingend. *(Seit 07.10.2026 privat; die Prüfung bleibt Pflicht, siehe Änderungsnotiz oben.)*
 8. Architekturverträge und Identitätsmodell werden vor Runtime-Übernahme neu konsolidiert.
 9. `user_id` wird vor Implementierung von userbezogenen Rate-/Concurrency-Limits explizit entschieden und durch Schema, Modell und Orchestrator konsistent geführt.
 10. Jede akzeptierte Komponente muss Tests und eine nachvollziehbare Herkunft haben.
@@ -36,7 +41,7 @@ Eine Altkomponente darf nur importiert werden, wenn alle folgenden Bedingungen e
 - keine Secrets oder privaten Daten
 - keine fremde Projektidentität oder unklare Projektzugehörigkeit
 - Sicherheitsgrenze dokumentiert
-- Public-Repository-Eignung geprüft
+- Public-Repository-Eignung geprüft (auch bei privatem Repository Pflicht)
 - Klassifikation `ACCEPT`
 - Teststrategie definiert
 

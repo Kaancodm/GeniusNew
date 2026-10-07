@@ -48,4 +48,4 @@ print(result.as_dict())
 ```
 
 Der tatsächliche Laya-Dienst und seine Modellgewichte gehören auf den Server bzw. in
-dessen private Laufzeitumgebung, nicht in dieses öffentliche Repository.
+dessen private Laufzeitumgebung, nicht in dieses Repository.
