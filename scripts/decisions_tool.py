@@ -18,10 +18,10 @@ def load(directory=DIR):
     """Read direct *.md children of directory in reverse filename order.
 
     Return a list of dictionaries with title, date, source, decision, and reason
-    fields, or an empty list if no files match. Ordering uses filenames, not
-    the date fields in the contents.
+    fields. Ordering uses filenames; each filename date must match the date field.
 
-    Raise ValueError for an unexpected filename or malformed decision layout.
+    Raise ValueError for an empty directory, an unexpected filename, a filename
+    date that differs from the record date, or a malformed decision layout.
     File read errors (OSError) and UTF-8 decoding errors (UnicodeDecodeError)
     propagate to the caller.
     """
