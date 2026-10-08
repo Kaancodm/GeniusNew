@@ -8,6 +8,7 @@ Nothing here can select a production database or the active host anchor.
 from __future__ import annotations
 
 from contextlib import ExitStack
+import json
 import os
 from pathlib import Path
 import re
@@ -30,7 +31,7 @@ from postgres_support import PostgresDatabase  # noqa: E402
 
 _CONTAINER_ID = re.compile(r"\A[0-9a-f]{64}\Z")
 _ADMIN_DSN = {
-    "host": "127.0.0.1", "port": "5432",
+    "host": "127.0.0.1",
     "dbname": "geniusnew_test_admin", "user": "postgres",
 }
 
@@ -43,10 +44,27 @@ def require(condition: bool, message: str) -> None:
 def ci_container() -> str:
     container = os.environ.get("GENIUSNEW_TEST_POSTGRES_CONTAINER", "")
     dsn = os.environ.get("GENIUSNEW_TEST_ADMIN_DSN", "")
+    parameters = conninfo_to_dict(dsn)
+    port = parameters.pop("port", "")
     if (os.environ.get("GITHUB_ACTIONS") != "true"
             or not _CONTAINER_ID.fullmatch(container)
-            or conninfo_to_dict(dsn) != _ADMIN_DSN):
+            or parameters != _ADMIN_DSN
+            or not re.fullmatch(r"[1-9][0-9]{0,4}", port)
+            or int(port) > 65535):
         raise ContractError("restore drill requires the disposable CI PostgreSQL service")
+    # Bind the DSN to this exact container, rather than trusting a host port
+    # that could point at a different database. Never fall back to libpq defaults.
+    bindings = None
+    try:
+        inspected = subprocess.run(
+            ["docker", "inspect", "--format", "{{json .NetworkSettings.Ports}}", container],
+            capture_output=True, text=True, check=True, timeout=10)
+        bindings = json.loads(inspected.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    if (not isinstance(bindings, dict)
+            or bindings.get("5432/tcp") != [{"HostIp": "127.0.0.1", "HostPort": port}]):
+        raise ContractError("restore drill DSN does not match the loopback CI container")
     return container
 
 
