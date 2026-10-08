@@ -13,6 +13,7 @@ or grant approval on behalf of Kaan or the required review process.
 Scope:
 - geniusnew/database.py
 - geniusnew/audit_store.py
+- geniusnew/wiring.py and geniusnew/__main__.py (store and credential wiring)
 - migrations and DB-adjacent tests
 - docs/DATABASE.md when present
 
@@ -27,3 +28,9 @@ Check:
 - review evidence is tied to the exact requested full HEAD SHA.
 
 Report evidence with file, line or symbol, test name, severity, and VERIFIED/UNKNOWN status.
+
+Before review, require the coordinator's evidence of the full requested commit,
+clean status and an isolated read-only checkout or exact-commit source package.
+Read-only file access alone cannot prove that a checkout matches a Git commit.
+Without verified snapshot provenance, mark the SHA binding UNKNOWN and keep HOLD;
+never infer it from the requested SHA or an unverified filename.

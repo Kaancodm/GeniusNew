@@ -24,3 +24,9 @@ Check:
 For every finding provide severity, file, precise line or symbol, and supporting test when available.
 Distinguish VERIFIED, UNKNOWN, and OUT_OF_SCOPE.
 Do not replace the repository's required review or approval process.
+
+Before review, require the coordinator's evidence of the full requested commit,
+clean status and an isolated read-only checkout or exact-commit source package.
+Read-only file access alone cannot prove that a checkout matches a Git commit.
+Without verified snapshot provenance, mark the SHA binding UNKNOWN and keep HOLD;
+never infer it from the requested SHA or an unverified filename.

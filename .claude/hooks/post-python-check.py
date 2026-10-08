@@ -4,40 +4,82 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[2]
+MAX_INPUT = 1_048_576
+WATCHDOG_SECONDS = 45
+
+
+class PostCheckRefused(RuntimeError):
+    """A post-edit check lacks trustworthy input or cannot complete."""
+
+
 def edited_path(payload: dict) -> str | None:
-    tool_input = payload.get("tool_input") or {}
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        raise PostCheckRefused("Invalid tool input")
     value = tool_input.get("file_path") or tool_input.get("path")
     return value if isinstance(value, str) else None
 
 def main() -> int:
-    try:
-        payload = json.load(sys.stdin)
-    except (json.JSONDecodeError, OSError):
-        print("post-python-check: invalid hook input", file=sys.stderr)
-        return 2
+    data = sys.stdin.read(MAX_INPUT + 1)
+    if len(data) > MAX_INPUT:
+        raise PostCheckRefused("Oversized hook input")
+    payload = json.loads(data)
+    if not isinstance(payload, dict):
+        raise PostCheckRefused("Invalid hook payload")
 
     raw = edited_path(payload)
     if not raw or not raw.endswith(".py"):
         return 0
 
-    root = Path(os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd())
+    cwd = payload.get("cwd")
+    if not isinstance(cwd, str) or not Path(cwd).is_absolute():
+        raise PostCheckRefused("Invalid working directory")
+    configured_root = os.environ.get("CLAUDE_PROJECT_DIR")
+    if configured_root is not None and Path(configured_root).resolve() != ROOT:
+        raise PostCheckRefused("Hook does not belong to configured project")
+    path = Path(raw)
+    if not path.is_absolute():
+        path = Path(cwd) / path
+    path = path.resolve(strict=True)
+    if not path.is_relative_to(ROOT) or not path.is_file():
+        raise PostCheckRefused("Edited file is outside the active project")
     checks = [
-        ["python3", "-m", "compileall", "-q", "geniusnew", "scripts", "tools"],
+        [sys.executable, "-m", "py_compile", str(path)],
         ["git", "diff", "--check"],
     ]
     for command in checks:
-        result = subprocess.run(command, cwd=root, text=True, capture_output=True)
+        result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True,
+                                timeout=15)
         if result.returncode:
-            message = (result.stderr or result.stdout or "check failed").strip()
-            print(f"post-python-check: {' '.join(command)}: {message}", file=sys.stderr)
-            return 2
+            raise PostCheckRefused("Post-edit check failed")
 
-    print("post-python-check: compileall PASS; git diff --check PASS")
+    print("post-python-check: edited file compiles; git diff --check PASS")
     return 0
 
+def timeout_handler(signum: int, frame: object) -> None:
+    raise TimeoutError("Post-edit check timed out")
+
+
+def run() -> int:
+    try:
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(WATCHDOG_SECONDS)
+        return main()
+    except Exception:
+        print("post-python-check failed; verification blocked.", file=sys.stderr)
+        return 2
+    finally:
+        try:
+            signal.alarm(0)
+        except AttributeError:
+            pass
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run())

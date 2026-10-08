@@ -9,17 +9,24 @@ disable-model-invocation: true
 Run the repository's canonical verification workflow without modifying files.
 
 1. Confirm repository root, branch, full HEAD SHA, and working-tree status.
-2. Determine changed Python modules from tracked and untracked working-tree changes.
+2. Determine the complete change set: committed changes from the merge-base of
+   `HEAD` and `origin/main` to `HEAD`, staged and unstaged changes against `HEAD`,
+   and untracked files. Record the base SHA. A clean working tree does not mean
+   the branch changed no guarded modules. If the base cannot be established,
+   report scope UNKNOWN and run the complete guard rather than assume no changes.
+   Intersect the combined paths with `scripts.refusals.GUARDED`, including tools
+   and shell scripts, not only files under `geniusnew/`.
 3. Run, in this order:
    - `python3 -W error::ResourceWarning -m unittest discover -s tests`
    - `./scripts/demo.sh`
-   - `python3 scripts/refusals.py <affected geniusnew modules>`
+   - `python3 scripts/refusals.py <all affected guarded paths>`
    - `git diff --check`
 4. Do not skip, disable, weaken, or rewrite tests to make the result green.
 5. If PostgreSQL required by the tests is unavailable, do not report DB coverage as PASS.
 6. Only report a check as PASS when that exact check actually ran successfully.
 7. Report checks that could not run as UNKNOWN and failed checks as FAIL.
-8. If no guarded GeniusNew module changed, report the refusal-guard step as NOT_APPLICABLE, not PASS.
+8. Only if the complete committed and uncommitted change set is known and contains
+   no guarded path, report the refusal-guard step as NOT_APPLICABLE, not PASS.
 9. New refusal paths must remain protected by `scripts/refusals.py`.
 10. Do not change `main`, create commits, add dependencies, or modify repository files.
 
