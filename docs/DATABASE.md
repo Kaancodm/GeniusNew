@@ -707,3 +707,584 @@ Implementierungsreihenfolge:
 6. Audit Chain + Startup-Reconciliation mit Anchor;
 7. Portal-Identität und Sessions;
 8. Portal.
+
+## 12. Audit-Wachstum — Entwurfszusatz, nicht freigegeben
+
+**Auftrag:** Kaan, 08.10.2026; ChatGPT, Branch `chatgpt/db-audit-growth`.
+**Geprüfte Baseline:** `main` `7f81e240f6ec4b16d876f081249afb3d47240901`.
+Dieser Zusatz entwirft die Ablösung des Vollsnapshot-Protokolls aus §§4.6, 4.7,
+6 und 8. Er ist **keine Implementierungs-, Migrations- oder Betriebsfreigabe**.
+Bis zu den Gates in §12.11 bleiben die bisherigen Verträge und Grenzen gültig.
+§4.9/D1, Governance und `SECURITY.md` werden hier weder geändert noch freigegeben.
+
+### 12.1 Befund, Ziel und ausdrücklich verbleibende Grenze
+
+Am genannten SHA liest `PostgresAuditChain._append` nach dem
+`pg_advisory_xact_lock` über `_read` sämtliche Records und Köpfe, einschließlich
+`count`, `sum(octet_length(event))` und `max(octet_length(event))`.
+`_AnchoredAudit._commit_locked` lädt anschließend über `snapshot` nochmals die
+Geschichte. `_commit_request` serialisiert sie vollständig. Die Kosten eines
+Appends wachsen damit mit der bisherigen Geschichte; nur `_append` zu ändern
+würde den zweiten Vollscan und den vollen Transport nicht beseitigen.
+
+Die Größen sind getrennt zu betrachten: `_MAX_STORED_RECORDS` ergibt mit der
+270-Byte-Minimal-Kopfzeile `16777216 // 270 = 62137`. Der Preflight
+`_check_commit_size` verwendet jedoch `head.count * len(_head_line(head))`:
+bei fünfstelliger Anzahl ist eine v2-Kopfzeile 274 Bytes lang. Dadurch passen
+höchstens **61230** Records in diese konservative Zustandsrechnung
+(`61230 * 274 = 16777020`; `61231 * 274 = 16777294 > 16777216`). Das ist eine
+lokale Nachrechnung der gelesenen Kanonform, **kein Lasttest**. Das 64-MiB-Limit
+für die komplette Socket-Anfrage einschließlich Nonce-Envelope kann je nach
+Eventgröße früher greifen. `_MAX_COUNT` in `audit_chain.py` begrenzt zusätzlich
+die bisherige materialisierte Kette auf höchstens eine Million Records.
+
+**Ziel:** konstante Anzahl gelesener Nutzzeilen pro normalem Append, begrenzte
+Delta-Frames und begrenzter aktiver Ankerzustand. Indexzugriffe sind nicht als
+konstante Laufzeit garantiert. Gesamtarchiv und dauerhafte Replay-Indizes wachsen
+weiter; endlicher Speicher kann keine unbegrenzte Historie aufnehmen.
+
+**Sicherheits-Gate:** Ein Tip-only-Append erkennt eine nach der Startprüfung
+vorgenommene Manipulation eines alten, nicht gelesenen Records oder Kopfes nicht
+sofort. Ein korrekt fortgesetzter Kopf beweist nicht die fortdauernde Verfügbarkeit
+aller historischen Bytes. Die Vollprüfung erkennt das weiterhin beim nächsten
+Start bzw. einer ausdrücklich ausgeführten vollständigen Integritätsprüfung.
+Das ist nicht dieselbe Erkennungsfrist wie beim heutigen Vollscan vor jedem
+Append. Ohne Kaans ausdrückliche Entscheidung, unabhängige Reviews und eine
+begleitende Änderung der betroffenen `SECURITY.md`-Grenze darf der schnelle Pfad
+nicht aktiviert werden. Rechte werden nicht erweitert; ein Advisory Lock ist
+insbesondere kein Schutz gegen einen DB-Eigentümer, der ihn ignoriert.
+
+### 12.2 Inkrementeller Append und instanzübergreifende Ordnung
+
+Vorgeschlagener Normalpfad für eine bereits vollständig geprüfte Installation:
+
+1. `_AnchoredAudit` hält weiterhin den Prozess-/Connection-Lock und den bestehenden
+   **Session-Lock** `anchor_lock()` mit `_AUDIT_LOCK` über DB-Commit bis zur
+   Ankerbestätigung. Alle Core-Instanzen benutzen dieselbe DB und denselben Anker.
+   Der zusätzliche `pg_advisory_xact_lock(_AUDIT_LOCK)` bleibt in `_append`.
+   Reihenfolge: Session-Lock, DB-Transaktion, Xact-Lock, Fachzeilen-Locks.
+   Kein Netzwerk-Ack in einer offenen DB-Transaktion; kein Worker unter diesen Locks.
+2. Nach **jeder** Übernahme des Session-Locks den Anker mit frischer C2-Nonce nach
+   seinem Zustand fragen und mit dem DB-Tip abgleichen. `_needs_reanchor` ist nur
+   ein lokaler Hinweis, kein instanzübergreifender Nachweis. Ein fremder Crash kann
+   sonst einen unverankerten Suffix hinterlassen. Diesen vor neuer Mutation nach
+   §12.8 abarbeiten oder ablehnen; keine neue Arbeit am ungeklärten Suffix vorbei.
+3. Innerhalb des Xact-Locks nur den letzten Record und letzten gespeicherten Kopf
+   lesen: im bisherigen Layout je `ORDER BY index DESC LIMIT 1` bzw.
+   `ORDER BY count DESC LIMIT 1`, im Epochenlayout zusätzlich exakt die aktive
+   `(chain_id, epoch)` einschränken. Höchstens eine feste Anzahl kleiner
+   Epochen-Metadatenzeilen kommt hinzu. Keine Vollaggregate, kein `OFFSET`, kein
+   `snapshot`, keine Historienmaterialisierung in diesem Pfad.
+4. Die Reads müssen einen nach Erwerb der Sperre gültigen Zustand sehen: für den
+   Schreibpfad `READ COMMITTED` mit getrenntem Lock-Statement und nachfolgenden
+   Reads; kein vor dem Warten erzeugter `REPEATABLE READ`-Snapshot. Timeout,
+   Deadlock, Verbindungs-/Lock-Verlust oder unklarer Commit-Ausgang sind Refusal,
+   nicht Anlass für einen verdeckten Wiederholungsversuch der Fachmutation.
+5. Tip-Event byte-genau kanonisch rehydrieren, Größe und Record-Hash neu prüfen;
+   Kopf mit öffentlichem Audit-Schlüssel prüfen. Index/Count, Epoch-Bindung,
+   Kopf-Hash und `created_at == event.occurred_at` müssen zusammenpassen. Ein
+   leerer Record-Store bei vorhandenem Kopf oder umgekehrt ist Fehler. Beide leer
+   sind nur beim ausdrücklich initialisierten Genesis-Zustand zulässig, nicht als
+   Deutung eines verschwundenen Stores. Der bestätigte Anker darf nicht voraus sein.
+6. Neuen Record aus genau diesem Tip bilden. Event-/Frame-Grenzen und verbleibendes
+   Epochen-/Journalbudget **vor** dem Commit prüfen. Record und bereits signierten
+   Kopf mit der B6-Fachmutation atomar speichern. Zähler/Bytebudgets werden unter
+   derselben Sperre fortgeschrieben und beim Start vollständig nachgerechnet;
+   sie sind keine Ersatzbeweise für Integrität. Fehler rollt die ganze Mutation zurück.
+7. Nach bestätigtem DB-Commit nur die neu committed Records und ihren gespeicherten
+   Endkopf an den Anker senden. Keine neue Signatur und kein erneuter Vollsnapshot.
+   Nur ein authentisiertes, exakt zum Zielzustand passendes Ack erlaubt Fortsetzung.
+
+Der letzte Record und Kopf werden bei jedem Append aus PostgreSQL gelesen, nicht
+nur aus einem Prozesscache. Runtime-Rechte auf Historie bleiben append-only;
+Constraints, Trigger, Byte-Limits und die B6-Atomarität werden nicht abgeschwächt.
+Die Änderung umfasst später auch `head()`, Recovery und `_commit_locked`, soweit
+sie heute den versteckten Vollscan auf dem normalen Commitpfad auslösen.
+
+### 12.3 Delta-Vertrag an der Prozessgrenze
+
+**Vorgeschlagene, noch nicht implementierte Version:**
+`geniusnew-anchor-delta-v1`. Die Transportgrenze und Rollen bleiben erhalten.
+Der Anker bekommt nur den öffentlichen Audit-Schlüssel; ausschließlich die
+Audit-Rolle signiert Köpfe/Checkpoints. Der separate C2-Antwortschlüssel bleibt
+beim Anker. Kein HMAC, kein gemeinsam verwendeter privater Schlüssel, keine neue
+Abhängigkeit und kein automatischer Fallback auf das Vollsnapshot-Protokoll.
+
+Dieser neue Vertrag zielt auf den separat betriebenen C2-Ankerdienst. Der alte
+Kindprozess-/Pipe-Modus bleibt unverändert Legacy und ist kein Ersatzpfad bei
+fehlenden C2-Schlüsseln; seine Umstellung braucht einen gesondert geprüften
+Vertrag. Keine Antwort ohne Nonce-Bindung wird im neuen Dienstpfad akzeptiert.
+
+Der Zustandsvergleich umfasst mindestens `chain_id`, `epoch`, `count`,
+`head_hash`, den Checkpoint-Digest und `OPEN`/`SEALED`, nicht nur einen Zähler.
+`chain_id` ist eine einmalig festgelegte, im unabhängigen Anker gebundene
+32-Byte-Identität; Restore oder Neustart darf sie nicht neu erzeugen.
+
+| Operation (Entwurf) | Eingabe | Erfolgsbedingung |
+| --- | --- | --- |
+| `status` | exakte Protokollversion, Chain-Identität | nonce-signierter vollständiger Zustand, einschließlich Epoch-/Checkpoint-Position |
+| `commit_delta` | Version, erwarteter `base`-Zustand, geordnete neue `records`, bereits signierter Ziel-`head` | exakte Erweiterung des aktuell gehaltenen Zustands und dauerhaft gespeicherter Zielzustand |
+| `seal_epoch` | erwarteter Zustand und bereits in der DB gespeicherter signierter Abschluss | Abschluss bindet exakt den gehaltenen letzten Kopf; Epoche wird dauerhaft geschlossen |
+
+Für einen normalen Delta-Commit muss `base` exakt dem aktuellen Ankerzustand
+entsprechen. Die Records beginnen bei `base.count`, sind lückenlos und enthalten
+keinen alten Präfix. Der erste `previous_hash` ist der verankerte `head_hash`;
+jeder folgende Record bindet den unmittelbar vorherigen. Alle kanonischen Bytes,
+Typen, Indizes und Hashes werden geprüft. Der signierte Zielkopf hat
+`count = base.count + len(records)` und genau den letzten Record-Hash. Neue
+Records gehören derselben offenen Epoche; der gesonderte Öffnungsfall steht in
+§12.4. Ein nur größerer, aber nicht von der gehaltenen Geschichte abstammender
+signierter Kopf bleibt verboten, auch bei kompromittiertem Audit-Signierschlüssel.
+
+**Ack und Wiederholung:** Das vorhandene C2-Envelope mit zufälliger 32-Byte-Nonce,
+festem öffentlichen Antwortschlüssel und Label
+`geniusnew/anchor-reply/ed25519/v1\n` bleibt. Das versionierte `reply` bindet
+zusätzlich Operationsart, SHA-256 der kanonischen inneren Anfrage und den
+vollständigen Zustand. Auch Refusals werden bei gültigem Envelope nonce-signiert.
+Der Client prüft Nonce, Signatur, Request-Digest und sämtliche erwarteten
+Zielkoordinaten; ein signiertes Ack für einen anderen Kopf ist kein Erfolg.
+
+Ist nach Antwortverlust das Ziel bereits exakt der aktuelle Ankerzustand, ist
+nur die **identische zuletzt dauerhaft bestätigte innere Anfrage** idempotent:
+der Anker hält dafür ihren Digest zusammen mit Zielzustand und Kopf. Gleiche
+Anfrage mit neuer Transport-Nonce liefert ein neu signiertes Ack, ohne erneutes
+Journal-Append. Gleicher Count mit anderem Hash/Checkpoint, anderer Request-Digest,
+Rückschritt, Teilüberlappung oder ein inzwischen überholtes Ziel werden abgelehnt.
+Nach jedem unklaren Ausgang zuerst `status`, nicht blind alte Frames wiederholen.
+Ein `status`-Nachweis des exakten bereits gespeicherten Zielkopfes kann Recovery
+abschließen; er autorisiert keine erneute Jobausführung.
+
+**Begrenzung:** Als zu entscheidender Startwert werden höchstens 128 Records und
+1 MiB für den gesamten Delta-Frame vorgeschlagen; beide Grenzen gelten zugleich.
+Event-Limit 8192 Bytes, Antwortlimit 4096 Bytes und Transport-Timeout bleiben
+mindestens so streng wie bisher. Ein einzelner nicht darstellbarer Record wird
+vor DB-Commit abgelehnt. Ein größerer gültiger Recovery-Suffix wird anhand der
+bereits gespeicherten Zwischenköpfe in begrenzte Deltas zerlegt. Jeder Teil endet
+an einem verifizierten, vor dem Crash signierten Kopf. Niemals einen ganzen
+Epoch-/Lebenszeit-Count als Erlaubnis zur Speicherallokation verwenden.
+
+### 12.4 Epochen, Abschluss und Beginn der nächsten Epoche
+
+Für neu eröffnete Epochen ist eine **neue Kopf-/Record-Version** nötig, nicht
+stilles Zurücksetzen des v2-Counts. Vorschlag für den signierten Kopfkörper:
+`version = geniusnew-audit-head-v3`, `chain_id`, `epoch`, lokaler `count`,
+`head_hash`, `previous_checkpoint_sha256`. Alle Felder werden mit der vorhandenen
+Audit-Signierrolle über die kanonischen Bytes signiert. Record-Hashes binden
+Version, Chain-Identität, Epoche, lokalen Index, `previous_hash` und die typisierte
+Payload. Alte Köpfe und Records werden nicht umgeschrieben oder nachsigniert.
+
+Lokale Indizes beginnen in jeder neuen Epoche bei 0. `(chain_id, epoch, index)`
+bzw. `(chain_id, epoch, count)` werden die eindeutigen Schlüssel; Indizes und
+Counts sind nur **innerhalb derselben Epoche** vergleichbar. Epoch-Nummern steigen
+exakt um eins und sind begrenzte nichtnegative `bigint`-Werte, keine
+Materialisierungsgrößen. Ein Überlauf wird abgelehnt. Die historische
+`_MAX_COUNT`-Schranke wird nicht pauschal erhöht oder deaktiviert; neue Decoder
+trennen Epochenposition, lokale Record-Anzahl und Frame-Limits ausdrücklich.
+
+Ein Abschluss `geniusnew-audit-epoch-close-v1` enthält die Chain-Identität,
+die aktuelle und genau nächste Epoche, den vollständigen finalen signierten Kopf,
+den Digest des vorigen Abschlusses sowie Anzahl, Bytezahlen und SHA-256 der
+geordneten Record- und Kopf-Archivströme. Der Abschluss wird kanonisch mit
+Ed25519 durch die Audit-Rolle signiert und unverändert in einer vorgeschlagenen
+append-only-Tabelle `audit_checkpoints` gespeichert; höchstens ein Abschluss je
+`(chain_id, epoch)`. Der Digest gilt für die vollständigen signierten
+Abschlussbytes, nicht nur für einen ungebundenen Metadatenzeiger.
+
+**Wechselreihenfolge unter dem Session-Lock:** Zuerst aktuellen Endkopf vollständig
+verankern; Epoche vollständig einschließlich aller gespeicherten Signaturen und
+Archivströme prüfen; Abschluss signieren und dauerhaft in der DB speichern;
+`seal_epoch` bestätigen lassen. Danach ist kein weiteres Event in dieser Epoche
+zulässig. Der erste Record der nächsten Epoche ist ein eigener typisierter
+Checkpoint-Record mit den **exakten signierten Abschlussbytes** als Payload und
+deren Digest als `previous_hash`. Sein Index ist 0, sein signierter Kopf hat
+Count 1 und bindet dieselbe Chain-Identität, `epoch + 1` und den Abschlussdigest.
+Es gibt keinen All-zero-Neubeginn nach der ersten Genesis und keine Zyklik, in der
+ein Abschluss seinen eigenen Hash voraussetzt. Der neue Record ist kein als
+gewöhnliches `AuditEvent` getarntes Metadatenfeld; sein eigener Typ braucht
+explizite Validierung, Versionierung und Tests.
+
+Der Anker nimmt diesen Öffnungs-Delta nur aus dem exakt passenden `SEALED`-Zustand
+an. Er prüft Abschluss-Signatur, finalen eigenen Kopf, Vorgängerabschluss,
+Nachfolger-Epoche, Genesis-Record und neuen Kopf. Ohne bestätigten Beginn bleibt
+die nächste Epoche für fachliche Events gesperrt. Ein Checkpoint ist eine
+Kontinuitätsbindung, **kein Ersatz für Records, Original-Wires oder Startprüfung**.
+Archiv-Digests werden durch den Kern gegen die Bytes geprüft; der Anker behauptet
+mit seinem Ack weder Archivverfügbarkeit noch die fachliche Richtigkeit von B6.
+
+Als Startwerte zur Entscheidung: höchstens 16384 Records oder 64 MiB kanonische
+Record-Bytes pro neuer Epoche, was zuerst erreicht wird. Zusätzlich muss das
+aktive Ankerjournal unter 16 MiB bleiben, mit vorab reservierten 64 KiB für
+Abschluss-/Übergangsdaten. Tatsächliche kodierte Größen entscheiden; kein
+Hochrechnen ausschließlich mit Minimalzeilen. Rotation erfolgt vor Überschreiten
+einer Grenze. Scheitert sie, wird abgelehnt, statt Limits anzuheben oder Historie
+zu vergessen. Grenzwerte und Platzreserve müssen zusammen getestet werden.
+
+### 12.5 Speicherung und Archivierung ohne neues Lebenszeitlimit
+
+**Core, vorgeschlagen:** `audit_epochs` beschreibt die eindeutige Genesis,
+Epoche, unveränderlichen Bereich und Archiv-Digests. `audit_chain` und
+`audit_heads` behalten pro Record die Originalbytes und seine gespeicherte
+Signatur; geschlossene Bereiche werden in einen lesbaren PostgreSQL-Kaltbereich
+verschoben. Die aktive Abfrage benennt genau eine Epoche und hat einen passenden
+Index. Ein globaler `MAX`/Vollscan über alle Archive ist kein aktiver Pfad.
+Zustandsmarker oder Archivpfade sind keine Autorität: maßgeblich bleiben die
+signierten Checkpoints und der unabhängige Anker. Die Runtime darf geschlossene
+Records, Köpfe und Checkpoints weder ändern noch löschen.
+
+Archivströme werden deterministisch nach lokalem Index/Count gebildet, ein
+kanonischer Datensatz pro Zeile mit abschließendem LF; Typ, Bereich und Länge
+sind Teil des signierten Deskriptors. Kopfströme enthalten auch die ursprünglichen
+`created_at`-Werte. Bytea-Inhalte werden reversibel und eindeutig kodiert, nicht
+als neu normalisierte Nutzdaten. Bei legacy-v2-Records werden vor dem Export die
+ursprünglichen Event-Bytes gegen die Kanonform geprüft. Digests werden über die
+tatsächlich archivierten Bytes berechnet. Kein Vollarchiv oder Wire wird ins
+Git-Repository, Audit-Event, Anker-Reply oder NotebookLM kopiert.
+
+**Anker pro Epoche:** Die aktive Epoche hält ein begrenztes append-only-Journal
+akzeptierter Zielköpfe, Operation-/Request-Digests und des Abschlusses. Persistente
+Einträge binden außerdem ihren Vorgängerzustand; Start prüft diese Übergänge.
+Dafür signiert der Anker jeden kanonischen Journal-Eintrag mit seinem vorhandenen
+eigenen C2-Schlüssel, jedoch unter der getrennten Zustands-Domäne
+`geniusnew/anchor-state/ed25519/v1\n`: Vorgängereintrag-Digest, Base/Ziel,
+Operation, Request-Digest und die vollständigen Audit-Kopf-/Abschlussbytes sind
+gebunden. Eine Audit-Kopfsignatur allein authentisiert den Request-Digest nicht.
+Start prüft beide Signaturrollen; der Core bekommt keinen privaten Ankerschlüssel.
+Ein manipuliertes Idempotenzfeld darf auch nach Neustart kein Ack auslösen.
+Geschlossene Journale einschließlich Abschluss werden unter der Kontrolle des
+Ankers unveränderlich archiviert, nicht in der Core-DB und nicht mit deren
+Zugangsdaten. Im aktiven Speicher liegen nur aktueller Kopf, Epoche, Phase,
+letzter Request-Digest und letzter Checkpoint. Die Genesis und die verketteten
+Abschlussnachweise werden dauerhaft aufbewahrt und seitenweise gelesen.
+
+Insbesondere werden **nicht alle Epochenabschlüsse in dieselbe auf 16 MiB
+begrenzte Datei oder Antwort angehängt**. Begrenzte Epochen-/Katalogsegmente und
+ein kleiner aktueller Positionszeiger verhindern bloßes Verschieben des Limits.
+Die Zahl archivierter Segmente und ihr Plattenbedarf bleiben wachsend.
+Ein Positionszeiger allein genügt nicht zum Start: Manifest, Abschlusskette,
+alle Ankerjournale und der referenzierte aktuelle Stand müssen zusammenpassen.
+
+Ack erst nach dauerhaftem Journal-Eintrag. Neue Dateien/Segmente werden zuerst
+vollständig geschrieben und `fsync`-gesichert; Veröffentlichung/Umbenennung und
+Verzeichniseinträge müssen ebenfalls dauerhaft sein, bevor der neue Zeiger oder
+ein Ack sichtbar wird. Der exklusive Lease schützt die gesamte Store-Identität
+über Dateirotationen hinweg, nicht nur den gerade geöffneten alten Inode.
+Namespace-/Hardlink-Grenzen des vorhandenen Leases werden nicht für gelöst erklärt.
+Eine zerrissene autoritative Datei wird niemals automatisch abgeschnitten;
+fehlende oder mehrdeutige Zustände bleiben HOLD. Ein unreferenziertes Staging-
+Objekt darf unbenutzt bleiben, aber keinen Initialisierungs-/Reset-Pfad auslösen.
+
+**Archivwechsel:** Kopie bzw. PostgreSQL-Kaltbereich zuerst erstellen und byte-genau
+prüfen; dann in einer kontrollierten, transaktionalen Bereichsumschaltung den
+Archivort veröffentlichen. Erst danach kann eine redundante heiße Kopie durch
+die getrennte Betriebs-/Migrationsrolle entfernt werden. Kein Verlust der
+logischen Historie, kein `DROP` der letzten Kopie und kein Runtime-`DELETE`-Grant.
+Ein physischer PostgreSQL-Archivwechsel erhält Foreign Keys und die Sichtbarkeit
+für die vollständige Startprüfung. Ein zusätzliches Offline-/Objektspeicherarchiv
+ist **nicht** Teil dieses Vorschlags; seine Einführung braucht einen eigenen
+Verfügbarkeits-, Rechte- und Restore-Vertrag.
+
+### 12.6 Vollständige Startprüfung pro Epoche — Ergänzung zu §8
+
+Der Listener bleibt geschlossen, während ein konsistenter Zustand unter der
+instanzübergreifenden Sperre geprüft wird. Die Vollprüfung wird nur gestreamt und
+nach Epochen gegliedert, **inhaltlich nicht auf die aktive Epoche reduziert**:
+
+1. Migrationen, effektive Rechte, Identität des unabhängigen Ankers und eindeutige
+   Genesis prüfen. Jede fehlende, zusätzliche, doppelte oder falsch verkettete
+   Epoche sowie ein unbekannter Formatwechsel ist ein Fehler.
+2. In **jeder** aktiven und archivierten Epoche alle Records, kanonischen Bytes,
+   Indizes, Hash-Verknüpfungen und **jeden** gespeicherten signierten Kopf prüfen;
+   1:1-Zuordnung und Zeitbindung bleiben bestehen. Der Kern prüft seine Abschlüsse;
+   der Anker prüft beim eigenen Start alle seine Journal-/Archivsegmente samt
+   Vorgängern, bevor er einen autoritativen C2-Status ausgibt. Der Core erhält
+   dafür weder Dateizugriff noch Anker-Zugangsdaten. Kein `verified=true` ersetzt
+   eine der beiden vollständigen Startprüfungen.
+3. Archivbytes, Bereiche und Digests gegen die Abschlüsse prüfen; jeden Beginn
+   der nächsten Epoche gegen den exakten Vorgängerabschluss prüfen. Auch ein
+   entferntes komplettes letztes Archiv muss über den gehaltenen Ankerstand
+   auffallen. Fehlt ein erforderliches Archiv, startet der Dienst nicht.
+4. Alle Job-/Acceptance-/Pending-/Approval-Bindungen aus §8 über die **Vereinigung
+   sämtlicher Epochen und Archive** in beide Richtungen prüfen. Ein Job kann in
+   Epoche E beginnen und in E+1 enden. Keine epocheweise Filterung, die solche
+   Beziehungen oder entfernte globale Replay-Einträge übersieht. Arbeitsmengen
+   werden in begrenzten Seiten verarbeitet; nötige vollständige Vergleiche können
+   über DB-Joins bzw. sortierte Streams erfolgen, nicht über endlose Python-Tupel.
+5. Den gesamten Ankerzustand an seiner exakten Position wiederfinden. Nur einen
+   vollständig geprüften, bereits signierten DB-Suffix in begrenzten Deltas
+   nachverankern. Übergänge nach §12.8 verwenden ausschließlich bereits dauerhaft
+   gespeicherte Abschluss-/Kopfbytes. Im Recovery ist Signieren verboten.
+6. Erst bei vollständiger Übereinstimmung Listener freigeben. Eine größere
+   benötigte Prüfzeit erlaubt weder Auslassen von Archiven noch Annahme während
+   der Prüfung. Gesamtkosten des Starts bleiben linear in der Historie; dieser
+   Entwurf verspricht keinen konstanten Neustart.
+
+Die bestehende Bindung historischer Acceptances an aktuelle Policy/Prüfschlüssel
+bleibt bestehen. Archivierung ist keine Freigabe für eine neue Policy-Historie,
+Schlüsselrotation, Wiederherstellung hinter dem Anker oder Aktivierung von D1.
+
+### 12.7 Übriges Wachstum: Annahmen und abgelaufene Pending-Jobs
+
+**Annahmen:** Ein Audit-Digest ersetzt nicht die Original-Wires. Vorgeschlagen ist
+eine Trennung von dauerhaftem, schmalem `acceptance_ledger` und unveränderlichen
+`acceptance_payloads` (neuer logischer Tabellenname). Das Ledger behält globalen
+Primary Key `handoff_sha256`, globalen Unique Key `result_sha256`, `job_id`,
+`accepted_at`, die Job-/Handoff-Bindung und eine eindeutige Payload-Referenz mit
+Digest und Speicher-Epoche. Die Payload speichert `handoff_wire` und `result_wire`
+weiterhin byte-genau als `bytea`; geschlossene Payload-Bereiche werden lesbar
+archiviert. Ledger, Payload, `COMPLETED`-Übergang und `RESULT_ACCEPTED` committen
+atomar. Constraints müssen vor Commit die eindeutige vollständige Payload und
+den bisherigen Job-Foreign-Key erzwingen; ein nackter Tombstone ist keine
+nachweisbare Acceptance. Start prüft auch archivierte Wire-Paare vollständig.
+
+Die globalen Replay-Schlüssel bleiben **unpartitioniert und online**. Eine
+Unique-Bedingung nur auf `(epoch, handoff_sha256)` oder `(epoch, job_id)` würde
+dieselbe Identität in einer anderen Epoche zulassen und ist verboten. Eine
+physische Aufteilung der Payloads muss weiterhin genau eine referenzierte Payload
+je Ledger-Eintrag erzwingen; zusätzliche/verwaiste Payloads sind Startfehler.
+`job_ledger` selbst bleibt mit jeder verbrauchten ID und seinem terminalen Zustand
+erhalten. TTL, Archivwechsel, Neustart und neue Schlüssel geben weder Job-IDs,
+Handoffs noch Ergebnis-Digests frei. Sonst könnte eine alte signierte Anfrage
+nach Archivierung erneut als neu gelten. Die schmalen Indizes wachsen deshalb
+bewusst weiter; ein Bloom-Filter, Cache oder nicht erreichbares Archiv ersetzt
+keinen transaktionalen Konfliktnachweis.
+
+**Pending / offene Entscheidung 5 aus `ROADMAP-V02.md`:** Der dort dokumentierte
+Mindeststand lässt abgelaufene Zeilen liegen, zählt sie aber nicht mehr gegen die
+aktive Kapazität. Das ist keine Bereinigung. Vorgeschlagen ist ein separat
+freizugebender auditierter Sweep, kein stiller Cleanup beim Lesen.
+
+Der Sweep arbeitet in begrenzten Portionen nach `expires_at, job_id` mit passendem
+Index und derselben Sperrreihenfolge wie fachliche Approval-Auflösung. Pro Job
+unter Row Lock den weiterhin gültigen Zustand `PENDING_APPROVAL`, die aktuelle
+serverseitige Zeit und `expires_at <= now` nochmals prüfen. Dann **in derselben
+Transaktion** die vollständige bisherige Pending-Zeile in eine vorgeschlagene
+append-only-Tabelle `pending_job_archive` übernehmen, `job_ledger` auf `REFUSED`
+setzen, den aktiven Pending-Eintrag entfernen und den bisherigen B6-Nachweis
+`HANDOFF_REJECTED / PENDING_APPROVAL_EXPIRED` samt signiertem Kopf speichern.
+`reserved_at` wird dabei nicht erfunden. Archiv und Event binden dieselbe Job-ID,
+Handoff-Digest, ursprüngliche Felder und den tatsächlichen Ablehnungszeitpunkt.
+
+Nach Commit denselben Anker-Ack abwarten; ohne ihn weder Sweep-Erfolg melden noch
+weitere Mutation über die ungeklärte Grenze fortsetzen. Gewinnt parallel ein
+Approval, entsteht kein Ablauf-Event; gewinnt der Sweep, wird Approval abgelehnt.
+Ein bereits terminaler Job wird nicht erneut verändert oder auditiert. Historische
+Approval-Records und verbrauchte Token bleiben erhalten. Aktives Pending und
+archiviertes Pending sind verschiedene Relationen: die 1:1-Regel aus §8 gilt für
+aktives Pending; Archive verlangen den passenden terminalen Ledger-Zustand und
+Ablaufnachweis. Start mit einem abgelaufenen, noch nicht gesweepten aktiven Job
+bleibt konsistent, aber der Job darf nicht mehr ausgeführt werden.
+
+**Kapazität/Betrieb:** Auch Approval-Historien, Ankerarchive, PostgreSQL-Indizes,
+WAL und Backups brauchen Platz. Überwacht werden aktive Bytes, Archivbytes,
+Replay-Indexgröße, ältestes unaufgelöstes Pending, Anker-Lag und freie Kapazität.
+Disk-full, fehlendes Archiv oder unbekannter Restore-Stand führen weiterhin zu
+Refusal/HOLD, niemals zur Löschung verbrauchter Identitäten. Warnschwellen und
+Sweep-Takt entscheidet Kaan; dieser Entwurf richtet keinen Timer ein.
+
+### 12.8 Crashfenster — erneute Prüfung von §6
+
+Die Tabelle beschreibt vorgeschlagenes Recovery, nicht bereits getestete Wirkung.
+Jede Zeile braucht später einen echten PostgreSQL-/Anker-Neustarttest. B7-Regeln
+für die Effect-Grenze bleiben zusätzlich bestehen.
+
+| Crash-/Fehlerfenster | Dauerhafter Zustand und zulässige Reaktion |
+| --- | --- |
+| Vor DB-Commit, einschließlich fehlgeschlagenem Kopf-Insert | Record, Kopf und B6-Mutation rollen gemeinsam zurück; kein Delta und keine Wirkung freigeben. |
+| DB-COMMIT-Ausgang unbekannt | Keine erneute Fachmutation. Verbindung verwerfen, vollständiger Startabgleich entscheidet, was gespeichert wurde; verbrauchte IDs bleiben verbraucht. |
+| DB committed, vor Delta-Sendung | Suffix mit gespeicherten Köpfen erhalten; vollständig prüfen und nur diesen Suffix nachverankern, ohne Signaturerzeugung. |
+| Delta empfangen/geprüft, Anker noch nicht dauerhaft | Kein Ack. Nach Neustart gilt nur der dauerhaft belegte Ankerzustand; bei intaktem alten Stand gespeichertes Delta erneut anbieten. Zerrissener autoritativer Eintrag bleibt HOLD. |
+| Anker dauerhaft, Antwort verloren/falsche Nonce | Keine Erfolgsmeldung. Frischer signierter Status oder identische letzte Anfrage mit neuer Nonce bestätigt das exakte Ziel; niemals zweites Event/Job erzeugen. |
+| Teilweise nachverankerter mehrteiliger Recovery-Suffix | Nach Neustart erneut vollständig prüfen; ab tatsächlich gehaltenem Zwischenkopf fortsetzen, nicht ab einem lokalen Versandzähler. |
+| Ack erhalten, vor Rückgabe an den Aufrufer | Historie bleibt verbraucht. Ein verlorenes Resultat rechtfertigt keinen Job-Retry; `EXECUTION_COMMITTED` bleibt unbekannte Wirkung, wenn B7 das so feststellt. |
+| Abschluss noch nicht in DB committed | Epoche bleibt offen am bestätigten Kopf; kein Epochenbeginn. Recovery erstellt keinen Ersatzabschluss. |
+| Abschluss in DB, Anker noch OPEN | Vollständig gespeicherten Abschluss prüfen und `seal_epoch` erneut vorlegen; keine neuen Fach-Events in die zum Abschluss vorgesehene Epoche schreiben. |
+| Anker SEALED, Beginn der nächsten Epoche fehlt | Alten Abschluss wiederfinden; Betrieb bleibt gesperrt, bis der reguläre, geprüfte Übergang den neuen Beginn atomar gespeichert und bestätigt hat. Recovery signiert ihn nicht nach. |
+| Neuer Beginn in DB, Öffnungs-Ack fehlt | Genau dessen gespeicherten Kopf/Checkpoint-Record nachverankern; keine zweite Genesis und kein stilles Zurückspringen. |
+| Ankerjournal-/Zeigerrotation unterbrochen | Nur eine vollständig durable, konsistente Generation wählen. Widerspruch, fehlender referenzierter Abschluss oder torn autoritative Datei: HOLD, kein automatisches Truncate/Reset. |
+| Archivkopie fertig, Bereichsumschaltung nicht committed | Alter autoritativer Bereich bleibt gültig; Staging ist keine neue Historie. |
+| Archivumschaltung committed, heiße Kopie noch vorhanden | Ein logischer Bereich, nicht doppelt zählen. Kopien müssen identisch sein; fehlende/abweichende Archivbytes blockieren den Start. |
+| Pending-Sweep/Acceptance-Archivierung unterbrochen | Vor Commit kompletter Rollback; nach Commit Archiv, Replay-Zeilen und Audit gemeinsam prüfen, gegebenenfalls gespeichertes Delta nachverankern. Kein erneutes Acceptance-/Ablauf-Event. |
+| DB oder Archive hinter dem Anker; Anker-Rollback oder Fork | Start verweigern, C5/Operator-Gate. Keine längere fremde Geschichte akzeptieren, keine fehlenden Daten neu signieren, kein Anchor-Reset. Gemeinsamer privilegierter Rollback aller Nachweise bleibt die bekannte Grenze. |
+
+### 12.9 Neue bzw. neu zu konkretisierende Ablehnungen
+
+Die Namen sind **Entwurfs-Reason-Codes**, noch keine vorhandene Runtime-API.
+Jeder einzelne negative Fall braucht einen Test, der beim Entfernen der
+Ablehnung rot wird. Ankerfehler bewirken keine Fach-Fortsetzung; lokale
+Vorprüfungsfehler verhindern den DB-Commit. Start-/Archivfehler sperren den Listener.
+
+| Reason-Code (Vorschlag) | Fälle |
+| --- | --- |
+| `AUDIT_TIP_INVALID` | Record/Kopf fehlt einseitig; Bytes, Hash, Signatur, Index/Count, Zeit oder Epoch-Bindung passen nicht. |
+| `AUDIT_GENESIS_UNPROVEN` | Leerer/fehlender Store ohne unabhängig belegte erste Genesis; neue Chain-ID bei Restore. |
+| `AUDIT_LOCK_STATE_INVALID` | Falsche Verbindung/Transaktionslage, vorzeitige Snapshot-Sicht, nicht gehaltener/verlorener Lock, Timeout oder Deadlock. |
+| `AUDIT_COMMIT_UNKNOWN` | Persistenzausgang nicht belegbar; kein automatischer Fach-Retry. |
+| `AUDIT_PROTOCOL_UNSUPPORTED` | Unbekannte/gemischte Version, zusätzliche/fehlende Felder, ungültige Typen oder nicht-kanonische Frames. |
+| `ANCHOR_BASE_MISMATCH` | Falsche Chain/Epoche/Phase/Checkpoint-Position, veraltete Basis, Rückschritt, gleicher Count mit anderem Hash oder fremder längerer Fork. |
+| `ANCHOR_DELTA_INVALID` | Leeres normales Delta, Lücke, Duplikat, Überlappung, falscher erster Vorgänger oder fehlerhafte interne Verkettung. |
+| `ANCHOR_TARGET_INVALID` | Ungültige Signatur, falsche Domäne/Epoche/Chain, Endhash oder Count passt nicht zur Delta-Länge. |
+| `ANCHOR_REPLAY_CONFLICT` | Ziel bereits erreicht, aber innerer Request-Digest weicht ab; alter Request hinter einem neueren Zustand. |
+| `ANCHOR_ACK_UNTRUSTED` | Falsche/fehlende Signatur, falsche Nonce, Operation, Request-Digest, Version oder Zielzustand; ungebundene Refusal-Antwort. |
+| `ANCHOR_UNAVAILABLE` | Timeout, unterbrochener Frame, nicht erreichbarer/unerwartet neu gestarteter Anker; kein lokaler Ersatz. |
+| `AUDIT_CAPACITY_EXCEEDED` | Einzelrecord, Frame, Kopf, Journal oder Epoche überschreitet die jeweilige Grenze bzw. Abschlussreserve fehlt. |
+| `AUDIT_EPOCH_TRANSITION_INVALID` | Append in geschlossene Epoche, übersprungene/zweite Genesis, Überlauf, falscher Vorgängerabschluss, Öffnung vor Seal-Ack. |
+| `AUDIT_CHECKPOINT_INVALID` | Unsignierter/fremder Abschluss, abweichender finaler Kopf, Bereich, Anzahl, Bytezahl oder Archiv-Digest; zweiter Abschluss derselben Epoche. |
+| `ANCHOR_DURABILITY_UNPROVEN` | Write/fsync/Verzeichnis-Persistenz gescheitert, verlorener Lease, beschädigtes/ungültig signiertes Journal (auch Request-Digest oder Vorgänger) oder mehrdeutige Zeigergeneration; kein Ack. |
+| `AUDIT_HISTORY_INCOMPLETE` | Anker voraus; unsignierter Suffix; fehlende, doppelte, vertauschte oder manipulierte Records, Köpfe, Epochen oder Archive. |
+| `ARCHIVE_BINDING_INVALID` | Fehlende/mehrfache Payload, falscher Digest/Bereich/Job-Foreign-Key oder Inkonsistenz zwischen heißer und kalter Kopie. |
+| `REPLAY_HISTORY_INVALID` | Gelöschte/globale Replay-Sperre fehlt oder widerspricht Audit; epochenlokaler Unique Key würde Wiederverwendung zulassen. |
+| `PENDING_SWEEP_CONFLICT` | Unter Lock nicht mehr abgelaufen/pending oder andere Row-Bindung: keine Ablaufmutation; Archiv-/Audit-Insertfehler rollt alles zurück. Bereits terminale Jobs sind ein belegter No-op, kein zweites Refusal-Event. |
+| `AUDIT_UPGRADE_UNPROVEN` | Ungeprüfter Legacy-Stand, unzulässiger Mischbetrieb, fehlende Migrations-/Rechtefreigabe oder unbekannter Backup-/Restore-Stand. |
+
+Bereits bestehende Byte-/Schema-/Signatur-/Rollen-Ablehnungen bleiben bestehen.
+Der Refusal-Guard wird später durch Codex für jede betroffene bzw. neue
+Implementierungsdatei ergänzt, nicht in diesem Dokument-PR geändert.
+
+### 12.10 Roter Messtest und Security-Nachweise für Codex
+
+**Zuerst rot, bevor Produktionscode geändert wird:** vorgeschlagener Test
+`PostgresAuditTest.test_append_reads_bounded_rows_as_history_grows` in der
+vorhandenen Datei `tests/test_postgres_audit.py`, auf Basis von
+`tests/postgres_support.py::PostgresDatabase`. Das ist ein neuer Testname, kein
+bereits existierender PASS.
+
+In einer isolierten echten PostgreSQL-Testdatenbank gültige Ketten mit
+N = 100, 1000 und 10000 gleich großen synthetischen Events sowie je einem korrekt
+signierten Kopf pro Record aufbauen. Aufbau linear/bulk außerhalb der Messung,
+nicht über N Aufrufe des bereits quadratischen Baseline-Appends. Startprüfung und
+Vorverankerung vollständig durchführen, dann Messzähler zurücksetzen. Gemessen
+wird **ein vollständiger `_AnchoredAudit.append` einschließlich Anker-Ack** auf
+dem bereits aufgebauten Zustand, ohne Rotation oder Recovery.
+
+Eine testseitige `psycopg`-Cursor-Instrumentierung zählt die tatsächlich an Python
+zurückgegebenen Record-/Kopfzeilen sämtlicher Reads, nicht nur SQL-Aufrufe oder
+`fetchone()` auf `count(*)`. Vorgeschlagenes Normalpfad-Budget: höchstens acht
+Record-/Kopfzeilen plus vier kleine Metadatenzeilen je Append, unabhängig von N;
+keine historische `snapshot`-/`_read`-Ausführung. Der heutige Code muss wegen
+seiner wachsenden Zeilenmenge rot werden, nicht wegen eines fehlenden neuen API-Namens.
+
+Zusätzlich aufgezeichnete reine SELECTs mit
+`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` in derselben isolierten Testumgebung
+prüfen: bei den größeren Fixtures kein historienweiter Seq Scan, Aggregat oder
+Sortieren aller Records unter einem oberflächlich konstanten `LIMIT`. Passender
+Indexpfad und untersuchte Zeilen werden als Evidenz gespeichert. Keine
+Planner-Schutzmaßnahme abschalten, um einen günstigen Plan zu erzwingen.
+Der echte C2-Frame wird mitgemessen: ein neues Event, gespeicherter Endkopf und
+feste Metadaten, kein mit N wachsendes `records`-Array. Getrennt wird bei wachsender
+Anzahl archivierter Epochen geprüft, dass aktive Reads keine alten Partitionen
+scannen. Die Vollstartprüfung liegt außerhalb des Append-Budgets, bleibt aber
+ein eigener Pflichtnachweis über **alle** N Records/Köpfe.
+
+Latenz p50/p95, gelesene Bytes, Frame-Bytes und DB-Plan pro N dokumentieren;
+Timing allein ist wegen Cache/CI-Streuung kein rotes Gate. Korrektheit und
+begrenzte Zeilen-/Frame-Arbeit sind deterministische Assertions. Dieser PR hat
+keinen solchen Test ausgeführt und behauptet keine gemessene Beschleunigung.
+
+Weitere obligatorische Fälle für die spätere Umsetzung:
+
+- Zwei echte DB-Verbindungen und zwei Core-Instanzen, blockiertes/verlorenes Ack,
+  Crash des ersten Schreibers: zweite Instanz verifiziert/repariert den gehaltenen
+  Präfix vor eigener Mutation. Alle Crashfenster aus §12.8, auch SIGKILL beim
+  Journal-/Epochenwechsel, ohne Doppelwirkung und ohne Nachsignieren.
+- Delta-Fork trotz gültiger Audit-Signatur; falsche Nonce/Antwortdomäne; alte
+  signierte Antwort; gleiche Position mit anderem Checkpoint; identischer Retry
+  ohne zweite Journalzeile; manipuliertes persistentes Request-Digest-Feld,
+  Journal-Signatur-/Domänenfehler nach Neustart; ungültige Überlappung und alle
+  §12.9-Ablehnungen.
+- Mehrere Epochen mit absichtlich kleinen Testlimits, danach separater Langlauf
+  über mindestens 70000 Records: alte Lebenszeitgrenze überschritten, aktive
+  Budgets eingehalten, vollständiger Neustart erfolgreich. Ein zu großer
+  Einzelrecord oder nicht ausführbare Rotation bleibt Refusal vor DB-Commit.
+- Manipulierte ältere Signatur, nicht-kanonische Eventbytes, fehlendes komplettes
+  Archiv, falsche Abschlusskette, unsignierter SQL-Suffix, fehlender Replay-Key,
+  fehlende/falsche Acceptance-Payload: vollständiger Start verweigert.
+- Gleiche Job-ID/Handoff/Result-Digest vor und nach Archivierung, Epochwechsel und
+  Neustart, einschließlich Parallelität: weiterhin Replay-Refusal. Approval/Sweep-
+  Rennen, wiederholter Sweep, Uhr-Rücksprung und Crash zwischen seinen Statements:
+  kein aktiver Job fälschlich abgelaufen, kein zweiter Ablaufnachweis.
+
+**Bestehende Tests und `SECURITY.md`-Zeilen am Baseline-SHA:**
+
+| Zeilen / Thema | Erhalten oder gesondert ändern |
+| --- | --- |
+| `SECURITY.md:56-57` — volle Persistenzprüfung, Vollsnapshot/64 MiB/16 MiB | Nur ein späterer Code-PR darf die Transport-/Lebenszeitgrenze schließen. `test_oversized_anchor_commit_refuses_before_a_database_commit` und `test_anchor_state_bound_refuses_before_a_database_commit` in `tests/test_postgres_audit.py` werden in Delta-/Epochen-Budgettests überführt, nicht gelöscht; Schutz vor nicht verankerbarem DB-Commit bleibt. `test_aggregate_event_bytes_refuse_before_bulk_fetch` und `test_record_count_refuses_before_bulk_fetch` erhalten begrenzte Seiten-/Epochen-Entsprechungen. |
+| `SECURITY.md:56,58` — alle Köpfe, nur gespeicherte Signaturen, B6 | `test_sql_unsigned_suffix_is_a_start_refusal_not_a_recovery_signature`, `test_altered_canonical_bytes_and_earlier_signature_are_refused`, `test_recovery_reuses_the_precrash_signature_and_proves_the_anchor_prefix` und `test_runtime_cannot_update_delete_or_truncate_either_audit_table` bleiben wirksam; `tests/test_b6_reconciliation.py` und `tests/test_b7_crash_recovery.py` um Archive/Epochen ergänzen. |
+| `SECURITY.md:50-51` — Anker-Rollback und Lease-Grenze | Der ausdrücklich offen gehaltene Test `tests/test_anchor_process.py::test_a_file_rolled_back_to_an_older_signed_head_is_accepted_and_this_is_the_boundary` bleibt begründet offen. Checkpoints schließen privilegierten gemeinsamen Rollback nicht. `AnchorClientTest`, Zwei-Anker-/Hardlink-Tests und der Served-Anchor-Test aus `tests/test_serve.py` bleiben; Rotation darf den Lease nicht umgehen. |
+| `SECURITY.md:47-48,52` — Policy-/Schlüsselbindung, dauerhaft verbrauchte IDs, Pending | `test_changed_trusted_policy_or_keys_refuse_historical_acceptance` in `tests/test_acceptance_ledger.py` sowie `PersistentAcceptanceTest` und `tests/test_pending_database.py` gelten auch für Archive. Keine Lösch-/TTL-Ausnahme und keine nebenbei geschlossene Policy-Historiengrenze. |
+| `SECURITY.md:49` — Signaturrollen | Neue Formate behalten Ed25519 und getrennte Signaturrollen; der Anker erhält keinen Audit-Privatschlüssel. Die Root-Secret-/Worker-Schlüsselgrenze bleibt unverändert. |
+
+Neu offen zu halten und **nur nach Kaans Grenzentscheidung** einzuführen ist
+beispielsweise `test_historical_corruption_after_start_is_detected_on_full_recheck_not_tip_append_and_this_is_the_boundary`:
+einen alten Nicht-Tip-Record nach erfolgreichem Start mit der Test-Eigentümerrolle
+beschädigen; nachweisen, dass ein schneller Append diesen nicht liest, die
+vollständige Nachprüfung und jeder Neustart ihn aber ablehnen. Dieser Test wäre
+keine Heilung der Grenze. Verlangt Kaan weiterhin Erkennung vor jedem Append,
+bleibt der inkrementelle Pfad HOLD; ein Performanceziel darf keinen bestehenden
+Sicherheitsnachweis still umkehren.
+
+### 12.11 Umsetzungsschnitt, Migration und Gates
+
+**Kein Code in diesem PR.** Betroffene spätere Implementierungspfade sind
+`geniusnew/audit_store.py` (Tip-/Suffix-Lesen, Epochen- und B6-Prüfung),
+`geniusnew/anchor_process.py` (Delta/C2/Journalwechsel),
+`geniusnew/audit_chain.py` (versionierte Epochen-/Checkpoint-Validierung),
+`geniusnew/wiring.py::_AnchoredAudit` (Commit/Ack/Recovery) und die bestehenden
+DB-/Migrationspfade für Payload- und Pending-Archivierung. Diese Benennung ist
+keine Schreibfreigabe für ChatGPT. SQL-Migrationen erhalten neue Versionen;
+bestehende Migrationen und ihre Checksums bleiben unverändert.
+
+**Legacy-Cutover, Empfehlung:** kontrolliertes Wartungsfenster, alle Core-Schreiber
+anhalten, DB und separaten Anker samt Archive sichern, alte vollständige Prüfung
+und exakten Ankerabgleich bestehen. Den alten v2-Bestand als unveränderte
+Legacy-Epoche 0 versiegeln. Nur dieser ausdrücklich geprüfte Übergang darf einen
+v2-Endkopf in einem neuen Abschluss binden und Epoche 1 eröffnen. Das ist eine
+neue Übergangssignatur über bereits geprüfte/belegte Geschichte, kein Umdeuten
+alter Record-/Kopfsignaturen. Bereits ungültige oder übergroße Altzustände werden
+nicht durch verkürztes Einlesen migriert; ein gesonderter Recovery-Entwurf ist nötig.
+Kein ungeprüfter Live-Mischbetrieb alter und neuer Schreiber und kein automatischer
+Downgrade nach dem ersten neuen Ankerzustand. Restore zurück hinter diesen Stand
+ist keine zulässige Rollback-Abkürzung. Separate Freigabe vor realer Migration.
+
+Der spätere Arbeitsauftrag an Codex wird erst nach Entscheidungen aufgeteilt:
+(a) rote Wachstums-/Grenztests und versionierter Audit-/Ankerpfad samt Epochen,
+(b) lesbare Payload-Archive mit globalen Replay-Sperren,
+(c) auditierter Pending-Sweep. Jeder PR basiert auf `main`, nie auf einem noch
+offenen PR. Ein isolierter Tip-only-Zwischenschritt darf nicht als fertig oder
+produktionsfähig gelten, solange Volltransport, Recovery oder Archivierung fehlen.
+
+**Review-Reihenfolge:** Gemini-Design-Vorprüfung der Prozessgrenze/Kryptografie
+im Draft-PR anfordern, mit vollem Head-SHA und Format aus `COLLABORATION.md`;
+danach unabhängiger Claude Security Review des Entwurfs. Kaan entscheidet die
+untenstehenden Punkte, gibt den Entwurf frei und mergt selbst. Vor Code müssen
+Gemini-Befunde geklärt sein; kein Werkzeug gibt seine eigene Arbeit frei.
+Die späteren DB-Code-PRs brauchen zusätzlich `Claude DB Review: APPROVED` am
+exakten Head, `contracts`, Copilot-Review und die erforderlichen Gemini-/Kaan-
+Gates für geänderte `SECURITY.md`-Grenzen. CodeRabbit wird im vorhandenen
+PR-Review-Ablauf berücksichtigt, ersetzt aber keines dieser Gates.
+
+Technische Referenzen zu den ausdrücklich entworfenen Datenbankzugriffen:
+[PostgreSQL Advisory Locks](https://www.postgresql.org/docs/17/explicit-locking.html#ADVISORY-LOCKS),
+[Transaktionssicht](https://www.postgresql.org/docs/18/transaction-iso.html),
+[ORDER BY mit Index und LIMIT](https://www.postgresql.org/docs/15/indexes-ordering.html),
+[globale Unique-Grenzen partitionierter Tabellen](https://www.postgresql.org/docs/18/ddl-partitioning.html#DDL-PARTITIONING-DECLARATIVE-LIMITATIONS).
+Diese Dokumentation ersetzt weder einen Query-Plan noch die Prüfung der
+installierten PostgreSQL-Version. Reproduzierbare Evidenz entsteht erst in den
+benannten Tests; insbesondere ist keine vollständige Schemaschutzprüfung als
+Umgehung der bestehenden Architekturentscheidung still eingeführt.
+
+### 12.12 Offene Fragen an Kaan
+
+1. Wird die in §12.1 beschriebene spätere Erkennung historischer Manipulationen
+   akzeptiert und als eigene Security-Grenze freigegeben, oder bleibt deshalb der
+   Tip-only-Pfad gesperrt? Vollständige Startprüfung bleibt in beiden Fällen Pflicht.
+2. Werden die vorgeschlagenen Delta-/Epochengrenzen (128 Records/1 MiB,
+   16384 Records/64 MiB, 16 MiB Ankerjournal mit 64 KiB Reserve) übernommen?
+   Welche Kapazitätswarnschwellen sollen vor einem fail-closed-Stopp gelten?
+3. Wird das weiterhin vollständig lesbare PostgreSQL-Archiv mit dauerhaft
+   vorhandenen Original-Wires, globalen Replay-Indizes und linearer Vollstartprüfung
+   als erster Archivierungsweg bestätigt? Es ist keine Lösch-/Aufbewahrungsfreigabe.
+4. Soll der auditierte Pending-Sweep aus offener Entscheidung 5 als eigener PR
+   nach dem Audit-/Epochenpfad umgesetzt werden, und mit welchem Betriebs-Takt?
+5. Wird der kontrollierte Legacy-v2-Cutover im Wartungsfenster statt Live-Mischbetrieb
+   bestätigt? Zeitpunkt, Backup-/Restore-Nachweis und tatsächliche Migrationsfreigabe
+   bleiben eine gesonderte Entscheidung vor jeder Änderung am laufenden System.
