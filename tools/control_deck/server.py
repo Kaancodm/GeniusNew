@@ -99,7 +99,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         supplied = self.headers.get("Authorization", "")
-        if not hmac.compare_digest(supplied, f"Bearer {token}"):
+        if not supplied.isascii() or not hmac.compare_digest(supplied, f"Bearer {token}"):
             self.send_error(401)
             return
         if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
@@ -116,7 +116,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             payload = json.loads(self.rfile.read(size))
             result = store_harpa(payload, self.server.harpa_inbox)
-        except (json.JSONDecodeError, UnicodeDecodeError, HarpaPayloadError):
+        except (json.JSONDecodeError, UnicodeDecodeError, RecursionError, HarpaPayloadError):
             self.send_error(400)
             return
         except OSError:
@@ -177,7 +177,7 @@ class Server(ThreadingHTTPServer):
             token = self.harpa_token_file.read_text(encoding="utf-8").strip()
         except (OSError, UnicodeDecodeError):
             return None
-        return token if 32 <= len(token) <= 256 and "\n" not in token else None
+        return token if 32 <= len(token) <= 256 and token.isascii() and "\n" not in token else None
 
 
 # Tailscale hands out IPv4 addresses from this range only. On a host whose ISP

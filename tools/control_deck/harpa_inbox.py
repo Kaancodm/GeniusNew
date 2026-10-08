@@ -90,7 +90,7 @@ def _items(path: Path) -> list[dict[str, Any]]:
         item = None
         try:
             item = json.loads(line)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             pass
         if not isinstance(item, dict):
             raise HarpaStorageError("invalid HARPA inbox")

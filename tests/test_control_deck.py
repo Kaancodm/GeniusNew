@@ -414,6 +414,39 @@ class HostCheckTest(unittest.TestCase):
         self.deck.harpa_token_file.write_bytes(b"\xff" * 48)
         self.assertEqual(self.post_harpa()[0], 404)
 
+    def test_harpa_non_ascii_authorization_returns_401(self):
+        self.assertEqual(self.post_harpa(token="ä" * 48)[0], 401)
+        self.assertFalse(self.deck.harpa_inbox.exists())
+
+    def test_harpa_non_ascii_credential_disables_ingress(self):
+        self.deck.harpa_token_file.write_text("ä" * 48, encoding="utf-8")
+        self.assertEqual(self.post_harpa()[0], 404)
+        self.assertFalse(self.deck.harpa_inbox.exists())
+
+    def test_harpa_parser_recursion_is_a_payload_or_storage_error(self):
+        """Exercise stdlib's Python scanner because C decoder depth limits vary by version."""
+        nested = b"[" * 1100 + b"0" + b"]" * 1100
+        decoder = json.JSONDecoder()
+        decoder.scan_once = json.scanner.py_make_scanner(decoder)
+
+        def decode(value):
+            return decoder.decode(value.decode("utf-8") if isinstance(value, bytes) else value)
+
+        with patch.object(json, "loads", side_effect=decode):
+            with self.assertRaises(RecursionError):
+                decode(nested)
+            status, _ = self.request(
+                "POST", "/api/harpa", f"127.0.0.1:{self.port}",
+                {"Content-Type": "application/json", "Authorization": "Bearer " + "t" * 48},
+                nested)
+            self.assertEqual(status, 400)
+            self.assertFalse(self.deck.harpa_inbox.exists())
+            self.deck.harpa_inbox.write_bytes(nested + b"\n")
+            self.assertEqual(harpa_inbox.snapshot(self.deck.harpa_inbox),
+                             {"status": "error", "items": []})
+            self.assertEqual(self.post_harpa()[0], 503)
+        self.assertEqual(self.deck.harpa_inbox.read_bytes(), nested + b"\n")
+
     def test_missing_host_and_wrong_port_are_refused(self):
         self.assertEqual(self.request("GET", "/api/mail", None)[0], 421)
         self.assertEqual(self.request("GET", "/api/mail", "127.0.0.1:1")[0], 421)
