@@ -7,7 +7,7 @@ import threading
 import time
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from geniusnew.contracts import ContractError, canonical
 from geniusnew.llm_broker import (
@@ -83,6 +83,41 @@ class BrokerIpcTest(unittest.TestCase):
             with self.assertRaisesRegex(ContractError, "credentials are unavailable"):
                 _peer_uid(object())
 
+    def test_peer_uid_uses_unsigned_uid_and_gid(self):
+        connection = Mock()
+        connection.getsockopt.return_value = struct.pack("iII", 123, 2**31, 2**32 - 2)
+        self.assertEqual(_peer_uid(connection), 2**31)
+        connection.getsockopt.assert_called_once_with(
+            socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("iII"))
+
+    def test_peer_credentials_failures_are_contract_refusals(self):
+        for reply in (OSError("unavailable"), b"invalid"):
+            connection = Mock()
+            if isinstance(reply, Exception):
+                connection.getsockopt.side_effect = reply
+            else:
+                connection.getsockopt.return_value = reply
+            with self.subTest(reply=reply), self.assertRaisesRegex(
+                    ContractError, "credentials are unavailable"):
+                _peer_uid(connection)
+
+    def test_io_failures_are_contract_refusals(self):
+        for operation in ("settimeout", "recv", "sendall"):
+            connection = Mock()
+            getattr(connection, operation).side_effect = OSError("private transport detail")
+            with self.subTest(operation=operation), self.assertRaisesRegex(
+                    ContractError, "IPC failed") as raised:
+                if operation == "sendall":
+                    _write_frame(connection, b"x", time.monotonic() + 1)
+                else:
+                    _read_exact(connection, 1, time.monotonic() + 1)
+            self.assertNotIn("private transport detail", str(raised.exception))
+
+    def test_missing_socket_is_a_connection_refusal(self):
+        with self.assertRaisesRegex(ContractError, "broker connection failed"):
+            invoke(os.path.join(self.directory.name, "missing.sock"), self.request(),
+                   expected_uid=os.getuid(), timeout_seconds=1)
+
     def test_read_exact_rejects_expired_deadline_and_unexpected_eof(self):
         reader, writer = socket.socketpair()
         self.addCleanup(reader.close)
@@ -143,7 +178,7 @@ class BrokerIpcTest(unittest.TestCase):
 
     def test_invoke_rejects_invalid_paths_request_types_and_expired_requests(self):
         request = self.request()
-        for path in ("relative.sock", "invalid\x00.sock", "/" + "x" * 120):
+        for path in ("relative.sock", "invalid\x00.sock", "/" + "x" * 120, "/tmp/\ud800"):
             with self.subTest(path=path), self.assertRaisesRegex(
                     ContractError, "socket path is invalid"):
                 invoke(path, request, expected_uid=os.getuid(), timeout_seconds=1)
@@ -262,6 +297,40 @@ class BrokerIpcTest(unittest.TestCase):
                 broker, lambda _request: ProviderResult("Late.", None),
                 expected_uid=os.getuid(), timeout_seconds=1)
         self.assertFalse(accepted)
+
+    def test_provider_call_outlives_ipc_timeout_and_this_is_the_boundary(self):
+        broker, caller = socket.socketpair()
+        self.addCleanup(broker.close)
+        self.addCleanup(caller.close)
+        request = self.request().to_bytes()
+        caller.sendall(struct.pack("!I", len(request)) + request)
+        entered = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+        results = []
+
+        def provider(_request):
+            entered.set()
+            release.wait()
+            return ProviderResult("Delayed.", None)
+
+        def run():
+            try:
+                results.append(serve_once(broker, provider, expected_uid=os.getuid(),
+                                          timeout_seconds=0.01))
+            finally:
+                finished.set()
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        try:
+            self.assertTrue(entered.wait(1))
+            self.assertFalse(finished.wait(0.05))
+        finally:
+            release.set()
+            thread.join(1)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(results, [False])
 
     def test_unrelated_environment_canary_does_not_enter_ipc(self):
         canary = "core-environment-secret-canary"

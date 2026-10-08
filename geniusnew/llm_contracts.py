@@ -34,9 +34,12 @@ def _fail(message: str) -> None:
 def _job_id(value: Any) -> str:
     if type(value) is not str or not value:
         _fail("broker job_id must be a non-empty string")
+    length = None
     try:
         length = len(value.encode("utf-8"))
     except UnicodeEncodeError:
+        pass
+    if length is None:
         _fail("broker job_id must be valid UTF-8")
     if length > 128:
         _fail("broker job_id is too long")
@@ -52,9 +55,12 @@ def _digest(value: Any) -> str:
 def _text(value: Any) -> str:
     if type(value) is not str or not value:
         _fail("broker text must be a non-empty string")
+    length = None
     try:
         length = len(value.encode("utf-8"))
     except UnicodeEncodeError:
+        pass
+    if length is None:
         _fail("broker text must be valid UTF-8")
     if length > _MAX_TEXT_BYTES:
         _fail("broker text is too large")
@@ -64,16 +70,20 @@ def _text(value: Any) -> str:
 def _decode(data: Any, keys: frozenset[str]) -> dict[str, Any]:
     if type(data) is not bytes or not data or len(data) > _MAX_MESSAGE_BYTES:
         _fail("broker message must be bounded bytes")
+    value = None
     try:
         value = json.loads(data.decode("ascii"))
     except (UnicodeDecodeError, ValueError, RecursionError):
+        pass
+    if value is None:
         _fail("broker message is invalid JSON")
     if type(value) is not dict or set(value) != keys:
         _fail("broker message fields are not exact")
+    encoded = None
     try:
         encoded = canonical(value)
     except ContractError:
-        _fail("broker message is not canonical JSON")
+        pass
     if encoded != data:
         _fail("broker message is not canonical JSON")
     return value

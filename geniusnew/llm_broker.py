@@ -44,11 +44,14 @@ def _peer_uid(connection: socket.socket) -> int:
     """Read Linux kernel credentials rather than trusting message fields."""
     if not hasattr(socket, "SO_PEERCRED"):
         _fail("broker peer credentials are unavailable")
+    uid = None
     try:
         credentials = connection.getsockopt(
-            socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
-        _pid, uid, _gid = struct.unpack("3i", credentials)
+            socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("iII"))
+        _pid, uid, _gid = struct.unpack("iII", credentials)
     except (OSError, struct.error):
+        pass
+    if uid is None:
         _fail("broker peer credentials are unavailable")
     return uid
 
@@ -59,10 +62,13 @@ def _read_exact(connection: socket.socket, size: int, deadline: float) -> bytes:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             _fail("broker IPC timed out")
-        connection.settimeout(remaining)
+        chunk = None
         try:
+            connection.settimeout(remaining)
             chunk = connection.recv(size - len(chunks))
         except (OSError, TimeoutError):
+            pass
+        if chunk is None:
             _fail("broker IPC failed")
         if not chunk:
             _fail("broker IPC ended before a complete frame")
@@ -84,10 +90,14 @@ def _write_frame(connection: socket.socket, data: bytes, deadline: float) -> Non
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         _fail("broker IPC timed out")
-    connection.settimeout(remaining)
+    sent = False
     try:
+        connection.settimeout(remaining)
         connection.sendall(struct.pack("!I", len(data)) + data)
+        sent = True
     except (OSError, TimeoutError):
+        pass
+    if not sent:
         _fail("broker IPC failed")
 
 
@@ -113,7 +123,14 @@ def invoke(socket_path: str, request: BrokerRequest, *, expected_uid: int,
     timeout = _timeout(timeout_seconds)
     expected_uid = _uid(expected_uid)
     if (type(socket_path) is not str or not os.path.isabs(socket_path)
-            or "\x00" in socket_path or len(os.fsencode(socket_path)) > 100):
+            or "\x00" in socket_path):
+        _fail("broker socket path is invalid")
+    encoded_path = None
+    try:
+        encoded_path = os.fsencode(socket_path)
+    except UnicodeEncodeError:
+        pass
+    if encoded_path is None or len(encoded_path) > 100:
         _fail("broker socket path is invalid")
     if not isinstance(request, BrokerRequest):
         _fail("broker request is invalid")
@@ -123,10 +140,14 @@ def invoke(socket_path: str, request: BrokerRequest, *, expected_uid: int,
     deadline = time.monotonic() + min(timeout, remaining_ttl)
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        connection.settimeout(max(0.001, deadline - time.monotonic()))
+        connected = False
         try:
+            connection.settimeout(max(0.001, deadline - time.monotonic()))
             connection.connect(socket_path)
+            connected = True
         except (OSError, TimeoutError):
+            pass
+        if not connected:
             _fail("broker connection failed")
         if _peer_uid(connection) != expected_uid:
             _fail("broker peer uid does not match configuration")

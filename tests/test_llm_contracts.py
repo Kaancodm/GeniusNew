@@ -70,6 +70,27 @@ class BrokerContractTest(unittest.TestCase):
         with self.assertRaises(ContractError):
             decode_request(bytearray(self.request().to_bytes()), now=100)
 
+    def test_invalid_unicode_is_refused_by_the_contract(self):
+        for job_id, text, message in (("\ud800", "Text.", "job_id must be valid UTF-8"),
+                                      (JOB, "\ud800", "text must be valid UTF-8")):
+            with self.subTest(field=message), self.assertRaisesRegex(ContractError, message):
+                BrokerRequest(job_id, DIGEST, 200, text)
+
+    def test_invalid_json_and_ascii_are_contract_refusals(self):
+        for wire in (b"{", b"\xff"):
+            with self.subTest(wire=wire[:20]), self.assertRaisesRegex(
+                    ContractError, "message is invalid JSON"):
+                decode_request(wire, now=100)
+        with patch("geniusnew.llm_contracts.json.loads", side_effect=RecursionError):
+            with self.assertRaisesRegex(ContractError, "message is invalid JSON"):
+                decode_request(self.request().to_bytes(), now=100)
+
+    def test_nonfinite_json_is_not_canonical(self):
+        wire = self.request().to_bytes().replace(b'"expires_at":200',
+                                               b'"expires_at":NaN')
+        with self.assertRaisesRegex(ContractError, "message is not canonical JSON"):
+            decode_request(wire, now=100)
+
     def test_request_constructor_rejects_invalid_deadline_types_and_bounds(self):
         for expires_at in (True, 0, 4_102_444_801):
             with self.subTest(expires_at=expires_at), self.assertRaises(ContractError):
