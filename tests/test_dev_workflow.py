@@ -156,13 +156,17 @@ class WorkspaceChecks(unittest.TestCase):
         self.assertFalse((Path(self.temp.name) / "new-tasks").exists())
 
     def test_invalid_and_existing_tasks_preserve_existing_files(self):
-        with patch.object(workflow, "ROOT", self.repo):
+        with patch.object(workflow, "ROOT", self.repo), \
+                patch.object(workflow, "REPO", self.main_repo), \
+                patch.object(workflow, "repository", return_value=self.main_repo), \
+                patch.object(workflow.subprocess, "run") as run:
             with self.assertRaises(workflow.WorkflowRefused):
                 workflow.new_task("../outside")
             (self.repo / "existing").mkdir()
             with self.assertRaises(workflow.WorkflowRefused):
                 workflow.new_task("existing")
             self.assertTrue((self.repo / "existing").is_dir())
+            run.assert_not_called()
 
     def test_gemini_profiles_do_not_inherit_another_authentication(self):
         ambient = {name: "synthetic-conflicting-value" for name in workflow.GEMINI_AUTH_ENV}
@@ -179,7 +183,8 @@ class WorkspaceChecks(unittest.TestCase):
         with patch.object(workflow.shutil, "which", return_value=None), \
                 self.assertRaises(workflow.WorkflowRefused):
             workflow.argv_for("codex", self.repo, False)
-        with self.assertRaises(workflow.WorkflowRefused):
+        with patch.object(workflow.shutil, "which", return_value="/synthetic/warp"), \
+                self.assertRaisesRegex(workflow.WorkflowRefused, "keinen hier geprüften Review-Modus"):
             workflow.argv_for("warp", self.repo, True)
 
     def test_local_ai_reported_error_is_refused_without_network(self):
