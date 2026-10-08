@@ -162,6 +162,9 @@ class ControlDeckTest(unittest.TestCase):
             {**payload, "source_url": "file:///etc/passwd"},
             {**payload, "source_url": "https://user:pass@example.test/"},
             {**payload, "source_url": "https://[broken"},
+            {**payload, "source_url": "https://example.test/\nscript"},
+            {**payload, "summary": "hidden\u202evalue"},
+            {**payload, "summary": "hidden\x7fvalue"},
         ):
             with self.subTest(changed=changed):
                 with self.assertRaises(harpa_inbox.HarpaPayloadError):
@@ -226,6 +229,22 @@ class ControlDeckTest(unittest.TestCase):
                         harpa_inbox.store(payload, path)
                     self.assertEqual(path.read_bytes(), content)
                     self.assertEqual(harpa_inbox.snapshot(path), {"status": "error", "items": []})
+
+    def test_harpa_stored_reports_are_revalidated_before_display_or_overwrite(self):
+        payload = {"event_id": "monitor:1", "kind": "monitor", "title": "Monitor",
+                   "summary": "No change.", "source_url": "https://example.test/"}
+        original = harpa_inbox.normalize(payload, received_at=123)
+        for item in ({**original, "source_url": "javascript:alert(1)"},
+                     {**original, "received_at": True}, {**original, "received_at": -1},
+                     {**original, "command": "git push"}, {"event_id": "missing-fields"}):
+            with self.subTest(item=item), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "inbox.jsonl"
+                content = (json.dumps(item) + "\n").encode()
+                path.write_bytes(content)
+                self.assertEqual(harpa_inbox.snapshot(path), {"status": "error", "items": []})
+                with self.assertRaises(harpa_inbox.HarpaStorageError):
+                    harpa_inbox.store(payload, path)
+                self.assertEqual(path.read_bytes(), content)
 
     def test_harpa_inbox_read_failure_is_not_empty_ready_state(self):
         """A restored unreadable inbox must block writes and signal dashboard failure."""

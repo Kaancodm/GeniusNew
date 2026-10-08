@@ -87,6 +87,11 @@ muss zum Ausführungszeitpunkt erreichbar sein und Tailscale-Zugriff auf den Ser
 - POST ist ausschließlich auf `/api/action` und `/api/harpa` erlaubt;
 - `/api/action` akzeptiert nur die feste Allowlist `git_status`, `tests`, `demo`, `docker_status` und `hermes_status`;
 - `/api/harpa` akzeptiert nur den festen Berichtvertrag und einen eigenen Bearer-Schlüssel;
+- GET-Routen und `/api/action` haben keine eigene Anmeldung. Vor Serverbetrieb muss
+  Kaan eine Tailscale-ACL bestätigen, die nur ausdrücklich berechtigte Geräte/Nutzer
+  zulässt, einschließlich geteilter Geräte. Host-/Origin-Prüfung ersetzt diese ACL nicht.
+  Test- und Demo-Aktionen führen Repository-Code mit den Rechten des Deck-Nutzers aus;
+  der HARPA-Schlüssel berechtigt dazu nicht. Ohne belegte ACL bleibt der Betrieb HOLD;
 - unbekannte Aktionen werden vor Prozessstart abgelehnt;
 - keine freie Shell, kein Merge, kein Deploy und keine Security-Freigabe aus dem Browser;
 - keine Secrets oder Environment-Werte werden angezeigt; HARPA-Berichte zeigen nur

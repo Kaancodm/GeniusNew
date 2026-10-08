@@ -6,6 +6,7 @@ import re
 import tempfile
 import threading
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -31,7 +32,7 @@ def _text(payload: dict[str, object], name: str, limit: int) -> str:
     if not isinstance(value, str):
         raise HarpaPayloadError(f"{name} must be text")
     value = value.strip()
-    if not value or len(value) > limit or any(ord(char) < 32 and char not in "\n\t" for char in value):
+    if not value or len(value) > limit or any(unicodedata.category(char) in {"Cc", "Cf"} and char not in "\n\t" for char in value):
         raise HarpaPayloadError(f"invalid {name}")
     return value
 
@@ -59,7 +60,7 @@ def normalize(payload: object, *, received_at: int | None = None) -> dict[str, o
         pass
     if parsed is None:
         raise HarpaPayloadError("invalid source_url")
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password or any(char.isspace() for char in source_url):
         raise HarpaPayloadError("invalid source_url")
     return {
         "event_id": event_id,
@@ -92,9 +93,18 @@ def _items(path: Path) -> list[dict[str, Any]]:
             item = json.loads(line)
         except (json.JSONDecodeError, RecursionError):
             pass
-        if not isinstance(item, dict):
+        verified = None
+        if isinstance(item, dict) and set(item) == {"event_id", "kind", "title", "summary", "source_url", "received_at"}:
+            received = item["received_at"]
+            if type(received) is int and received >= 0:
+                try:
+                    verified = normalize({key: value for key, value in item.items() if key != "received_at"},
+                                         received_at=received)
+                except HarpaPayloadError:
+                    pass
+        if verified is None:
             raise HarpaStorageError("invalid HARPA inbox")
-        items.append(item)
+        items.append(verified)
     return items
 
 
@@ -130,6 +140,11 @@ def store(payload: object, path: Path) -> dict[str, object]:
             finally:
                 os.close(descriptor)
             os.replace(temporary, path)
+            parent = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(parent)
+            finally:
+                os.close(parent)
         except OSError:
             try:
                 os.unlink(temporary)

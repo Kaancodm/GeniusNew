@@ -28,6 +28,7 @@ def _refusal() -> None:
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "GeniusControlDeck/0.1"
+    timeout = 10
 
     def _trusted_host(self) -> bool:
         # A page on any domain can resolve its own name to 127.0.0.1 (DNS
@@ -93,7 +94,7 @@ class Handler(BaseHTTPRequestHandler):
             action = payload["action"]
             if not isinstance(action, str) or action not in allowed_actions():
                 raise ValueError
-        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError, RecursionError):
             _deny(self, 400)
             return
         self._json(run_action(action, self.server.repo))
