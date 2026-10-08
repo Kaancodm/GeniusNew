@@ -26,10 +26,10 @@ two different keys depending on which tool wrote it.
 **The demo secret.** It is published in this repository. A service that starts
 with it signs with keys anyone can derive.
 
-**A principal without a grant, or a tool without a worker.** Both would start a
-service that authenticates callers it can never serve, or advertises a tool it
-cannot run. They are configuration errors, and the place to find them is at
-start, not per request.
+**A principal without a grant or an explicit approver role, or a tool without
+a worker.** These would authenticate callers without any permitted route, or
+advertise a tool the service cannot run. Roles come only from the optional
+server-side approvers table; no role is inferred from a grant.
 
 **No anchor state.** Without it the anchor forgets every committed head when the
 service restarts, and a shortened chain verifies again. The demo may do that; a
@@ -53,6 +53,7 @@ import tomllib
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from .approvals import ApproverPolicy
 from .contracts import ContractError, Grant, Policy
 from .http_entry import HttpLimits
 from .workers import DeterministicSummarizer, Worker
@@ -101,6 +102,7 @@ class ServiceConfig:
     limits: HttpLimits
     policy: Policy
     principals: Mapping[str, str]
+    approvers: Mapping[str, str]
     workers: tuple[Worker, ...]
 
     def __repr__(self) -> str:
@@ -258,20 +260,23 @@ def _policy(value: Any) -> Policy:
     )
 
 
-def _principals(value: Any, policy: Policy) -> Mapping[str, str]:
+def _principals(value: Any, policy: Policy,
+                approvers: Mapping[str, str]) -> tuple[Mapping[str, str], ApproverPolicy]:
     if not isinstance(value, dict) or not value:
         _fail("principals must be a non-empty table of key digest to subject")
-    granted = {grant.subject for grant in policy.grants}
-    for digest, subject in value.items():
-        # A TOML array here would be unhashable in the membership test below.
+    for subject in value.values():
+        # A TOML array here would be unhashable in the role lookup below.
         if type(subject) is not str:
             _fail("principals values must be subjects as strings")
-        if subject not in granted:
+    roles = ApproverPolicy(approvers, policy=policy, principal_subjects=value.values())
+    granted = {grant.subject for grant in policy.grants}
+    for subject in value.values():
+        if subject not in granted and subject not in roles.identities:
             # The key is not echoed: a plaintext API key pasted here by mistake
             # would otherwise end up in the service log.
             _fail(f"principal for subject {subject!r} has no grant in the policy")
     # Digest format is checked where it is used, by PrincipalRegistry.
-    return dict(value)
+    return dict(value), roles
 
 
 def _workers(policy: Policy) -> tuple[Worker, ...]:
@@ -289,9 +294,11 @@ def _limits(value: Any) -> HttpLimits:
 
 def parse_config(data: Mapping[str, Any]) -> ServiceConfig:
     """Check a parsed configuration and read the secret it names."""
-    top = _table(data, "configuration", _TOP_KEYS)
+    top = _table(data, "configuration", _TOP_KEYS, frozenset({"approvers"}))
     service = _table(top["service"], "service", _SERVICE_KEYS, _ANCHOR_KEYS)
     policy = _policy(top["policy"])
+    principals, approver_policy = _principals(
+        top["principals"], policy, top.get("approvers", {}))
     anchor_state, anchor_socket, anchor_reply_public_key = _anchor(service)
     return ServiceConfig(
         listen_host=_loopback_host(service["listen_host"]),
@@ -304,7 +311,8 @@ def parse_config(data: Mapping[str, Any]) -> ServiceConfig:
         database_dsn=read_database_dsn(service["database_dsn_file"]),
         limits=_limits(service["limits"]),
         policy=policy,
-        principals=_principals(top["principals"], policy),
+        principals=principals,
+        approvers=approver_policy.identities,
         workers=_workers(policy),
     )
 

@@ -36,7 +36,9 @@ from geniusnew.results import WorkerAuthority
 # Zero-entropy and self-describing, like every other test constant here.
 ROOT_SECRET = b"NOT-A-SECRET-" + b"0" * 24
 API_KEY = b"API-KEY-CANARY-MUST-NOT-BE-DISCLOSED"
+APPROVER_KEY = b"APPROVER-KEY-CANARY-B7-ONLY"
 SUBJECT = "subject-demo"
+APPROVER_SUBJECT = "subject-approver"
 NOW = 1_700_000_000
 EXPIRED_AT = NOW + 61  # the handoff's lifetime is 60 seconds
 CRASH_JOB_ID = "job-" + "b7" * 16
@@ -95,7 +97,9 @@ def build_service(dsn: str, anchor_state: str, log_path: str, *,
                                     integrity_key=keys.integrity_key)
         service = wiring.build(
             root_secret=ROOT_SECRET, policy=policy(requires_approval=requires_approval),
-            api_keys={API_KEY: SUBJECT}, workers=(CountingSummarizer(log_path),),
+            api_keys={API_KEY: SUBJECT, APPROVER_KEY: APPROVER_SUBJECT},
+            approvers={APPROVER_SUBJECT: "user-approver"},
+            workers=(CountingSummarizer(log_path),),
             clock=clock or Clock(), job_ids=lambda: job_id, anchor_state=anchor_state,
             job_ledger=database.PostgresJobLedger(connection),
             acceptance_ledger=database.PostgresAcceptanceLedger(connection),
@@ -130,11 +134,11 @@ def run_job(service, *, mode: str, text: str, announce=lambda event: None, clock
     if mode == "expired":
         clock.now = EXPIRED_AT
         try:
-            service.approve(job_id)
+            service.approve(job_id, approver_subject=APPROVER_SUBJECT)
         except ContractError:
             pass
         return [submitted]
-    token = service.approve(job_id)
+    token = service.approve(job_id, approver_subject=APPROVER_SUBJECT)
     announce({"event": "token", "job_id": job_id, "token": token.hex()})
     return [submitted, complete(service, job_id, token)]
 

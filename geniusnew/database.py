@@ -38,8 +38,15 @@ _SCOPE_KEYS = frozenset({"handoff_sha256", "handoff_expires_at", "job_id", "user
 _MIGRATIONS = ((1, "0001_core_foundation.sql"), (2, "0002_pending_jobs.sql"),
                (3, "0003_approval_store.sql"), (4, "0004_audit_chain.sql"))
 _MIGRATION_DIR = Path(__file__).with_name("migrations")
-# Serialize competing migration processes, including the first installation.
+# Distinct advisory locks serialize migrations, audit appends and pending admission.
 _MIGRATION_LOCK = 0x47454E4955534231
+_AUDIT_LOCK = 0x47454E4955534235
+_PENDING_LOCK = 513812742
+
+# Full-chain startup verification and append take about 18 seconds on the
+# disposable PostgreSQL benchmark; allow room for slower hosts without an
+# indefinitely idle transaction.
+_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS = 60_000
 
 # The audit contract's upper bound for a timestamp, as `orchestrator.py` and
 # `audit.py` use it; a test pins the three together.
@@ -89,7 +96,7 @@ def migration_files() -> tuple[tuple[int, bytes, str], ...]:
 
 
 @contextmanager
-def _connect(dsn: str):
+def _connect(dsn: str, *, application_name: str):
     try:
         parameters = conninfo_to_dict(dsn)
         if not all(parameters.get(key) for key in ("host", "dbname", "user")):
@@ -97,8 +104,13 @@ def _connect(dsn: str):
         # Bound startup and lock waits, regardless of libpq/user defaults. Fixed
         # qualification prevents a caller-controlled search_path shadowing tables.
         with psycopg.connect(dsn, autocommit=True, connect_timeout=5,
+                             application_name=application_name,
+                             keepalives=1, keepalives_idle=30,
+                             keepalives_interval=10, keepalives_count=3,
                              options="-c search_path=pg_catalog,public "
-                                     "-c statement_timeout=10000 -c lock_timeout=5000") as connection:
+                                     "-c statement_timeout=10000 -c lock_timeout=5000 "
+                                     f"-c idle_in_transaction_session_timeout="
+                                     f"{_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS}") as connection:
             yield connection
     except psycopg.Error:
         # libpq errors can contain the DSN, usernames and server-supplied text.
@@ -225,7 +237,7 @@ def _check_acceptance_bindings(connection) -> None:
 def open_database(dsn: str):
     """Validate the installed foundation before any listener or worker exists."""
     expected = migration_files()
-    with _connect(dsn) as connection:
+    with _connect(dsn, application_name="geniusnew-core") as connection:
         with connection.transaction():
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             _check_history(_history(connection), expected, complete=True)
@@ -432,7 +444,7 @@ class PostgresAcceptanceLedger(AcceptanceLedger):
 def migrate(dsn: str) -> None:
     """Apply only a known missing suffix; never rewrite history or repair damage."""
     expected = migration_files()
-    with _connect(dsn) as connection:
+    with _connect(dsn, application_name="geniusnew-migrate") as connection:
         # Install the known suffix under the migration lock; DDL, grants and
         # history commit together.
         with connection.transaction():
@@ -635,7 +647,7 @@ class PostgresPendingJobs(PendingJobs):
             # without its audit event would violate the B6 atomicity boundary.
             # Expired rows stay but hold no slot, so abandoned jobs cannot fill
             # the bound for good.
-            connection.execute("SELECT pg_advisory_xact_lock(513812742)")
+            connection.execute("SELECT pg_advisory_xact_lock(%s)", (_PENDING_LOCK,))
             if connection.execute("SELECT count(*) FROM public.pending_jobs WHERE expires_at > %s",
                                   (now,)).fetchone()[0] >= _MAX_PENDING:
                 _fail("too many jobs are waiting for approval")
@@ -738,6 +750,15 @@ class PostgresApprovalStore(ApprovalStore):
             if connection.execute("SELECT 1 FROM public.approval_tokens WHERE token_digest=%s",
                                   (record.token_digest.hex(),)).fetchone():
                 _fail("approval token collision")
+            # The job row lock serializes approvers across service instances.
+            # A lost response may be replaced only after its raw token expires.
+            if connection.execute(
+                    "SELECT 1 FROM public.approval_tokens t "
+                    "JOIN public.approval_records r ON r.token_digest=t.token_digest "
+                    "AND r.record_hash=t.current_record_hash "
+                    "WHERE r.scope=%s AND r.state='GRANTED' AND r.expires_at>%s LIMIT 1",
+                    (canonical(scope.to_dict()), now)).fetchone():
+                _fail("pending job already has an active approval grant")
             self._insert(connection, record)
             connection.execute("INSERT INTO public.approval_tokens VALUES (%s,%s)",
                                (record.token_digest.hex(), record.record_hash))

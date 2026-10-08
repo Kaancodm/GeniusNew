@@ -77,14 +77,16 @@ def _run_service(config: ServiceConfig, *, job_ledger: JobLedger,
         anchor = AnchorClient(socket_path=config.anchor_socket,
                               reply_public_key=config.anchor_reply_public_key)
         service = build(root_secret=config.root_secret, policy=config.policy,
-                        principals=config.principals, workers=config.workers,
+                        principals=config.principals, approvers=config.approvers,
+                        workers=config.workers,
                         anchor=anchor, limits=config.limits, job_ledger=job_ledger,
                         acceptance_ledger=acceptance_ledger,
                         database_connection=database_connection,
                         audit_chain_factory=audit_chain_factory)
     else:
         service = build(root_secret=config.root_secret, policy=config.policy,
-                        principals=config.principals, workers=config.workers,
+                        principals=config.principals, approvers=config.approvers,
+                        workers=config.workers,
                         anchor_state=config.anchor_state, limits=config.limits,
                         job_ledger=job_ledger, acceptance_ledger=acceptance_ledger,
                         database_connection=database_connection,
