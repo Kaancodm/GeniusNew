@@ -186,6 +186,12 @@ class ProtectCriticalBoundaryTest(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertEqual(decision(self.call("Bash", {"command": command})), "ask")
 
+    def test_existing_literal_shell_denials_are_not_weakened(self):
+        for command in ("cat .env", "cat server.pem", "cat db-dsn.txt",
+                        "echo change > .git/config", "echo change > .claude/settings.json"):
+            with self.subTest(command=command):
+                self.assertEqual(decision(self.call("Bash", {"command": command})), "deny")
+
     def test_symlinks_cannot_hide_protected_or_external_targets(self):
         (self.root / "alias").symlink_to(self.root / ".claude", target_is_directory=True)
         (self.root / "external").symlink_to(self.root.parent, target_is_directory=True)

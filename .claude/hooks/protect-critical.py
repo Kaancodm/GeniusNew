@@ -63,6 +63,13 @@ def matches(path: str, pattern: str) -> bool:
     return pattern.startswith("**/") and matches(path, pattern[3:])
 
 
+def command_mentions(command: str, pattern: str) -> bool:
+    # Keep the existing deny heuristic as an additional refusal, never as
+    # evidence that another shell command is safe to execute without approval.
+    literal = pattern.replace("**/", "").replace("**", "").replace("*", "").strip("/")
+    return bool(literal) and literal.lower() in command.lower()
+
+
 def path_decisions(raw: str, cwd: Path, rules: list[tuple[str, str]]) -> set[str]:
     path = Path(raw)
     if not path.is_absolute():
@@ -115,6 +122,10 @@ def main() -> int:
         command = tool_input.get("command")
         if not isinstance(command, str) or not command.strip():
             raise ValueError("Missing shell command")
+        if any(command_mentions(command, pattern) for mode, pattern in rules if mode == "deny"):
+            decisions.add("deny")
+        if command_mentions(command, ".claude") or command_mentions(command, ".git/"):
+            decisions.add("deny")
     if tool_name not in PATH_WRITE_TOOLS:
         # Shell indirection, git flags, interpreters and MCP tools cannot be
         # classified as read-only from command text or tool names alone.

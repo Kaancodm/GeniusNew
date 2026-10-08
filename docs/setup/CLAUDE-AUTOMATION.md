@@ -12,7 +12,7 @@ ohne Guard-Entscheidung bleiben Claudes übrige Berechtigungen wirksam.
 | --- | --- |
 | `Read`, `Grep`, `Glob` | Lesende Standard-Tools; keine zusätzliche Schreibfreigabe |
 | `Write`, `Edit`, `NotebookEdit` | Pfade prüfen; normale Projektdateien passieren die zusätzliche Prüfung |
-| `Bash` | Jeder Befehl braucht `ask`, auch Interpreter, Shell-Indirektion und Git-Befehle wie `commit`, `reset`, `checkout`, `rebase`, `config` |
+| `Bash` | Jeder Befehl braucht mindestens `ask`, auch Interpreter, Shell-Indirektion und Git-Befehle wie `commit`, `reset`, `checkout`, `rebase`, `config`; erkennbare gesperrte Pfade ergeben `deny` |
 | Andere Tools, einschließlich `MultiEdit`, `Task`, `Agent` und aller `mcp__…`-Tools | `ask`, weil ihre Schreibwirkung nicht aus dem Namen oder einem Pfadfeld beweisbar ist |
 
 Direkte Schreibpfade unter `.claude/` und `.git/` sowie das Projektverzeichnis selbst
@@ -37,7 +37,9 @@ python3 -W error::ResourceWarning -m unittest tests/test_claude_protect_critical
 Dieser Hook ist eine zusätzliche Freigabeprüfung, keine Shell- oder Dateisystem-Sandbox.
 Ein freigegebener Shell-/MCP-Aufruf kann Dateien verändern, einschließlich der Hooks;
 die Freigabe muss deshalb den ganzen Aufruf berücksichtigen. Es gibt keine automatische
-Freigabe anhand von Shell-Text oder Regex-Heuristiken. Eine Dateisystemänderung zwischen
+Freigabe anhand von Shell-Text oder Regex-Heuristiken. Die bestehende Prüfung auf
+wörtlich enthaltene gesperrte Pfade bleibt als zusätzliche Ablehnung erhalten; sie
+beweist keine Abwesenheit weiterer Dateizugriffe. Eine Dateisystemänderung zwischen
 Pfadprüfung und Tool-Ausführung kann ein Hook allein nicht verhindern. Auch der Ausfall
 des Interpreters vor Hook-Start, `SIGKILL`, eine deaktivierte Hook-Konfiguration oder
 unterschiedliche Tool-/Hook-Semantik des Clients liegen außerhalb seines Nachweises.
