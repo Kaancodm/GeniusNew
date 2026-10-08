@@ -6,7 +6,8 @@
 [service]
 # Loopback only. TLS, rate limiting and the public address belong to a
 # reverse proxy on the same host (docs/ROADMAP-V02.md gate C4).
-listen_host = "127.0.0.1"
+# Set a literal loopback address only in the private installed copy.
+listen_host = "<CORE_LOOPBACK>"
 listen_port = 8080
 # A regular file owned by the service user, mode 0600, at least 32 random bytes,
 # used exactly as stored. For example: head -c 32 /dev/urandom > root_secret
@@ -18,6 +19,9 @@ anchor_socket = "/run/geniusnew-anchor/anchor.sock"
 anchor_reply_public_key = "<64 lowercase hex characters>"
 # Private UTF-8 libpq connection string file, owned by the service user, mode 0600.
 # Keep it outside the repository and worker allowlist (like root_secret).
+# Same host: explicit host socket directory, dbname and user; peer, no password.
+# Remote: explicit host/dbname/user plus verify-full, private CA and passfile.
+# See OPERATIONS-C5-DRAFT.md; a service-only DSN fails the current parser.
 database_dsn_file = "/etc/geniusnew/database_dsn"
 
 [service.limits]
