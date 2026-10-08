@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import urllib.request
 
@@ -29,10 +30,10 @@ class WorkflowRefused(SystemExit):
     """The launcher cannot establish an authorized isolated task environment."""
 
 
-def probe(argv: list[str], timeout: int = 8) -> tuple[int, str]:
+def probe(argv: list[str], timeout: int = 8, *, include_stderr: bool = False) -> tuple[int, str]:
     try:
         result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
-        return result.returncode, result.stdout
+        return result.returncode, result.stdout + (result.stderr if include_stderr else "")
     except (OSError, subprocess.TimeoutExpired):
         return 125, ""
 
@@ -96,8 +97,18 @@ def session_name(tool: str, path: Path, review: bool = False) -> str:
 
 
 def tmux_base() -> list[str]:
+    if RUNTIME.is_symlink():
+        raise WorkflowRefused("Sitzungsverzeichnis darf kein symbolischer Link sein.")
     RUNTIME.mkdir(parents=True, exist_ok=True, mode=0o700)
+    info = RUNTIME.stat()
+    if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise WorkflowRefused("Sitzungsverzeichnis braucht eigenen Besitzer und Modus 0700.")
     return ["tmux", "-S", str(RUNTIME / "tmux.sock")]
+
+
+def local_open(request: object, *, timeout: int):
+    """Ollama traffic must stay on loopback even with ambient proxy settings."""
+    return urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=timeout)
 
 
 def start(tool: str, raw: str, review: bool, dry_run: bool) -> None:
@@ -142,7 +153,7 @@ def status() -> None:
         ("Cursor", ["cursor-agent", "status"]),
         ("GitHub", ["gh", "auth", "status"]),
     ):
-        rc, output = probe(command)
+        rc, output = probe(command, include_stderr=True)
         ok = rc == 0 and not re.search(r"not (?:logged|authenticated)", output, re.I)
         print(f"{label}: {'Anmeldung erkannt' if ok else 'Anmeldung ungeprüft'}; Kontingent ungeprüft")
     for label, path in (
@@ -151,7 +162,7 @@ def status() -> None:
     ):
         print(f"{label}: {'Anmeldedatei vorhanden' if path.is_file() else 'Anmeldung fehlt'}")
     try:
-        with urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=3) as response:
+        with local_open("http://127.0.0.1:11434/api/tags", timeout=3) as response:
             models = [m["name"] for m in json.load(response).get("models", [])]
         print("Lokale KI: " + ", ".join(models))
     except (OSError, ValueError):
@@ -206,7 +217,7 @@ def main() -> None:
                                        "num_thread": 4}}).encode()
         request = urllib.request.Request("http://127.0.0.1:11434/api/generate", data,
                                          headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(request, timeout=180) as response:
+        with local_open(request, timeout=180) as response:
             result = json.load(response)
         if result.get("error"):
             raise WorkflowRefused("Lokale KI: " + str(result["error"]))

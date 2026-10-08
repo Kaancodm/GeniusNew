@@ -2,7 +2,9 @@
 
 ## Autonomer Dev-Workflow (Kaan, 08.10.2026)
 
-Für Entwicklungswerkzeuge und Routinefreigaben gilt vorrangig [docs/DEV-AUTOMATION.md](docs/DEV-AUTOMATION.md).
+Für Entwicklungswerkzeuge ergänzt [docs/DEV-AUTOMATION.md](docs/DEV-AUTOMATION.md)
+die Arbeitsbefugnis. Die harten Regeln dieses Dokuments sowie verpflichtende CI-,
+Security- und DB-Reviews werden dadurch weder ersetzt noch abgeschwächt.
 Der Entwicklungsauftrag erlaubt reversible Arbeit bis zum geprüften Draft-PR ohne
 wiederholte GO-Fragen. Eine Rollenbezeichnung erzeugt keine zusätzliche Wartefreigabe.
 Gezielte Freigaben gelten für Produktion, Zugänge, Secrets, main und irreversible Aktionen.

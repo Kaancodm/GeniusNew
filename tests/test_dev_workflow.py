@@ -120,7 +120,7 @@ class WorkspaceChecks(unittest.TestCase):
         with patch.object(workflow, "RUNTIME", self.state), \
                 patch.object(workflow, "argv_for", return_value=(["cat"], dict(os.environ))):
             workflow.start("codex", str(self.repo), False, False)
-            with self.assertRaises(workflow.WorkflowRefused):
+            with self.assertRaisesRegex(workflow.WorkflowRefused, "Sitzung vorhanden: genius-workflow attach"):
                 workflow.start("codex", str(self.repo), False, False)
 
     def test_all_fetch_push_and_rewritten_destinations_are_validated(self):
@@ -176,10 +176,39 @@ class WorkspaceChecks(unittest.TestCase):
 
     def test_local_ai_reported_error_is_refused_without_network(self):
         with patch.object(sys, "argv", ["workflow", "ai", "synthetic prompt"]), \
-                patch.object(workflow.urllib.request, "urlopen",
+                patch.object(workflow, "local_open",
                              return_value=io.BytesIO(b'{"error":"synthetic failure"}')), \
                 self.assertRaises(workflow.WorkflowRefused):
             workflow.main()
+
+    def test_linked_master_branch_is_refused(self):
+        self.git("switch", "-q", "-c", "master")
+        with self.assertRaises(workflow.WorkflowRefused):
+            workflow.workspace(str(self.repo))
+
+    def test_runtime_symlink_or_public_permissions_are_refused(self):
+        target = Path(self.temp.name) / "other-runtime"
+        target.mkdir(mode=0o700)
+        self.state.symlink_to(target)
+        with patch.object(workflow, "RUNTIME", self.state), self.assertRaises(workflow.WorkflowRefused):
+            workflow.tmux_base()
+        self.state.unlink()
+        self.state.mkdir(mode=0o755)
+        with patch.object(workflow, "RUNTIME", self.state), self.assertRaises(workflow.WorkflowRefused):
+            workflow.tmux_base()
+
+    def test_local_requests_disable_environment_proxies(self):
+        with patch.dict(os.environ, {"HTTP_PROXY": "http://proxy.invalid:8080"}), \
+                patch.object(workflow.urllib.request, "build_opener") as build:
+            workflow.local_open("http://127.0.0.1:11434/api/tags", timeout=3)
+            self.assertEqual(build.call_args.args[0].proxies, {})
+            build.return_value.open.assert_called_once_with("http://127.0.0.1:11434/api/tags", timeout=3)
+
+    def test_auth_probe_can_observe_failure_on_stderr(self):
+        rc, output = workflow.probe([sys.executable, "-c", "import sys; print('not logged in', file=sys.stderr)"],
+                                    include_stderr=True)
+        self.assertEqual(rc, 0)
+        self.assertIn("not logged in", output)
 
 
 if __name__ == "__main__":

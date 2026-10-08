@@ -56,11 +56,13 @@ Projekts; niemand sonst schreibt sie.
 
 **Quellen in NotebookLM** (Notebook „GeniusNew“): `docs/STATUS.md`,
 `docs/DECISIONS.md`, `docs/DATABASE.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`,
-`docs/COLLABORATION.md`, `AGENTS.md`. Das Repository ist aktuell (GitHub-Stand 07.10.2026) **privat**: Raw-Links auf
-`raw.githubusercontent.com` liefern ohne Anmeldung HTTP 404 und sind **kein** Verfahren.
-Der Weg sind ausdrücklich ausgewählte Datei-Uploads (nächster Abschnitt).
+`docs/COLLABORATION.md`, `AGENTS.md`. Das Repository ist laut GitHub-Metadaten am
+08.10.2026 **öffentlich** (`private: false`, `visibility: public`). Die ältere Angabe
+„privat“ ist überholt. Für NotebookLM bleibt der festgelegte Weg ausdrücklich
+ausgewählte, geprüfte Datei-Uploads (nächster Abschnitt); die öffentliche Sichtbarkeit
+autorisiert keinen Upload und keine Änderung der Repository-Sichtbarkeit.
 
-### NotebookLM-Quellenpaket (Verfahren für das private Repository)
+### NotebookLM-Quellenpaket (geprüfte Datei-Auswahl)
 
 Die Beschreibung autorisiert keinen tatsächlichen Upload; jeder Upload ist Kaans Handlung.
 
