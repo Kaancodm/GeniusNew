@@ -114,7 +114,8 @@ class ControlDeckTest(unittest.TestCase):
             self.assertEqual(gates[gate]["status"], "green")
         self.assertEqual(gates["C5"]["status"], "red")
         for gate in ("B4", "B5"):
-            self.assertIn("erforderlicher Claude-DB-Review nicht nachgewiesen", gates[gate]["detail"])
+            self.assertIn("erforderlicher Claude-DB-Review am PR-Head nicht nachgewiesen", gates[gate]["detail"])
+            self.assertIn("Nachprüfung auf main 7f81e24 dokumentiert", gates[gate]["detail"])
             self.assertNotIn("vorhanden", gates[gate]["detail"])
         state = snapshot["project"]
         self.assertGreater(state["merged_gates"],

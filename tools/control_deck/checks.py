@@ -285,7 +285,8 @@ def snapshot(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
             status = "yellow"
         if implementation_status == "green" and review_pr:
             detail = (f"PR #{review_pr} gemergt; "
-                      "HOLD: erforderlicher Claude-DB-Review nicht nachgewiesen")
+                      "HOLD: erforderlicher Claude-DB-Review am PR-Head nicht nachgewiesen; "
+                      "Nachprüfung auf main 7f81e24 dokumentiert, ersetzt dieses Gate nicht")
         elif implementation_status == "green" and gate in PENDING_OPERATIONS:
             detail = PENDING_OPERATIONS[gate]
         else:
