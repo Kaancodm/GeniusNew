@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "task_id": "dev-workflow-test-001",
+  "repository": "Kaancodm/GeniusNew",
+  "base_sha": "62b6d1966da5e30fe71f230629a48dea369ae62c",
+  "goal": "Prüfe den Entwicklungsstarter und erstelle einen Bericht ohne Produktionsänderungen.",
+  "deliverable": "review.md",
+  "operation": "read_only_review",
+  "primary_tool": "gemini-a",
+  "fallback_tool": "claude",
+  "approval_required_for": [
+    "main_merge",
+    "production_deploy",
+    "public_publish",
+    "credentials",
+    "ssh_firewall",
+    "production_database",
+    "irreversible_delete"
+  ],
+  "max_attempts": 2,
+  "status": "prepared_not_connected"
+}

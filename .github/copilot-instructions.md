@@ -1,5 +1,14 @@
 # Copilot-Anweisungen für GeniusNew
 
+## Autonomer Dev-Workflow (Kaan, 08.10.2026)
+
+Für Entwicklungswerkzeuge und Routinefreigaben gilt vorrangig [../docs/DEV-AUTOMATION.md](../docs/DEV-AUTOMATION.md).
+Der Entwicklungsauftrag erlaubt reversible Arbeit bis zum geprüften Draft-PR ohne
+wiederholte GO-Fragen. Eine Rollenbezeichnung erzeugt keine zusätzliche Wartefreigabe.
+Gezielte Freigaben gelten für Produktion, Zugänge, Secrets, main und irreversible Aktionen.
+Die tatsächlichen Runtime-Verträge und fachlichen CI-/Review-Gates gelten weiter.
+
+
 Vollständige Regeln: `AGENTS.md`. Rollen und Merge-Regeln: `docs/COLLABORATION.md`.
 Projektstand: `docs/STATUS.md`. Verbindlich sind der tatsächliche Code, `SECURITY.md`,
 Tests und CI am angegebenen Commit; Pläne und Quellenexporte können veraltet sein.

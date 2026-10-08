@@ -1,5 +1,14 @@
 # AGENTS.md — Arbeitsanweisungen für KI-Assistenten
 
+## Autonomer Dev-Workflow (Kaan, 08.10.2026)
+
+Für Entwicklungswerkzeuge und Routinefreigaben gilt vorrangig [docs/DEV-AUTOMATION.md](docs/DEV-AUTOMATION.md).
+Der Entwicklungsauftrag erlaubt reversible Arbeit bis zum geprüften Draft-PR ohne
+wiederholte GO-Fragen. Eine Rollenbezeichnung erzeugt keine zusätzliche Wartefreigabe.
+Gezielte Freigaben gelten für Produktion, Zugänge, Secrets, main und irreversible Aktionen.
+Die tatsächlichen Runtime-Verträge und fachlichen CI-/Review-Gates gelten weiter.
+
+
 Gilt für jeden Assistenten, der in diesem Repository arbeitet: Claude Code, ChatGPT /
 Codex, GitHub Copilot, Gemini, Kiro. **Wer was macht, steht in `docs/COLLABORATION.md`:**
 Codex setzt Kerncode um und mergt, Gemini Pro prüft (Antigravity- oder Abacus-CLI),
