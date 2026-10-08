@@ -8,6 +8,9 @@ Tests, Commits und Draft-PRs auf Arbeitsbranches laufen ohne wiederholte GO-Frag
 Die zuständige Rolle darf innerhalb des Auftrags selbst umsetzen; die Rollenmatrix
 beschreibt die bevorzugte Arbeitsteilung und verursacht keine zusätzliche Wartefreigabe.
 Ein Implementierer pro Branch; keine fremden Änderungen überschreiben.
+Implementierer und Freigeber bleiben getrennt: Kein Werkzeug gibt seine eigene
+Arbeit frei. Ein Werkzeugwechsel bei Kontingentmangel ersetzt weder ein unabhängiges
+Review noch ein verpflichtendes Security- oder DB-Review.
 
 ## Weiterarbeiten
 Normale Unklarheiten mit einer knappen Annahme lösen. Bei nicht sicherheitsrelevanten

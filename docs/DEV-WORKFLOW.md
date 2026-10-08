@@ -6,23 +6,22 @@ Basis: main 62b6d1966da5e30fe71f230629a48dea369ae62c.
 Alle Aussagen „geprüft“ beziehen sich auf die hier genannten Prüfungen, nicht auf frühere Chats.
 
 ## Arbeitsteilung und Anschlüsse
-| Werkzeug | Aufgabe | Nachgewiesener Stand | Noch nötig |
-| --- | --- | --- | --- |
-| Debian-Server | Repo, Tests, KI-Sitzungen, lokale KI | Desktop Commander erreichbar; 8 CPUs, 16 GB RAM | Regel-/Starter-PR prüfen |
-| Tailscale | Privater Gerätezugang | Server läuft; Laptop und iPhone im Status online | iPad verbinden, A53 im selben Tailnet anmelden |
-| Lokale KI | Kleine Texte, Codeentwürfe, Offline-Ersatz | Ollama 0.40.1; qwen2.5-coder:3b; echte Antwort LOCAL_AI_OK | Qualität je Aufgabe separat prüfen |
-| ChatGPT / Codex | Planung und Umsetzung | Codex 0.157.1; Anmeldung erkannt | Kontingent und reale Projektaufträge separat prüfen |
-| Claude | Doku und unabhängiger Review | Claude Code 2.1.287; Anmeldung erkannt | Kontingent separat prüfen |
-| Gemini A | Review | Gemini CLI 0.61.0; bestehende OAuth-Datei | Pro-Berechtigung/Modell und Kontingent prüfen |
-| Gemini B | Recherche, zweite lizenzierte Sitzung | Eigenes Profil vorbereitet; keine Credentials kopiert | Zweites Google-Konto persönlich anmelden |
-| Cursor | Editor/Agent für Entwicklung | Server-Agent vorhanden und Anmeldung erkannt | Laptop-Verbindung separat prüfen |
-| Warp | Terminal und Agent | CLI v0.2026.09.30.08.29.stable_01 installiert; --version/--help PASS | Eigene Warp-Anmeldung |
-| Gumloop Pro | Cloud-Koordination und Trigger | Abo von Kaan genannt; Zugang hier nicht geprüft | Konto verbinden, einen Test-Agenten und Test-Trigger prüfen |
-| HARPA | Browser-Aufgaben | API-/Browser-Mechanismus in offizieller Doku bestätigt | Desktop-Browser und aktueller Schlüssel, ein harmloser Test |
-| Framer | Landingpage und CMS | Server API offiziell vorhanden | Projekt wählen und Projektzugang prüfen |
-| Replit | Prototypen/Cloud-Arbeitsbranch | GitHub-Integration offiziell dokumentiert | GitHub mit Replit verbinden, Arbeitsbranch wählen |
-| Microsoft 365 Premium | Dokumente, Tabellen, Copilot | Abo von Kaan genannt | Konto/OneDrive verbinden; Agent-Funktionen je Konto prüfen |
-| CodeRabbit | PR-Review | In bestehendem PR #134 aktiv | Neuen PR prüfen lassen |
+
+Die öffentliche Anleitung beschreibt das Verfahren. Rechnerinventar, Gerätezugänge,
+Anmeldestatus, persönliche Pfade und tatsächlich installierte CLI-Versionen gehören
+in private Betriebsnachweise und werden hier nicht veröffentlicht.
+
+| Werkzeug | Aufgabe | Nachweis vor Verwendung |
+| --- | --- | --- |
+| Entwicklungsrechner / Tailscale | Repo, Tests, getrennte KI-Sitzungen, privater Zugang | Berechtigung und Erreichbarkeit privat prüfen |
+| Lokale KI | Einfache Vorprüfungen und Entwürfe | Echte Antwort und Qualität für die konkrete Aufgabe prüfen |
+| Codex | Verantwortlicher Implementierer | Authentifizierung, Kontingent und isolierten Arbeitsbranch prüfen |
+| Claude | Unabhängiger Security-/DB-Review | Berechtigung und Kontingent prüfen; keine eigene Arbeit freigeben |
+| Gemini A / B | Unabhängige Vorprüfung, getrennte lizenzierte Profile | Persönliche Anmeldung, Pro-Modell und Kontingent je Profil prüfen |
+| Cursor / Warp | Optionaler Editor bzw. Terminal-Agent | Kompatible CLI und persönliche Berechtigung separat prüfen |
+| CodeRabbit | PR-Review | Tatsächlichen Review am relevanten Commit prüfen |
+| Gumloop / HARPA | Optionale Cloud-Koordination bzw. Browser-Aufgaben | Konkreten Auftrag, Verbindung und Berechtigung prüfen |
+| Framer / Replit / Microsoft 365 | Optionale weitere Werkzeuge | Zugang und konkreten Auftrag separat prüfen |
 
 Die Abo-Existenz bestätigt keinen API-Zugang, kein Kontingent und keine Verbindung.
 Gemini CLI nutzt den offiziellen Google-Login; kein OAuth-Token wird für einen Drittanbieter
@@ -33,7 +32,7 @@ Produktiv-Publishing von Framer/Replit ist ein eigener Freigabeschritt.
 
 ## Serverbefehle
 Diese Befehle auf dem Debian-Server im Terminal/Termius ausführen.
-Der Server bleibt der Arbeitsort; das iPad ist Steuergerät, der Laptop ist optionaler Editor.
+Der autorisierte Entwicklungsrechner bleibt der Arbeitsort; andere Geräte können ihn steuern.
 
 ~~~bash
 genius-workflow status
@@ -44,8 +43,8 @@ genius-workflow new meine-aufgabe
 Der letzte Befehl gibt den vollständigen Worktree-Pfad aus. Beispiel:
 
 ~~~bash
-genius-workflow start codex /home/kaan/tasks/geniusnew/workflow/meine-aufgabe
-genius-workflow attach codex /home/kaan/tasks/geniusnew/workflow/meine-aufgabe
+genius-workflow start codex "$HOME/tasks/geniusnew/workflow/meine-aufgabe"
+genius-workflow attach codex "$HOME/tasks/geniusnew/workflow/meine-aufgabe"
 ~~~
 
 Claude startet mit automatischer Annahme von Dateibearbeitungen. Cursor verwendet
@@ -56,10 +55,10 @@ Der alte Befehl genius-dev wird nicht überschrieben.
 Review oder zweites Gemini-Konto:
 
 ~~~bash
-genius-workflow start claude /home/kaan/tasks/geniusnew/workflow/meine-aufgabe --review
-genius-workflow attach claude /home/kaan/tasks/geniusnew/workflow/meine-aufgabe --review
-genius-workflow start gemini-b /home/kaan/tasks/geniusnew/workflow/meine-aufgabe
-genius-workflow attach gemini-b /home/kaan/tasks/geniusnew/workflow/meine-aufgabe
+genius-workflow start claude "$HOME/tasks/geniusnew/workflow/meine-aufgabe" --review
+genius-workflow attach claude "$HOME/tasks/geniusnew/workflow/meine-aufgabe" --review
+genius-workflow start gemini-b "$HOME/tasks/geniusnew/workflow/meine-aufgabe"
+genius-workflow attach gemini-b "$HOME/tasks/geniusnew/workflow/meine-aufgabe"
 ~~~
 
 Gemini A verwendet das vorhandene Profil. B verwendet GEMINI_CLI_HOME unter
@@ -75,14 +74,14 @@ akzeptiert für `origin` ausschließlich `Kaancodm/GeniusNew` auf
 `github.com` über HTTPS, `ssh://git@github.com/` oder `git@github.com:`.
 
 ## Lokale KI
-Das Modell wird auf CPUs ausgeführt. Eine GPU wurde auf diesem Server nicht nachgewiesen.
+Das referenzierte Modell kann auf CPUs ausgeführt werden. Die tatsächliche Ausstattung wird privat geprüft.
 Die kleine KI ist ein Ersatz für einfache Entwürfe, kein gleichwertiger Ersatz für
 Codex/Claude oder ein unabhängiger Sicherheitsprüfer.
 
 - API: nur 127.0.0.1:11434.
 - Modell: qwen2.5-coder:3b.
 - Limits: 4 CPU-Kerne, 6 GB RAM, 2048 Token Kontext, ein geladenes Modell.
-- Benutzerdienst: genius-local-ai.service; Autostart für Benutzer kaan.
+- Benutzerdienst: genius-local-ai.service; Benutzerdienst-Vorlage; Aktivierung braucht eine eigene Freigabe.
 - Kein zusätzlicher Cloud-Aufruf für lokale Modellantworten.
 
 Auf dem Server:
@@ -128,8 +127,8 @@ Keine bestehenden Tools oder Daten wurden gelöscht.
 - [Replit GitHub](https://docs.replit.com/replit-workspace/workspace-features/version-control)
 - [Microsoft Agents](https://support.microsoft.com/en-us/microsoft-365-copilot/get-started-with-agents-in-the-microsoft-365-copilot-app)
 
-## Installationsnachweis
-Ollama-Archiv: v0.40.1, SHA-256 a7aebbe3dd76ccf1351a56a3e57218ad4863cb5f9a9938c58de87a37555e355d, vor Ausführung geprüft.
+## Referenzierte Installationsartefakte
+Diese Angaben identifizieren Artefakte und sind kein Nachweis einer aktuellen Installation.
+Ollama-Archiv: v0.40.1, SHA-256 a7aebbe3dd76ccf1351a56a3e57218ad4863cb5f9a9938c58de87a37555e355d.
 Modell-Digest: f72c60cabf6237b07f6e632b2c48d533cef25eda2efbd34bed21c5e9c01e6225.
-Echte Testantwort LOCAL_AI_OK in 8,1 Sekunden; kein Qualitätsbenchmark.
-Warp: offizieller Benutzer-Installer geprüft; installierte CLI-Version v0.2026.09.30.08.29.stable_01.
+Installer-Integrität, Kompatibilität und tatsächliche CLI-Version werden vor Verwendung separat geprüft.

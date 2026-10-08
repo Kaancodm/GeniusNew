@@ -3,9 +3,9 @@ Description=GeniusNew local development AI
 After=network-online.target
 
 [Service]
-ExecStart=/home/kaan/.local/share/genius-workflow/ollama/0.40.1/bin/ollama serve
+ExecStart=%h/.local/share/genius-workflow/ollama/0.40.1/bin/ollama serve
 Environment=OLLAMA_HOST=127.0.0.1:11434
-Environment=OLLAMA_MODELS=/home/kaan/.local/share/genius-workflow/models
+Environment=OLLAMA_MODELS=%h/.local/share/genius-workflow/models
 Environment=OLLAMA_NUM_PARALLEL=1
 Environment=OLLAMA_MAX_LOADED_MODELS=1
 Environment=OLLAMA_CONTEXT_LENGTH=2048

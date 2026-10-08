@@ -9,6 +9,9 @@ Der Entwicklungsauftrag erlaubt reversible Arbeit bis zum geprüften Draft-PR oh
 wiederholte GO-Fragen. Eine Rollenbezeichnung erzeugt keine zusätzliche Wartefreigabe.
 Gezielte Freigaben gelten für Produktion, Zugänge, Secrets, main und irreversible Aktionen.
 Die tatsächlichen Runtime-Verträge und fachlichen CI-/Review-Gates gelten weiter.
+Implementierer und Freigeber bleiben getrennt: Kein Werkzeug gibt seine eigene
+Arbeit frei. Ein Werkzeugwechsel bei Kontingentmangel ersetzt weder ein unabhängiges
+Review noch ein verpflichtendes Security- oder DB-Review.
 
 
 Gilt für jeden Assistenten, der in diesem Repository arbeitet: Claude Code, ChatGPT /
