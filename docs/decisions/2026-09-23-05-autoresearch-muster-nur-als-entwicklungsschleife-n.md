@@ -1,4 +1,4 @@
-# autoresearch-Muster nur als Entwicklungsschleife, nicht als Produktfun
+# autoresearch-Muster nur als Entwicklungsschleife
 
 - Datum: 23.09.2026
 - Quelle: `docs/AUTORESEARCH.md`

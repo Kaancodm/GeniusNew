@@ -30,7 +30,7 @@ GeniusNew ist ein Zero-Trust-Agentensystem in Python. Regeln: `AGENTS.md`, Rolle
 8. **Wissensblock:** Enthält die Beschreibung eines Codex-PRs den ausgefüllten Block
    „## Für die Wissensdatenbank“? Fehlt er: *High*. Ändert ein Codex-PR
    `docs/STATUS.md`? Diese Datei gehört Claude Code: *Medium*. Ändert er
-   `docs/COLLABORATION.md`, `docs/DECISIONS.md` oder `docs/DATABASE.md`? Diese Dateien
+   `docs/COLLABORATION.md`, `docs/DECISIONS.md`, `docs/decisions/` oder `docs/DATABASE.md`? Diese Dateien
    gehören Claude Code beziehungsweise ChatGPT (im Auftrag von Kaan), nicht Codex:
    *High*.
 

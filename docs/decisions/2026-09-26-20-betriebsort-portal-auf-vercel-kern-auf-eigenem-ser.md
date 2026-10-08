@@ -1,4 +1,4 @@
-# Betriebsort: Portal auf Vercel, Kern auf eigenem Server. Datenbank Pos
+# Betriebsort: Portal auf Vercel, Kern auf eigenem Server
 
 - Datum: 26.09.2026
 - Quelle: Issue #44

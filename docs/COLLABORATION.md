@@ -6,7 +6,7 @@ Ziel: So wenig Abstimmung wie möglich. Jede Sache hat **genau einen Verantwortl
 - **Wissen — Projektstand:** `docs/STATUS.md`, geführt von **Claude Code** (seit
   04.10.2026); NotebookLM gibt daraus Auskunft.
 - **Wissen — Regeln und Entscheidungen:** `docs/COLLABORATION.md` (dieses Dokument) und
-  `docs/DECISIONS.md` gehören **ausschließlich Claude Code**.
+  `docs/DECISIONS.md` samt `docs/decisions/` gehören **ausschließlich Claude Code**.
 - **Datenbank im Code:** **Kaan entscheidet** Ziele, Architektur und offene Fragen;
   **ChatGPT erstellt und pflegt `docs/DATABASE.md`** in seinem Auftrag (Schema,
   Migrationen, Persistenzmodell); **Claude Code** reviewt Entwurf und Code
@@ -18,7 +18,7 @@ Ziel: So wenig Abstimmung wie möglich. Jede Sache hat **genau einen Verantwortl
   Überschreibrecht gegenüber allen Werkzeugen.
 - **Entscheidungen:** Kaan. Kaan steht über allen, auch über Claude Code.
 
-**Seit 27.09.2026 (Kaan):** `docs/COLLABORATION.md` und `docs/DECISIONS.md` ändert nur
+**Seit 27.09.2026 (Kaan):** `docs/COLLABORATION.md` und `docs/DECISIONS.md` (samt `docs/decisions/`) ändert nur
 noch Claude Code; kein anderes Werkzeug, auch nicht ChatGPT im Auftrag. Für die
 Datenbank gilt die überarbeitete Fassung von Kaans Entscheidung vom selben Tag: Kaan
 entscheidet Ziele und offene Architekturfragen, schreibt `docs/DATABASE.md` aber nicht
@@ -45,7 +45,7 @@ ein Review abgegeben hat. **Keine Stapel-PRs:** Jeder PR basiert auf `main`. Beg
 | **GitHub Copilot Pro** | Vervollständigung im Editor; Review jedes PRs nach der Checkliste in `.github/copilot-instructions.md` | eigene PRs ohne Auftrag |
 | **Microsoft 365 Copilot** | Berichte, E-Mails, Folien aus dem OneDrive-Ordner `GeniusNew` | Inhalte erfinden, die dort nicht stehen |
 | **Kiro-CLI** | **unabhängige Zweitprüfung für Claudes eigenen Code**: prüft Claude-PRs, die Code oder Skripte ändern, nur lesend im Projektverzeichnis, auf Anforderung von Kaan; Ergebnis als PR-Kommentar im Format „Review GeniusNew“ (unten) | Dateien ändern, Befehle mit Schreibwirkung ausführen, ein Gemini-Pflichtreview oder `Claude DB Review` ersetzen |
-| **Claude Code** | **Ordnung, Struktur und Konfliktlöser zwischen den Plattformen, mit Überschreibrecht:** besitzt `docs/COLLABORATION.md`, `docs/DECISIONS.md` und `docs/STATUS.md` sowie die übrigen Regeln (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.gemini/*`, `docs/HANDOVER.md`); entscheidet Konflikte zwischen Werkzeugen verbindlich; **unabhängiger Security-Reviewer**: reviewt ChatGPTs `docs/DATABASE.md`-Entwurf und Codex' DB-Code-PRs sicherheitstechnisch, ebenso Server-/Deployment-/Netzwerk-Sicherheitsfragen; darf jede Datei korrigieren, auch die anderer Werkzeuge, wenn sie den Regeln oder dem Code widerspricht; **hilft, wenn Codex feststeckt** | Kaans Entscheidungen oder die Ausnahmen überstimmen; die eigene Arbeit selbst freigeben; `docs/DATABASE.md` selbst entwerfen oder Head der Datenbank sein; regulärer Kerncode-Implementierer sein; eigene PRs selbst mergen |
+| **Claude Code** | **Ordnung, Struktur und Konfliktlöser zwischen den Plattformen, mit Überschreibrecht:** besitzt `docs/COLLABORATION.md`, `docs/DECISIONS.md` samt `docs/decisions/` und `docs/STATUS.md` sowie die übrigen Regeln (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.gemini/*`, `docs/HANDOVER.md`); entscheidet Konflikte zwischen Werkzeugen verbindlich; **unabhängiger Security-Reviewer**: reviewt ChatGPTs `docs/DATABASE.md`-Entwurf und Codex' DB-Code-PRs sicherheitstechnisch, ebenso Server-/Deployment-/Netzwerk-Sicherheitsfragen; darf jede Datei korrigieren, auch die anderer Werkzeuge, wenn sie den Regeln oder dem Code widerspricht; **hilft, wenn Codex feststeckt** | Kaans Entscheidungen oder die Ausnahmen überstimmen; die eigene Arbeit selbst freigeben; `docs/DATABASE.md` selbst entwerfen oder Head der Datenbank sein; regulärer Kerncode-Implementierer sein; eigene PRs selbst mergen |
 
 ## Die Wissensdatenbank
 
@@ -219,7 +219,7 @@ Sicherheitsreview.
 **Darf nicht ändern:** `geniusnew/` (Kerncode), Core-Tests, `scripts/refusals.py`,
 `scripts/demo.*`, `SECURITY.md` eigenständig, `requirements.txt`, sowie alle
 Governance- und Wissensdateien (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.gemini/*`,
-`.github/copilot-instructions.md`, `docs/COLLABORATION.md`, `docs/DECISIONS.md`,
+`.github/copilot-instructions.md`, `docs/COLLABORATION.md`, `docs/DECISIONS.md`, `docs/decisions/`,
 `docs/STATUS.md`, `docs/HANDOVER.md`). ChatGPT gibt außerdem nie den eigenen
 DB-Entwurf sicherheitstechnisch frei und mergt nie eigene PRs.
 

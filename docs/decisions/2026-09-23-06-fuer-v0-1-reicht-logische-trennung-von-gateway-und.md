@@ -1,4 +1,4 @@
-# Für v0.1 reicht logische Trennung von Gateway und Orchestrator (ein Pr
+# Für v0.1 genügt logische Trennung von Gateway und Orchestrator
 
 - Datum: 23.09.2026
 - Quelle: `docs/ROADMAP-V01.md` Schritt 13

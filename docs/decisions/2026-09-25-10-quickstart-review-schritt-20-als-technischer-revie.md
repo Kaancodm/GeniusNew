@@ -1,4 +1,4 @@
-# Quickstart-Review (Schritt 20) als technischer Review angenommen, ohne
+# Quickstart-Review (Schritt 20) als technischer Review angenommen
 
 - Datum: 25.09.2026
 - Quelle: `docs/QUICKSTART-REVIEW.md`

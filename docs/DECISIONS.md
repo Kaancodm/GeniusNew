@@ -10,10 +10,12 @@ nicht mehr zu Merge-Konflikten.
 
 ## Regeln
 
-- **Dateiname:** `YYYY-MM-DD-NN-thema.md`; `NN` zählt fortlaufend über alle Dateien
-  (nächste freie Nummer nehmen). Eine Entscheidung ohne Datum trägt `0000-00-00`.
+- **Dateiname:** `YYYY-MM-DD-NN-thema.md`; `NN` (mindestens zweistellig, ab 100 dreistellig)
+  zählt fortlaufend über alle Dateien (nächste freie Nummer nehmen). Das Datum im Namen
+  muss ein echtes Kalenderdatum sein und zu `- Datum:` passen (`0000-00-00` ↔ `—`). Eine Entscheidung ohne Datum trägt `0000-00-00`.
 - **Aufbau:** Titel, `- Datum:`, `- Quelle:`, Abschnitt `## Entscheidung`, Abschnitt
   `## Begründung` (genau diese Reihenfolge; `scripts/decisions_tool.py` liest sie).
+- **Besitz:** `docs/decisions/` gehört wie diese Datei ausschließlich Claude Code.
 - **Zurücknehmen:** Wer eine Entscheidung zurücknimmt, legt eine neue Datei an und
   lässt die alte unverändert stehen.
 - **Alles in einem Dokument:** `python3 scripts/decisions_tool.py` gibt alle

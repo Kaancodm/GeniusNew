@@ -1,4 +1,4 @@
-# Gemini reviewt jeden PR automatisch; Critical/High blockiert; Pflicht-
+# Gemini reviewt jeden PR automatisch; Critical/High blockiert
 
 - Datum: 26.09.2026
 - Quelle: `.gemini/styleguide.md`, `docs/COLLABORATION.md`

@@ -12,7 +12,7 @@ Umsetzung nur mit einem Auftrag (Issue-Formular „Begrenzte Aufgabe“), auf ei
 Branch und als Draft-PR. Umsetzer und Merger für Kerncode ist Codex; ChatGPT übernimmt
 neue Werkzeuge, Server, Infrastruktur und erstellt die Datenbank-Dokumentation
 (`docs/DATABASE.md`) im Auftrag von Kaan; Kaan entscheidet Ziele, Architektur und die
-Freigabe; Claude Code besitzt `docs/COLLABORATION.md` und `docs/DECISIONS.md`,
+Freigabe; Claude Code besitzt `docs/COLLABORATION.md` und `docs/DECISIONS.md` (samt `docs/decisions/`),
 reviewt DB-Entwurf und DB-Code sicherheitstechnisch und löst Konflikte zwischen den
 Werkzeugen.
 

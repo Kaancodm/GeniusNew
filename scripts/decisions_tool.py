@@ -5,18 +5,22 @@ Each decision is its own file, so two pull requests never edit the same line.
 newest first. That is the file to hand to a tool that reads a single source
 (see docs/COLLABORATION.md, NotebookLM source package). Nothing here writes.
 """
+import datetime
 import re
 import sys
 from pathlib import Path
 
 DIR = Path(__file__).resolve().parent.parent / "docs" / "decisions"
-NAME = re.compile(r"^(\d{4}-\d{2}-\d{2})-(\d{2})-[a-z0-9-]+\.md$")
+NAME = re.compile(r"^(\d{4}-\d{2}-\d{2})-(\d{2,})-[a-z0-9-]+\.md$")
 
 
 def load(directory=DIR):
     """Return every decision as a dict, newest first; refuse a malformed file."""
     entries = []
-    for path in sorted(directory.glob("*.md"), reverse=True):
+    paths = sorted(directory.glob("*.md"), reverse=True)
+    if not paths:
+        raise ValueError(f"no decision files in {directory}")
+    for path in paths:
         match = NAME.match(path.name)
         if not match:
             raise ValueError(f"unexpected file name in {directory}: {path.name}")
@@ -27,7 +31,16 @@ def load(directory=DIR):
             text, re.S)
         if not parts:
             raise ValueError(f"malformed decision file: {path.name}")
-        entries.append(parts.groupdict())
+        entry = parts.groupdict()
+        if entry["date"] == "—":
+            expected = "0000-00-00"
+        else:
+            day, month, year = entry["date"].split(".")
+            expected = f"{year}-{month}-{day}"
+            datetime.date(int(year), int(month), int(day))  # a real calendar date
+        if match.group(1) != expected:
+            raise ValueError(f"file name date does not match record date: {path.name}")
+        entries.append(entry)
     return entries
 
 

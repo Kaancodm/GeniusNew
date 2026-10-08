@@ -6,7 +6,7 @@ Codex setzt Kerncode um und mergt, Gemini Pro prüft (Antigravity- oder Abacus-C
 Kiro prüft Claudes eigenen Code, NotebookLM gibt Auskunft, Kaan entscheidet Ziele und
 Architektur, ChatGPT übernimmt neue Werkzeuge, Server-Pflege,
 Infrastruktur und erstellt die Datenbank-Dokumentation (`docs/DATABASE.md`) in Kaans
-Auftrag, Claude Code besitzt `docs/COLLABORATION.md`, `docs/DECISIONS.md` und
+Auftrag, Claude Code besitzt `docs/COLLABORATION.md`, `docs/DECISIONS.md` (samt `docs/decisions/`) und
 `docs/STATUS.md`, reviewt
 den DB-Entwurf und DB-Code sicherheitstechnisch, sorgt für Ordnung und Struktur, löst
 Konflikte zwischen den Plattformen (mit Überschreibrecht) und hilft bei einem Hilferuf.
@@ -92,7 +92,7 @@ bestanden melden.
   Head-SHA; `docs/DATABASE.md` erstellt ChatGPT im Auftrag von Kaan, Claude reviewt den
   Entwurf sicherheitstechnisch, Kaan entscheidet offene Punkte und gibt frei. ChatGPT-
   und Claude-eigene PRs mergt Kaan; keines der beiden mergt selbst.
-- `docs/STATUS.md`, `docs/COLLABORATION.md` und `docs/DECISIONS.md` schreibt nur
+- `docs/STATUS.md`, `docs/COLLABORATION.md` und `docs/DECISIONS.md` (samt `docs/decisions/`) schreibt nur
   Claude Code (Ausnahme bei Konflikten: siehe `docs/COLLABORATION.md`). Wer etwas zum Stand beiträgt, schreibt es in den
   Wissensblock seiner PR-Beschreibung (`docs/COLLABORATION.md`).
 - Kommentare erklären das *Warum* und die Grenze, nicht das *Was*; so wie der
@@ -103,7 +103,7 @@ bestanden melden.
 | Thema | Datei |
 | --- | --- |
 | Projektstand und nächste Schritte (Wissensdatenbank) | `docs/STATUS.md` |
-| Entscheidungen mit Datum und Begründung (Wissensdatenbank) | `docs/DECISIONS.md` |
+| Entscheidungen mit Datum und Begründung (Wissensdatenbank) | `docs/decisions/` (Regeln: `docs/DECISIONS.md`) |
 | Datenbank im Code: Design, Schema, Vorgaben (Entwurf: ChatGPT im Auftrag von Kaan) | `docs/DATABASE.md` (entsteht), `docs/COLLABORATION.md` |
 | Wer macht was, Ablauf, Konflikte und Hilferuf an Claude | `docs/COLLABORATION.md` |
 | Gemini: Kontext und Review-Maßstab | `GEMINI.md`, `.gemini/styleguide.md` |

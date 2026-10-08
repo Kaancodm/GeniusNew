@@ -1,4 +1,4 @@
-# `docs/MIGRATION-MATRIX.md` ist das kanonische Import-Gate; Altprojekt
+# `docs/MIGRATION-MATRIX.md` ist das kanonische Import-Gate
 
 - Datum: 17.09.2026
 - Quelle: `docs/MIGRATION-MATRIX.md`, `SECURITY.md`

@@ -1,4 +1,4 @@
-# Codex setzt um und mergt eigene PRs bei grüner CI; Ausnahmen (neue Abh
+# Codex setzt um und mergt eigene PRs bei grüner CI
 
 - Datum: 26.09.2026
 - Quelle: `AGENTS.md`, `docs/COLLABORATION.md`

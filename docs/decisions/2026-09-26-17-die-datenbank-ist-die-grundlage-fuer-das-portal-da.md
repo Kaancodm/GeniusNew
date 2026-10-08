@@ -1,4 +1,4 @@
-# Die Datenbank ist die **Grundlage für das Portal**. Das Portal wird da
+# Die Datenbank ist die Grundlage für das Portal
 
 - Datum: 26.09.2026
 - Quelle: `docs/COLLABORATION.md`

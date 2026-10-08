@@ -1,4 +1,4 @@
-# Gemini Pro und NotebookLM führen die Wissensdatenbank (`STATUS.md`, `D
+# Gemini Pro und NotebookLM führen die Wissensdatenbank
 
 - Datum: 26.09.2026
 - Quelle: `docs/COLLABORATION.md`

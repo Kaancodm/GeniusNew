@@ -1,4 +1,4 @@
-# Claude Code sorgt für Ordnung und Struktur zwischen den Plattformen, e
+# Claude Code sorgt für Ordnung zwischen den Plattformen
 
 - Datum: 26.09.2026
 - Quelle: `docs/COLLABORATION.md`
