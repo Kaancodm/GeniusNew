@@ -16,6 +16,16 @@ from .harpa_inbox import HarpaPayloadError, snapshot as harpa_snapshot, store as
 STATIC = Path(__file__).with_name("static")
 
 
+def _deny(handler: BaseHTTPRequestHandler, status: int) -> None:
+    """HTTP refusal shape enumerated by the existing mutation guard."""
+    handler.send_error(status)
+
+
+def _refusal() -> None:
+    """Disable ingress when no trustworthy credential is available."""
+    return None
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "GeniusControlDeck/0.1"
 
@@ -24,7 +34,7 @@ class Handler(BaseHTTPRequestHandler):
         # rebinding) and then read /api/mail as same-origin. The Host header is
         # the one thing such a page cannot choose, so it is checked first.
         if self.headers.get("Host") not in self.server.allowed_hosts():
-            self.send_error(421)
+            _deny(self, 421)
             return False
         return True
 
@@ -48,7 +58,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/harpa":
             self._json(harpa_snapshot(self.server.harpa_inbox))
             return
-        self.send_error(404)
+        _deny(self, 404)
 
     def do_POST(self) -> None:
         """Route trusted-host writes through HARPA authentication or action validation."""
@@ -59,24 +69,24 @@ class Handler(BaseHTTPRequestHandler):
             self._harpa()
             return
         if path != "/api/action":
-            self.send_error(404)
+            _deny(self, 404)
             return
         origin = self.headers.get("Origin")
         if origin is not None and origin not in {
                 f"{scheme}://{host}" for host in self.server.allowed_hosts()
                 for scheme in ("http", "https")}:
-            self.send_error(403)
+            _deny(self, 403)
             return
         if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
-            self.send_error(415)
+            _deny(self, 415)
             return
         try:
             size = int(self.headers.get("Content-Length", "0"))
         except ValueError:
-            self.send_error(400)
+            _deny(self, 400)
             return
         if size <= 0 or size > 1024:
-            self.send_error(413)
+            _deny(self, 413)
             return
         try:
             payload = json.loads(self.rfile.read(size))
@@ -84,7 +94,7 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(action, str) or action not in allowed_actions():
                 raise ValueError
         except (json.JSONDecodeError, KeyError, ValueError, TypeError):
-            self.send_error(400)
+            _deny(self, 400)
             return
         self._json(run_action(action, self.server.repo))
 
@@ -96,31 +106,31 @@ class Handler(BaseHTTPRequestHandler):
         """
         token = self.server.harpa_token()
         if token is None or self.server.harpa_inbox is None:
-            self.send_error(404)
+            _deny(self, 404)
             return
         supplied = self.headers.get("Authorization", "")
         if not supplied.isascii() or not hmac.compare_digest(supplied, f"Bearer {token}"):
-            self.send_error(401)
+            _deny(self, 401)
             return
         if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
-            self.send_error(415)
+            _deny(self, 415)
             return
         try:
             size = int(self.headers.get("Content-Length", "0"))
         except ValueError:
-            self.send_error(400)
+            _deny(self, 400)
             return
         if size <= 0 or size > 16384:
-            self.send_error(413)
+            _deny(self, 413)
             return
         try:
             payload = json.loads(self.rfile.read(size))
             result = store_harpa(payload, self.server.harpa_inbox)
         except (json.JSONDecodeError, UnicodeDecodeError, RecursionError, HarpaPayloadError):
-            self.send_error(400)
+            _deny(self, 400)
             return
         except OSError:
-            self.send_error(503)
+            _deny(self, 503)
             return
         self._json(result, status=202)
 
@@ -131,6 +141,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -143,6 +154,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -172,12 +184,14 @@ class Server(ThreadingHTTPServer):
     def harpa_token(self) -> str | None:
         """Read the stripped token, returning None if absent, unreadable, or invalid."""
         if self.harpa_token_file is None:
-            return None
+            return _refusal()
         try:
             token = self.harpa_token_file.read_text(encoding="utf-8").strip()
         except (OSError, UnicodeDecodeError):
             return None
-        return token if 32 <= len(token) <= 256 and token.isascii() and "\n" not in token else None
+        if not (32 <= len(token) <= 256 and token.isascii() and "\n" not in token):
+            return _refusal()
+        return token
 
 
 # Tailscale hands out IPv4 addresses from this range only. On a host whose ISP

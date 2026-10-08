@@ -350,6 +350,39 @@ class HostCheckTest(unittest.TestCase):
         self.assertEqual(self.post_harpa(token="wrong" * 8)[0], 401)
         self.assertFalse(self.deck.harpa_inbox.exists())
 
+    def test_harpa_ingress_refusals_never_store_a_report(self):
+        body = json.dumps({"event_id": "guard", "kind": "monitor", "title": "guard",
+                           "summary": "guard", "source_url": "https://example.test"}).encode()
+        cases = [
+            ({"Content-Type": "application/json"}, body, 401),
+            ({"Content-Type": "text/plain", "Authorization": "Bearer " + "t" * 48}, body, 415),
+            ({"Content-Type": "application/json", "Authorization": "Bearer " + "t" * 48},
+             b" " * 16385, 413),
+            ({"Content-Type": "application/json", "Authorization": "Bearer " + "t" * 48},
+             b"", 413),
+        ]
+        for headers, data, status in cases:
+            with self.subTest(status=status, length=len(data)):
+                self.assertEqual(self.request("POST", "/api/harpa", f"127.0.0.1:{self.port}",
+                                              headers, data)[0], status)
+                self.assertFalse(self.deck.harpa_inbox.exists())
+
+    def test_harpa_missing_short_or_unreadable_credentials_disable_ingress(self):
+        original = self.deck.harpa_token_file
+        for token in ("short", "t" * 257, "t" * 33 + "\n" + "t" * 33):
+            with self.subTest(token_length=len(token)):
+                original.write_text(token)
+                self.assertEqual(self.post_harpa()[0], 404)
+                self.assertFalse(self.deck.harpa_inbox.exists())
+        original.unlink()
+        self.assertEqual(self.post_harpa()[0], 404)
+        self.deck.harpa_token_file = None
+        self.assertEqual(self.post_harpa()[0], 404)
+        original.write_text("t" * 48)
+        self.deck.harpa_token_file = original
+        self.deck.harpa_inbox = None
+        self.assertEqual(self.post_harpa()[0], 404)
+
     def test_harpa_report_is_stored_but_cannot_request_an_action(self):
         """Accept and expose a report while leaving the action runner untouched."""
         status, body = self.post_harpa(payload={
@@ -460,6 +493,20 @@ class HostCheckTest(unittest.TestCase):
         status, _ = self.post_action(f"127.0.0.1:{self.port}", origin="http://attacker.example")
         self.assertEqual(status, 403)
         self.assertEqual(self.actions, [])
+
+    def test_action_route_type_and_size_refusals_precede_execution(self):
+        valid = b'{"action":"git_status"}'
+        for path, content_type, body, expected in (
+            ("/api/unknown", "application/json", valid, 404),
+            ("/api/action", "text/plain", valid, 415),
+            ("/api/action", "application/json", valid + b" " * 1024, 413),
+            ("/api/action", "application/json", b"", 413),
+        ):
+            with self.subTest(path=path, content_type=content_type, length=len(body)):
+                status, _ = self.request("POST", path, f"127.0.0.1:{self.port}",
+                                         {"Content-Type": content_type}, body)
+                self.assertEqual(status, expected)
+                self.assertEqual(self.actions, [])
 
     def test_own_origin_starts_an_action(self):
         status, _ = self.post_action(f"127.0.0.1:{self.port}",

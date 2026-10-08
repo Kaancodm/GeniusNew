@@ -48,7 +48,9 @@ Löschen, Archivieren oder Markieren von E-Mails.
 Der optionale HARPA-Eingang nimmt zeitgesteuerte Browser-Berichte über
 `POST /api/harpa` an und zeigt die letzten Einträge im Dashboard. Ein Bericht kann
 keine Control-Deck-Aktion, keinen Shell-Befehl und keinen Agentenstart anfordern.
-Wiederholungen mit derselben `event_id` werden nicht doppelt gespeichert.
+Wiederholungen mit derselben `event_id` werden innerhalb der letzten 50 gespeicherten
+Berichte nicht doppelt gespeichert. Ein Eingang wird von genau einem Deck-Prozess
+geschrieben; die Sperre koordiniert keine unabhängigen Prozesse.
 
 `genius-server deck --apply` erzeugt den eigenen Eingangsschlüssel einmalig außerhalb
 des Repositorys und bindet ihn als systemd-Credential ein. Der Schlüssel wird beim
