@@ -65,8 +65,13 @@ genius-workflow attach gemini-b /home/kaan/tasks/geniusnew/workflow/meine-aufgab
 Gemini A verwendet das vorhandene Profil. B verwendet GEMINI_CLI_HOME unter
 ~/.config/genius-workflow/gemini-b und benötigt die persönliche Google-Anmeldung.
 Ein Terminal-Auftrag erzeugt keine automatische Freigabe von Websites/Produktionsdaten.
-Es läuft jeweils ein Implementierer pro Worktree; Reviews können parallel lesen.
-Der Starter akzeptiert für `origin` ausschließlich `Kaancodm/GeniusNew` auf
+Jede Starter-Sitzung hält den Worktree exklusiv, auch im Review-/Plan-Modus, weil
+CLI-Modi wechseln können. Der Starter behauptet keine unveränderliche Read-only-
+Sandbox für Claude/Gemini; unabhängige Reviews brauchen einen separat verifizierten
+Read-only-Checkout oder ein exaktes Quellenpaket. Parallele Sitzungen auf demselben
+Worktree werden abgelehnt. Der gemeinsame Checkout ist kein Task-Worktree.
+Der Starter prüft alle effektiven Fetch- und Push-URLs inklusive Git-Rewrites und
+akzeptiert für `origin` ausschließlich `Kaancodm/GeniusNew` auf
 `github.com` über HTTPS, `ssh://git@github.com/` oder `git@github.com:`.
 
 ## Lokale KI

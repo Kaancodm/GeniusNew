@@ -20,6 +20,13 @@ CONFIG = HOME_DIR / ".config/genius-workflow"
 RUNTIME = HOME_DIR / ".local/state/genius-workflow"
 TOOLS = ("codex", "claude", "gemini-a", "gemini-b", "cursor", "warp")
 MODEL = "qwen2.5-coder:3b"
+GEMINI_AUTH_ENV = ("GEMINI_CLI_HOME", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+                   "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_ACCESS_TOKEN",
+                   "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION")
+
+
+class WorkflowRefused(SystemExit):
+    """The launcher cannot establish an authorized isolated task environment."""
 
 
 def probe(argv: list[str], timeout: int = 8) -> tuple[int, str]:
@@ -30,20 +37,30 @@ def probe(argv: list[str], timeout: int = 8) -> tuple[int, str]:
         return 125, ""
 
 
-def workspace(raw: str) -> Path:
+def repository(raw: str) -> Path:
     path = Path(raw).expanduser().resolve(strict=True)
     rc, top = probe(["git", "-C", str(path), "rev-parse", "--show-toplevel"])
     if rc or Path(top.strip()).resolve() != path:
-        raise SystemExit("Bitte den Wurzelpfad eines Git-Worktrees verwenden.")
+        raise WorkflowRefused("Bitte den Wurzelpfad eines Git-Worktrees verwenden.")
+    for flags in (("--all",), ("--push", "--all")):
+        rc, output = probe(["git", "-C", str(path), "remote", "get-url", *flags, "origin"])
+        remotes = output.splitlines()
+        if rc or not remotes or any(not re.fullmatch(
+                r"(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)"
+                r"Kaancodm/GeniusNew(?:\.git)?", remote) for remote in remotes):
+            raise WorkflowRefused("Dieser Starter ist auf Kaancodm/GeniusNew begrenzt.")
+    return path
+
+
+def workspace(raw: str) -> Path:
+    path = repository(raw)
+    rc, git_dir = probe(["git", "-C", str(path), "rev-parse", "--absolute-git-dir"])
+    common_rc, common = probe(["git", "-C", str(path), "rev-parse", "--git-common-dir"])
+    if rc or common_rc or Path(git_dir.strip()).resolve() == (path / common.strip()).resolve():
+        raise WorkflowRefused("Entwicklung braucht einen separaten verknüpften Worktree.")
     rc, branch = probe(["git", "-C", str(path), "branch", "--show-current"])
     if rc or not branch.strip() or branch.strip() in ("main", "master"):
-        raise SystemExit("Entwicklung braucht einen benannten Arbeitsbranch.")
-    rc, remote = probe(["git", "-C", str(path), "remote", "get-url", "origin"])
-    # Match the entire remote: a host suffix or path component is not GitHub.
-    allowed_remote = (r"(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)"
-                      r"Kaancodm/GeniusNew(?:\.git)?")
-    if rc or not re.fullmatch(allowed_remote, remote.strip()):
-        raise SystemExit("Dieser Starter ist auf Kaancodm/GeniusNew begrenzt.")
+        raise WorkflowRefused("Entwicklung braucht einen benannten Arbeitsbranch.")
     return path
 
 
@@ -57,17 +74,18 @@ def argv_for(tool: str, path: Path, review: bool) -> tuple[list[str], dict[str, 
         argv = ["claude", "--permission-mode", "plan" if review else "acceptEdits"]
     elif tool in ("gemini-a", "gemini-b"):
         argv = ["gemini", "--approval-mode", "plan"]
-        if tool == "gemini-b":
-            env["GEMINI_CLI_HOME"] = str(CONFIG / "gemini-b")
+        for name in GEMINI_AUTH_ENV:
+            env.pop(name, None)
+        env["GEMINI_CLI_HOME"] = str(HOME_DIR if tool == "gemini-a" else CONFIG / "gemini-b")
     elif tool == "warp":
         if review:
-            raise SystemExit("Warp CLI hat keinen hier geprüften Review-Modus.")
+            raise WorkflowRefused("Warp CLI hat keinen hier geprüften Review-Modus.")
         argv = ["warp"]
     else:
         argv = ["cursor-agent", "--sandbox", "enabled", "--workspace", str(path)]
         argv += ["--mode", "plan"] if review else ["--auto-review"]
     if not shutil.which(argv[0]):
-        raise SystemExit(f"{tool}: CLI fehlt.")
+        raise WorkflowRefused(f"{tool}: CLI fehlt.")
     return argv, env
 
 
@@ -97,16 +115,21 @@ def start(tool: str, raw: str, review: bool, dry_run: bool) -> None:
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         if exists.returncode == 0:
             mode_flag = " --review" if review else ""
-            raise SystemExit(f"Sitzung vorhanden: genius-workflow attach {tool} {path}{mode_flag}")
-        if not review and not tool.startswith("gemini-"):
-            for writer in ("codex", "claude", "cursor", "warp"):
-                active = subprocess.run(base + ["has-session", "-t", "=" + session_name(writer, path)],
+            raise WorkflowRefused(f"Sitzung vorhanden: genius-workflow attach {tool} {path}{mode_flag}")
+        # CLI plan modes can change. Every session retains exclusive workspace
+        # ownership until an independently enforced read-only sandbox exists.
+        for writer in TOOLS:
+            for mode in (False, True):
+                active = subprocess.run(base + ["has-session", "-t", "=" + session_name(writer, path, mode)],
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 if active.returncode == 0:
-                    raise SystemExit("Ein Implementierer arbeitet bereits in diesem Worktree.")
+                    raise WorkflowRefused("Eine Sitzung arbeitet bereits in diesem Worktree.")
         # The profile applies only to this new tmux session, never the user's HOME.
-        if tool == "gemini-b":
-            argv = ["env", "GEMINI_CLI_HOME=" + str(CONFIG / "gemini-b"), *argv]
+        if tool.startswith("gemini-"):
+            # tmux's existing server also has an environment: unset conflicting
+            # credentials in the actual child, not just the client process.
+            argv = ["env", *[arg for name in GEMINI_AUTH_ENV for arg in ("-u", name)],
+                    "GEMINI_CLI_HOME=" + env["GEMINI_CLI_HOME"], *argv]
         subprocess.run(base + ["new-session", "-d", "-s", name, "-c", str(path), *argv],
                        env=env, check=True)
     print(f"Sitzung gestartet. Verbinden: genius-workflow attach {tool} {path}")
@@ -139,10 +162,11 @@ def status() -> None:
 
 def new_task(task: str) -> None:
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,59}", task):
-        raise SystemExit("Aufgabenname: 1–60 Kleinbuchstaben/Ziffern/Bindestriche.")
+        raise WorkflowRefused("Aufgabenname: 1–60 Kleinbuchstaben/Ziffern/Bindestriche.")
     target = ROOT / task
     if target.exists():
-        raise SystemExit("Aufgabe existiert bereits; vorhandene Arbeit bleibt erhalten.")
+        raise WorkflowRefused("Aufgabe existiert bereits; vorhandene Arbeit bleibt erhalten.")
+    repository(str(REPO))
     subprocess.run(["git", "-C", str(REPO), "fetch", "origin", "main"], check=True)
     ROOT.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "-C", str(REPO), "worktree", "add", "-b",
@@ -185,7 +209,7 @@ def main() -> None:
         with urllib.request.urlopen(request, timeout=180) as response:
             result = json.load(response)
         if result.get("error"):
-            raise SystemExit("Lokale KI: " + str(result["error"]))
+            raise WorkflowRefused("Lokale KI: " + str(result["error"]))
         print(result.get("response", ""))
 
 

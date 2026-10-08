@@ -94,8 +94,8 @@ bestanden melden.
 - Klein schneiden: ein Thema pro PR, als Draft. Ein PR, der älter als etwa zwei Tage
   wird, ist zu groß. **Keine Stapel-PRs:** Jeder PR basiert auf `main`.
 - Vor dem Push: Tests, Demo und Refusal-Guard für die geänderten Module lokal grün.
-- Mergen: Codex mergt eigene PRs selbst, sobald `contracts` grün ist und kein
-  blockierender Review-Befund offen ist. Ausnahmen mit Kaans ausdrücklichem OK: neue
+- Mergen: Jeder Merge nach `main` braucht Kaans ausdrückliches GO sowie grüne
+  `contracts` und keine blockierenden Review-Befunde. Zusätzlich brauchen Kaans OK: neue
   Abhängigkeit, eine Grenze aus `SECURITY.md` wird geändert, Tags.
   **DB-Code-PRs** (Codex) brauchen zusätzlich `Claude DB Review: APPROVED` am exakten
   Head-SHA; `docs/DATABASE.md` erstellt ChatGPT im Auftrag von Kaan, Claude reviewt den
