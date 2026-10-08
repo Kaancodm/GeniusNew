@@ -332,14 +332,16 @@ unbekanntem COMMIT-Ausgang oder Verbindungsabbruch während COMMIT:
 kein Job, kein Erfolg, kein automatischer Retry desselben Requests.
 
 Die Replay-Transaktion begrenzt `lock_timeout`, `statement_timeout` und
-`idle_in_transaction_session_timeout` jeweils auf höchstens die beim Start
-verbleibende Request-Gültigkeit und zusätzlich auf einen konfigurierten
-Maximalwert von höchstens 60 Sekunden. Ein unabhängiges Gesamtzeitlimit
+`idle_in_transaction_session_timeout` jeweils auf höchstens die unmittelbar
+vor dem Replay-INSERT gemessene verbleibende Request-Gültigkeit und zusätzlich
+auf einen konfigurierten Maximalwert zwischen 1 ms und 60 Sekunden.
+Ein unabhängiges Gesamtzeitlimit
 begrenzt die Transaktion einschließlich mehrerer Statements; Timeout oder
 unklarer Wartezustand sind REFUSE ohne automatischen Retry. Die für PostgreSQL
 gesetzten Millisekundenwerte werden aus der tatsächlichen, nicht auf `now`
-abgerundeten Restgültigkeit nach unten gerundet. Ergibt das weniger als 1 ms,
-ist der Request REFUSE; ein Timeoutwert `0` darf nie an PostgreSQL gehen, weil
+abgerundeten Restgültigkeit nach unten gerundet. Ist der kleinste Wert aus
+Restgültigkeit und konfiguriertem Maximum kleiner als 1 ms oder fehlt das
+Maximum, ist der Request REFUSE; ein Timeoutwert `0` darf nie an PostgreSQL gehen, weil
 er dort die Begrenzung deaktiviert. Damit darf ein
 hängender DB-/Lock-Versuch `max_in_flight` nicht unbegrenzt halten. Der D1-Last-
 und Betriebsnachweis muss außerdem D1 vor Erschöpfung des gemeinsamen Core-
