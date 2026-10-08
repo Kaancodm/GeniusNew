@@ -57,6 +57,9 @@ nennt das angeforderte Modell; sie beweist nicht, welches Modell Abacus ausgefü
 - Netzwerkfehler, ungültige Antworten, Tool-Calls und abgeschnittene Ergebnisse
   führen zu Exit-Code `1` und `UNKNOWN`. Fehler-Bodies und Schlüssel werden nicht
   ausgegeben. Kein Ersatzmodell und kein stilles Auto-Routing.
+- Modell-IDs dürfen die dokumentierte Form `provider/model` verwenden. Terminal-
+  Steuerzeichen und unsichtbare Formatierungszeichen in Modellantworten werden
+  sichtbar escaped; normale Zeilenumbrüche und Tabulatoren bleiben erhalten.
 - Keine Anbindung an Worker, Gateway, Approvals, Audit oder Control-Deck-HTTP-Aktionen.
 
 Ein erfolgreicher synthetischer Test beweist keinen Live-Zugang. Den Live-Nachweis

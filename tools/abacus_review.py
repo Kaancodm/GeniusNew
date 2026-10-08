@@ -8,7 +8,9 @@ import json
 import os
 import re
 import sys
+import unicodedata
 import warnings
+from http.client import HTTPException
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
@@ -23,13 +25,15 @@ class AbacusRefused(RuntimeError):
 
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if fp is not None:
+            fp.close()
         raise AbacusRefused("API-Weiterleitung abgelehnt; Ergebnis UNKNOWN.")
 
 
 def review(prompt: str, *, model: str, head: str, key: str) -> str:
     if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,256}", key):
         raise AbacusRefused("Gültigen Abacus-API-Schlüssel lokal hinterlegen.")
-    if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", model):
+    if not isinstance(model, str) or not re.fullmatch(r"[A-Za-z0-9._/-]{1,128}", model):
         raise AbacusRefused("Explizite Modell-ID erforderlich.")
     if model == "route-llm":
         raise AbacusRefused("Für Reviews ein bestimmtes Modell statt Auto-Routing wählen.")
@@ -68,7 +72,7 @@ def review(prompt: str, *, model: str, head: str, key: str) -> str:
     except HTTPError as exc:
         exc.close()
         raise AbacusRefused("Abacus hat die Anfrage abgelehnt; Ergebnis UNKNOWN.") from None
-    except (URLError, OSError, TimeoutError):
+    except (URLError, OSError, TimeoutError, HTTPException):
         raise AbacusRefused("Abacus nicht erreichbar; Ergebnis UNKNOWN.") from None
     if len(raw) > MAX_RESPONSE:
         raise AbacusRefused("API-Antwort zu groß; Ergebnis UNKNOWN.")
@@ -83,6 +87,11 @@ def review(prompt: str, *, model: str, head: str, key: str) -> str:
         raise AbacusRefused("Unvollständige oder werkzeugbasierte Antwort; Ergebnis UNKNOWN.")
     if not isinstance(content, str) or not content.strip():
         raise AbacusRefused("Kein Review-Text erhalten; Ergebnis UNKNOWN.")
+    # Provider text cannot control the terminal, clipboard, or visual reading order.
+    content = "".join(
+        f"\\u{ord(char):04x}" if unicodedata.category(char) in {"Cc", "Cf"}
+        and char not in "\n\t" else char for char in content
+    )
     # A provider echo must not expose the credential through terminal output.
     return (f"Abacus API · angefordertes Modell: {model} · Head-SHA: {head}\n"
             "Modellantwort: ungeprüfte Zweitmeinung, keine automatische Freigabe.\n\n"

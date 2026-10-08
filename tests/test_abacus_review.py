@@ -1,6 +1,7 @@
 import io
 import json
 import unittest
+from http.client import BadStatusLine, IncompleteRead
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request
@@ -68,9 +69,39 @@ class AbacusReviewTest(unittest.TestCase):
         self.opener.open.assert_not_called()
 
     def test_redirect_cannot_forward_credentials(self):
+        stream = io.BytesIO(b"redirect body")
         with self.assertRaises(abacus.AbacusRefused):
-            abacus.NoRedirect().redirect_request(Request(abacus.ENDPOINT), None,
+            abacus.NoRedirect().redirect_request(Request(abacus.ENDPOINT), stream,
                                                 307, "redirect", {}, "https://other.test")
+        self.assertTrue(stream.closed)
+
+    def test_provider_model_ids_preserve_the_exact_requested_model(self):
+        self.review(model="openai/gpt-oss-120b")
+        request = self.opener.open.call_args.args[0]
+        self.assertEqual(json.loads(request.data)["model"], "openai/gpt-oss-120b")
+        for model in ("a" * 129, "gemini\npro", "provider/model?key=x"):
+            with self.assertRaises(abacus.AbacusRefused):
+                self.review(model=model)
+
+    def test_terminal_controls_are_visible_text_without_losing_normal_formatting(self):
+        self.set_content("Deutsch ä\n\tCode\x1b]52;c;YXR0YWNr\x07\r\b\x9b2J\u202ePASS\u2066")
+        result = self.review()
+        self.assertIn("Deutsch ä\n\tCode", result)
+        for char in ("\x1b", "\x07", "\r", "\b", "\x9b", "\u202e", "\u2066"):
+            self.assertNotIn(char, result)
+            self.assertIn(f"\\u{ord(char):04x}", result)
+
+    def test_malformed_http_is_unknown_and_never_exposes_protocol_text(self):
+        self.opener.open.side_effect = BadStatusLine(KEY)
+        with self.assertRaises(abacus.AbacusRefused) as result:
+            self.review()
+        self.assertNotIn(KEY, str(result.exception))
+        self.opener.open.side_effect = None
+        self.response.read.side_effect = IncompleteRead(KEY.encode(), 100)
+        with self.assertRaises(abacus.AbacusRefused) as result:
+            self.review()
+        self.assertNotIn(KEY, str(result.exception))
+        self.response.__exit__.assert_called_once()
 
     def test_network_and_http_errors_hide_response_and_key(self):
         for error in (URLError(KEY), TimeoutError(KEY),
