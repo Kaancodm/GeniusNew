@@ -40,7 +40,15 @@ class WorkspaceChecks(unittest.TestCase):
 
     def test_named_geniusnew_branch_is_accepted(self):
         self.git("switch", "-q", "-c", "workflow/test")
-        self.assertEqual(workflow.workspace(str(self.repo)), self.repo.resolve())
+        for remote in (
+            "https://github.com/Kaancodm/GeniusNew.git",
+            "https://github.com/Kaancodm/GeniusNew",
+            "git@github.com:Kaancodm/GeniusNew.git",
+            "ssh://git@github.com/Kaancodm/GeniusNew.git",
+        ):
+            with self.subTest(remote=remote):
+                self.git("remote", "set-url", "origin", remote)
+                self.assertEqual(workflow.workspace(str(self.repo)), self.repo.resolve())
 
     def test_detached_head_is_rejected(self):
         self.git("checkout", "-q", "--detach")
@@ -52,6 +60,25 @@ class WorkspaceChecks(unittest.TestCase):
         self.git("remote", "set-url", "origin", "https://github.com/other/repo.git")
         with self.assertRaises(SystemExit):
             workflow.workspace(str(self.repo))
+
+    def test_other_hosts_and_ambiguous_remote_urls_are_rejected(self):
+        self.git("switch", "-q", "-c", "workflow/test")
+        for remote in (
+            "https://evilgithub.com/Kaancodm/GeniusNew.git",
+            "ssh://git@evilgithub.com/Kaancodm/GeniusNew.git",
+            "git@evilgithub.com:Kaancodm/GeniusNew.git",
+            "https://github.com@evil.example/Kaancodm/GeniusNew.git",
+            "https://evil.example/github.com/Kaancodm/GeniusNew.git",
+            "https://github.com/Kaancodm/GeniusNew.git?redirect=evil.example",
+            "https://github.com/Kaancodm/GeniusNew.git#fragment",
+            "https://github.com/other/../Kaancodm/GeniusNew.git",
+            "http://github.com/Kaancodm/GeniusNew.git",
+            "file:///github.com/Kaancodm/GeniusNew.git",
+        ):
+            with self.subTest(remote=remote):
+                self.git("remote", "set-url", "origin", remote)
+                with self.assertRaises(SystemExit):
+                    workflow.workspace(str(self.repo))
 
     def test_second_writer_stops_but_review_can_start(self):
         self.git("switch", "-q", "-c", "workflow/test")

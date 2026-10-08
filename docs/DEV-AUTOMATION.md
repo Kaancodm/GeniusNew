@@ -29,8 +29,10 @@ Passende Tests und bestehende CI-/Review-Gates ausführen und den vollen SHA nen
 Fehlgeschlagene oder ungeprüfte Schritte bleiben sichtbar; nicht als PASS ausgeben.
 Keine Sicherheitsentscheidung aus unklarer Identität oder Berechtigung ableiten.
 Das betrifft Entwicklungswerkzeuge und Freigabereibung. Der Runtime-Code wird weiterhin
-nach seinen tatsächlichen Verträgen geprüft. PR #134 behandelt die bereits beauftragte
-Änderung der Zielarchitektur; ihre Implementierung ist ein eigener überprüfter Code-PR.
+nach seinen tatsächlichen Verträgen geprüft. PR #134 ist ein offener Regelentwurf,
+der dem aktuellen PR-Cleanup-Auftrag vom 08.10.2026 widerspricht und keine
+Arbeitsbefugnis erteilt. Zero-Trust, Fail-Closed und der bestehende Testschutz bleiben
+vollständig erhalten; ein Architekturumstieg wird nicht begonnen.
 
 ## Cloud-Automation
 Gumloop koordiniert, der Server führt Entwicklungsarbeit aus. Cloud-Dienste sind keine

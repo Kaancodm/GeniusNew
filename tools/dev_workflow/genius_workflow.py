@@ -39,7 +39,10 @@ def workspace(raw: str) -> Path:
     if rc or not branch.strip() or branch.strip() in ("main", "master"):
         raise SystemExit("Entwicklung braucht einen benannten Arbeitsbranch.")
     rc, remote = probe(["git", "-C", str(path), "remote", "get-url", "origin"])
-    if rc or not re.search(r"(?:github\.com[:/])Kaancodm/GeniusNew(?:\.git)?$", remote.strip()):
+    # Match the entire remote: a host suffix or path component is not GitHub.
+    allowed_remote = (r"(?:https://github\.com/|ssh://git@github\.com/|git@github\.com:)"
+                      r"Kaancodm/GeniusNew(?:\.git)?")
+    if rc or not re.fullmatch(allowed_remote, remote.strip()):
         raise SystemExit("Dieser Starter ist auf Kaancodm/GeniusNew begrenzt.")
     return path
 

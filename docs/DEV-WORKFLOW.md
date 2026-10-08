@@ -1,5 +1,7 @@
 # GeniusNew: Entwicklungsumgebung
-Stand: 08.10.2026. Dieser Entwurf ergänzt den bestehenden Regel-PR #134.
+Stand: 08.10.2026. Dieser Entwicklungsstarter ist unabhängig vom offenen Regelentwurf
+#134; dessen Sicherheitslockerungen widersprechen dem aktuellen PR-Cleanup-Auftrag
+und gelten hier nicht.
 Basis: main 62b6d1966da5e30fe71f230629a48dea369ae62c.
 Alle Aussagen „geprüft“ beziehen sich auf die hier genannten Prüfungen, nicht auf frühere Chats.
 
@@ -64,6 +66,8 @@ Gemini A verwendet das vorhandene Profil. B verwendet GEMINI_CLI_HOME unter
 ~/.config/genius-workflow/gemini-b und benötigt die persönliche Google-Anmeldung.
 Ein Terminal-Auftrag erzeugt keine automatische Freigabe von Websites/Produktionsdaten.
 Es läuft jeweils ein Implementierer pro Worktree; Reviews können parallel lesen.
+Der Starter akzeptiert für `origin` ausschließlich `Kaancodm/GeniusNew` auf
+`github.com` über HTTPS, `ssh://git@github.com/` oder `git@github.com:`.
 
 ## Lokale KI
 Das Modell wird auf CPUs ausgeführt. Eine GPU wurde auf diesem Server nicht nachgewiesen.
