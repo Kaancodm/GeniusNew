@@ -15,10 +15,10 @@ NAME = re.compile(r"^(\d{4}-\d{2}-\d{2})-(\d{2,})-[a-z0-9-]+\.md$")
 
 
 def load(directory=DIR):
-    """Read direct *.md children of directory in reverse filename order.
+    """Read direct *.md children of directory, newest first (date, then sequence number).
 
     Return a list of dictionaries with title, date, source, decision, and reason
-    fields. Ordering uses filenames; each filename date must match the date field.
+    fields. Ordering uses the filename date and the numeric sequence; the date must match the date field.
 
     Raise ValueError for an empty directory, an unexpected filename, a filename
     date that differs from the record date, or a malformed decision layout.
@@ -26,13 +26,17 @@ def load(directory=DIR):
     propagate to the caller.
     """
     entries = []
-    paths = sorted(directory.glob("*.md"), reverse=True)
-    if not paths:
-        raise ValueError(f"no decision files in {directory}")
-    for path in paths:
+    named = []
+    for path in directory.glob("*.md"):
         match = NAME.match(path.name)
         if not match:
             raise ValueError(f"unexpected file name in {directory}: {path.name}")
+        named.append((match.group(1), int(match.group(2)), path, match))
+    if not named:
+        raise ValueError(f"no decision files in {directory}")
+    # Date, then the numeric sequence: decision 100 sorts above decision 99.
+    named.sort(key=lambda item: item[:2], reverse=True)
+    for _, _, path, match in named:
         text = path.read_text(encoding="utf-8")
         parts = re.fullmatch(
             r"# (?P<title>.+)\n\n- Datum: (?P<date>.+)\n- Quelle: (?P<source>.+)\n\n"
