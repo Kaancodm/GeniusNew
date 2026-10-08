@@ -408,8 +408,8 @@ class EndToEndTest(Fixture, unittest.TestCase):
     # Review finding LOW-1 (26.09.2026): it used to be appended after the worker
     # returned, inferred by the composition root rather than read off the permit.
 
-    def test_the_admission_is_on_the_chain_before_the_worker_runs(self):
-        """In the live process, admission precedes any worker execution."""
+    def test_admission_and_dispatch_are_on_the_chain_before_the_worker_runs(self):
+        """In the live process, admission and dispatch precede worker execution."""
         keys = self.service.keys
         runners = []
 
@@ -429,7 +429,8 @@ class EndToEndTest(Fixture, unittest.TestCase):
         self.assertEqual(self.post(url=self.url_for(service))[1]['status'], 'SUCCEEDED')
         self.assertEqual(runner.seen, [
             ('orchestrator', 'orchestrator-1', 'HANDOFF_ISSUED', self.clock[0]),
-            ('gateway', 'gateway-1', 'HANDOFF_ADMITTED', self.clock[0])])
+            ('gateway', 'gateway-1', 'HANDOFF_ADMITTED', self.clock[0]),
+            ('orchestrator', 'orchestrator-1', 'EXECUTION_DISPATCHED', self.clock[0])])
         self.assertEqual(len(service.chain.records), 4)
         # Read off the permit, and still the same job's trace.
         self.assertEqual(len({record.event.trace_id for record in service.chain.records}), 1)
@@ -479,9 +480,9 @@ class EndToEndTest(Fixture, unittest.TestCase):
                 'handoff', 'handoff_sha256', 'admitted_at', 'approval_record_hash')},
             gateway_id='gateway-1')
         with self.assertRaisesRegex(ContractError, 'gateway-minted DispatchPermit'):
-            record(claimed)
+            record(claimed, 'subject-demo')
         with self.assertRaisesRegex(ContractError, 'did not wire'):
-            record(foreign)
+            record(foreign, 'subject-demo')
         self.assertEqual(self.service.chain.records, ())
 
     def served_anchor(self):
@@ -604,6 +605,7 @@ class EndToEndTest(Fixture, unittest.TestCase):
 
 
 OTHER_KEY = b'SECOND-API-KEY-CANARY-NOT-DISCLOSED'
+APPROVER_KEY = b'APPROVER-KEY-CANARY-FOR-HTTP-TESTS'
 
 
 class ApprovalOverHttpTest(Fixture, unittest.TestCase):
@@ -617,7 +619,9 @@ class ApprovalOverHttpTest(Fixture, unittest.TestCase):
         policy = Policy('policy-v1', 'orchestrator-1', 60,
                         ('summarize',), ('isolated',), grants)
         return build(root_secret=ROOT_SECRET, policy=policy,
-                     api_keys={API_KEY: 'subject-demo', OTHER_KEY: 'subject-other'},
+                     api_keys={API_KEY: 'subject-demo', OTHER_KEY: 'subject-other',
+                               APPROVER_KEY: 'subject-approver'},
+                     approvers={'subject-approver': 'user-approver'},
                      workers=(DeterministicSummarizer(),),
                      clock=lambda: self.clock[0])
 
@@ -645,7 +649,7 @@ class ApprovalOverHttpTest(Fixture, unittest.TestCase):
 
     def test_a_job_waits_then_runs_with_its_token_and_the_chain_says_so(self):
         job_id = self.waiting_job()
-        token = self.service.approve(job_id)
+        token = self.service.approve(job_id, approver_subject='subject-approver')
         status, body = self.approve(job_id, token)
         self.assertEqual(status, 202, body)
         self.assertEqual((body['job_id'], body['status'], body['reason_code']),
@@ -663,7 +667,7 @@ class ApprovalOverHttpTest(Fixture, unittest.TestCase):
         import hashlib
 
         job_id = self.waiting_job()
-        token = self.service.approve(job_id)
+        token = self.service.approve(job_id, approver_subject='subject-approver')
         self.assertEqual(self.approve(job_id, token)[0], 202)
         recorded = {record.event.action: record.event.approval_record_hash
                     for record in self.service.chain.records}
@@ -680,13 +684,13 @@ class ApprovalOverHttpTest(Fixture, unittest.TestCase):
 
     def test_the_token_runs_the_job_once(self):
         job_id = self.waiting_job()
-        token = self.service.approve(job_id)
+        token = self.service.approve(job_id, approver_subject='subject-approver')
         self.assertEqual(self.approve(job_id, token)[0], 202)
         self.assertEqual(self.approve(job_id, token), (409, {'error': 'REJECTED'}))
 
     def test_a_wrong_token_is_audited_and_leaves_the_job_waiting(self):
         job_id = self.waiting_job()
-        token = self.service.approve(job_id)
+        token = self.service.approve(job_id, approver_subject='subject-approver')
         self.assertEqual(self.approve(job_id, os.urandom(32)), (409, {'error': 'REJECTED'}))
         self.assertIn(('gateway', 'HANDOFF_REJECTED'), self.actions())
         status, body = self.approve(job_id, token)
@@ -694,15 +698,15 @@ class ApprovalOverHttpTest(Fixture, unittest.TestCase):
 
     def test_another_jobs_token_is_refused_and_not_spent(self):
         first, second = self.waiting_job(), self.waiting_job()
-        first_token = self.service.approve(first)
-        second_token = self.service.approve(second)
+        first_token = self.service.approve(first, approver_subject='subject-approver')
+        second_token = self.service.approve(second, approver_subject='subject-approver')
         self.assertEqual(self.approve(first, second_token)[0], 409)
         self.assertEqual(self.approve(second, second_token)[1]['status'], 'SUCCEEDED')
         self.assertEqual(self.approve(first, first_token)[1]['status'], 'SUCCEEDED')
 
     def test_another_subject_cannot_complete_the_job(self):
         job_id = self.waiting_job()
-        token = self.service.approve(job_id)
+        token = self.service.approve(job_id, approver_subject='subject-approver')
         self.assertEqual(self.approve(job_id, token, key=OTHER_KEY),
                          (409, {'error': 'REJECTED'}))
         self.assertEqual(self.approve(job_id, token)[1]['status'], 'SUCCEEDED')
@@ -713,7 +717,7 @@ class ApprovalOverHttpTest(Fixture, unittest.TestCase):
         answers = {
             'unknown': self.approve('job-that-does-not-exist', os.urandom(32)),
             'unapproved': self.approve(unapproved, os.urandom(32)),
-            'foreign': self.approve(foreign, self.service.approve(foreign)),
+            'foreign': self.approve(foreign, self.service.approve(foreign, approver_subject='subject-approver')),
         }
         self.assertEqual(set(map(repr, answers.values())), {repr((409, {'error': 'REJECTED'}))})
 
@@ -726,13 +730,18 @@ class ApprovalOverHttpTest(Fixture, unittest.TestCase):
 
     def test_only_a_waiting_job_can_be_approved(self):
         with self.assertRaisesRegex(ContractError, 'no job is waiting'):
-            self.service.approve('job-that-does-not-exist')
+            self.service.approve('job-that-does-not-exist', approver_subject='subject-approver')
 
 
 class PendingJobsTest(unittest.TestCase):
     def waiting(self, expires_at=100):
         handoff = type('Handoff', (), {'expires_at': expires_at})()
         return wiring._Waiting('subject-demo', b'wire', handoff, 'trace-x')
+
+    def test_process_local_pending_store_refuses_database_transaction(self):
+        jobs = wiring.PendingJobs()
+        with self.assertRaisesRegex(ContractError, 'cannot join'):
+            jobs.add('job-tx', self.waiting(), now=10, transaction=object())
 
     def test_a_job_id_waits_once(self):
         jobs = wiring.PendingJobs()

@@ -139,8 +139,9 @@ Siehe:
 - `docs/STATUS.md` — aktueller Stand und nächste Schritte, auch als Quelle für NotebookLM
   und Microsoft 365 Copilot
 - `docs/DECISIONS.md` — alle Entscheidungen mit Datum und Begründung; mit `STATUS.md`
-  die Wissensdatenbank, geführt von Gemini Pro und NotebookLM
-- `docs/COLLABORATION.md` — wer macht was: Codex setzt um, Gemini führt das Wissen
+  die Wissensdatenbank, geführt von Claude Code, Auskunft über NotebookLM
+- `docs/COLLABORATION.md` — wer macht was: Codex setzt um, Claude Code führt das Wissen,
+  Gemini prüft
 - `AGENTS.md` — Regeln für KI-Assistenten (Claude Code, ChatGPT/Codex, Copilot, Gemini);
   Kurzfassung für Copilot in `.github/copilot-instructions.md`
 - `docs/ADR-001-restart-and-isolation.md`

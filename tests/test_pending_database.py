@@ -11,7 +11,9 @@ import psycopg
 from geniusnew import database
 from geniusnew.approvals import ApprovalScope, ApprovalStore, _record_hash
 from geniusnew.audit_chain import AuditAnchor
-from geniusnew.contracts import ContractError, canonical, validate_pending
+from geniusnew.audit_store import PostgresAuditChain
+from geniusnew.contracts import ContractError, canonical, issue, validate_pending
+from geniusnew.verifier import ProcessLocalAcceptanceLedger
 from geniusnew.wiring import _Waiting, build
 from geniusnew.workers import DeterministicSummarizer
 from postgres_support import PostgresDatabase
@@ -77,6 +79,34 @@ class DurablePendingTest(ApprovalFixture, unittest.TestCase):
                           workers=(DeterministicSummarizer(),), anchor=AuditAnchor(),
                           database_connection=self.connection, job_ledger=ledger)
 
+    def test_durable_wiring_requires_the_same_acceptance_ledger_connection(self):
+        with self.db.connect(runtime=True) as other_connection:
+            for ledger in (None, ProcessLocalAcceptanceLedger(),
+                           database.PostgresAcceptanceLedger(other_connection)):
+                with self.subTest(ledger=ledger), self.assertRaisesRegex(
+                        ContractError, "acceptance storage.*audit database connection"):
+                    build(root_secret=ROOT_SECRET, policy=self.policy,
+                          api_keys={API_KEY: "subject-demo"},
+                          workers=(DeterministicSummarizer(),), anchor=AuditAnchor(),
+                          database_connection=self.connection,
+                          job_ledger=database.PostgresJobLedger(self.connection),
+                          acceptance_ledger=ledger)
+
+    def test_durable_wiring_requires_a_postgres_audit_chain_on_the_same_connection(self):
+        with self.db.connect(runtime=True) as other_connection:
+            for factory in (None, lambda audit: PostgresAuditChain(
+                    other_connection, authority=audit)):
+                with self.subTest(factory=factory), self.assertRaisesRegex(
+                        ContractError, "PostgreSQL audit chain.*same connection"):
+                    build(root_secret=ROOT_SECRET, policy=self.policy,
+                          api_keys={API_KEY: "subject-demo"},
+                          workers=(DeterministicSummarizer(),), anchor=AuditAnchor(),
+                          database_connection=self.connection,
+                          job_ledger=database.PostgresJobLedger(self.connection),
+                          acceptance_ledger=database.PostgresAcceptanceLedger(
+                              self.connection),
+                          audit_chain_factory=factory)
+
     def test_consume_refuses_an_outer_uncommitted_transaction(self):
         pending, approvals = self.stores()
         self.add(pending)
@@ -138,23 +168,37 @@ class DurablePendingTest(ApprovalFixture, unittest.TestCase):
         self.add(pending)
         scope = self.scope()
         first = approvals.grant(scope, now=101, ttl_seconds=60)
-        second = approvals.grant(scope, now=101, ttl_seconds=60)
+        # The runtime now refuses a second active grant. An owner can still
+        # fabricate the old corruption pattern, which startup must catch.
+        second_token = b"second-owner-inserted-approval-token"
+        second_digest = hashlib.sha256(second_token).hexdigest()
+        second_hash = _record_hash(
+            token_digest=bytes.fromhex(second_digest), scope=scope,
+            issued_at=101, expires_at=160, state="GRANTED", changed_at=101,
+            previous_hash=None)
+        with self.db.connect() as owner:
+            owner.execute(
+                "INSERT INTO public.approval_records "
+                "(token_digest,record_hash,scope,issued_at,expires_at,state,"
+                "changed_at,previous_hash) VALUES (%s,%s,%s,101,160,'GRANTED',101,NULL)",
+                (second_digest, second_hash, canonical(scope.to_dict())))
+            owner.execute("INSERT INTO public.approval_tokens VALUES (%s,%s)",
+                          (second_digest, second_hash))
         approvals.consume(first.token, scope, now=102, subject="subject-demo")
-        digest = hashlib.sha256(second.token).hexdigest()
         record_hash = _record_hash(
-            token_digest=bytes.fromhex(digest), scope=scope,
-            issued_at=second.issued_at, expires_at=second.expires_at,
+            token_digest=bytes.fromhex(second_digest), scope=scope,
+            issued_at=101, expires_at=160,
             state="CONSUMED", changed_at=102,
-            previous_hash=second.record_hash)
+            previous_hash=second_hash)
         with self.db.connect() as owner:
             owner.execute(
                 "INSERT INTO public.approval_records "
                 "(token_digest,record_hash,scope,issued_at,expires_at,state,"
                 "changed_at,previous_hash) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-                (digest, record_hash, canonical(scope.to_dict()), second.issued_at,
-                 second.expires_at, "CONSUMED", 102, second.record_hash))
+                (second_digest, record_hash, canonical(scope.to_dict()), 101,
+                 160, "CONSUMED", 102, second_hash))
             owner.execute("UPDATE public.approval_tokens SET current_record_hash=%s "
-                          "WHERE token_digest=%s", (record_hash, digest))
+                          "WHERE token_digest=%s", (record_hash, second_digest))
         with self.assertRaisesRegex(ContractError, "consumed approval.*reserved job"):
             database.PostgresApprovalStore(self.connection)
 
@@ -242,6 +286,35 @@ class DurablePendingTest(ApprovalFixture, unittest.TestCase):
             with self.assertRaisesRegex(ContractError, "too many jobs"):
                 self.add(pending)
         self.assertEqual(self.rows(), [])
+
+    def test_expired_pending_rows_do_not_count_against_the_queue_bound(self):
+        # B6 forbids sweeping an expired job to REFUSED without its terminal audit
+        # event, so expired rows stay. They must not hold a queue slot, or enough
+        # abandoned jobs would refuse every new approval job for good.
+        pending, _ = self.stores()
+        self.add(pending)  # job-demo: issued at 100, expires at 160
+
+        def add_at(job_id, now):
+            wire = issue({"text": "Requires approval"}, subject="subject-demo",
+                         job_id=job_id, policy=self.policy, signer=self.key, now=now)
+            handoff = validate_pending(wire, subject="subject-demo", job_id=job_id,
+                                       policy=self.policy, verifier=self.key.verifier(),
+                                       now=now)
+            pending.add(job_id, _Waiting(
+                "subject-demo", wire, handoff,
+                "trace-" + hashlib.sha256(wire).hexdigest()[:16]), now=now)
+
+        with patch("geniusnew.database._MAX_PENDING", 1):
+            with self.assertRaisesRegex(ContractError, "too many jobs"):
+                add_at("job-early", 159)  # the first job is still live here
+            add_at("job-next", 160)  # expires_at <= now: it no longer holds a slot
+            with self.assertRaisesRegex(ContractError, "too many jobs"):
+                add_at("job-over", 161)  # a live row still fills the bound
+        self.assertEqual(self.connection.execute(
+            "SELECT job_id, state, updated_at FROM public.job_ledger "
+            "ORDER BY job_id").fetchall(),
+            [("job-demo", "PENDING_APPROVAL", 100),
+             ("job-next", "PENDING_APPROVAL", 160)])
 
     def test_pending_wire_must_bind_the_original_issuance_time(self):
         pending, _ = self.stores()
