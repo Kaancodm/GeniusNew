@@ -77,8 +77,9 @@ Vollständig in `SECURITY.md` (maßgeblich). Die wichtigsten:
 - Außer Worker und Anker laufen alle Instanzen in **einem Prozess**.
 - Alle Schlüssel hängen an **einem Root-Secret**, es gibt **einen** Worker-Schlüssel.
 - Der Anker läuft ohne eigenen Betriebssystem-Nutzer rückschneidbar; unter eigenem
-  Nutzer betrieben (`docs/ANCHOR-SERVICE.md`) gilt das nicht mehr, ist aber Sache der
-  Installation und nicht testbar.
+  Nutzer betrieben (`docs/ANCHOR-SERVICE.md`) kann der Dienstnutzer ihn weder beenden
+  noch seine Datei zurückschneiden. Der Anker-Nutzer, `root` und eine zurückgespielte
+  Sicherung können es weiterhin. Das ist Sache der Installation und nicht testbar.
 - Worker-Isolation ist eine Prozessgrenze, keine microVM; ohne Landlock ABI 4 läuft kein
   Worker (fail closed).
 - Der HTTP-Eingang hat kein TLS und keine Sessions (Deployment-Aufgabe, Vorlage in
