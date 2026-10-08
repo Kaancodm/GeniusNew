@@ -23,21 +23,24 @@ BETA_GATES = [
     ("B7", "Crash-Recovery", "dfbc50bc7f4f921d495f2c71156db8cd496e05dd"),
     ("C1", "Server-Entrypoint", "67c525f17d3f5b4c4855f7976eedd9dc62f727cc"),
     ("C2", "Anchor-Service", "24f521bb81a3ae604da3aef00072690f7df4dd16"),
-    ("C3", "Approver-HTTP-Route", None),
+    ("C3", "Approver-HTTP-Route", "b047798068f1d750f8c8ebf47c357fd7d771a53f"),
     ("C4", "HTTP-Härtung", "080f1f4e4460aa28b54ef3f9f698e598d8be03e5"),
     ("A2", "Landlock / Host-Dateien", "3297f939e99479249de352e96b2bb00aa9c67d8b"),
+    ("C5", "Betrieb + Restore", None),
     ("D1", "Portal→Core-Vertrag", None),
     ("D2", "Portal-Identität", None),
     ("D3", "Portal-Ansichten", None),
-    ("C5", "Betrieb + Restore", None),
-    ("E1", "Persistenz-Angriffs-Demo", None),
+    ("E1", "Persistenz-Angriffs-Demo", "122a6902fc8a88488dd9312b4803571fb85c8ab2"),
     ("E2", "Security-Review final", None),
     ("E3", "Fresh-host-Probe", None),
 ]
 
-# These changes are merged, but the required DB review is not evidenced at the
-# merged head. Keep them visible as pending until that review is recorded.
+# Historical follow-up reviews cover main 7f81e24, not the current full head.
 PENDING_REVIEWS = {"B4": 94, "B5": 95}
+PENDING_OPERATIONS = {
+    "A2": "Landlock implementiert; HOLD: eigener Worker-OS-Nutzer im Betrieb nicht nachgewiesen",
+    "C2": "Ankerdienst implementiert; HOLD: eigener Anker-OS-Nutzer im Betrieb nicht nachgewiesen",
+}
 
 COMMANDS = {
     "tmux": "tmux attach -t genius",
@@ -201,7 +204,7 @@ def _priorities(gates: list[dict[str, str]], tools: dict[str, dict[str, str]]) -
             steps.append({"title": f"{tool} anmelden", "detail": tools[tool]["detail"], "action": None})
     for gate in gates:
         if gate["status"] != "green":
-            action = "tests" if gate["id"] in {"A1", "A2", "B0"} else None
+            action = "tests" if gate["id"] in {"A1", "B0"} else None
             steps.append({"title": f"{gate['id']} {gate['name']}",
                           "detail": gate["detail"], "action": action})
     return steps[:3]
@@ -217,8 +220,9 @@ def project_resume(
     else:
         next_gate = next((gate for gate in gates if gate["status"] != "green"), None)
         focus = (f"{next_gate['id']} – {next_gate['name']}" if next_gate else
-                 "Alle Beta-Gates erfüllt")
-        stopped = next_gate["detail"] if next_gate else "Kein Gate offen"
+                 "Implementierungen auf main nachgewiesen")
+        stopped = (next_gate["detail"] if next_gate else
+                   "Beta-Freigabe benötigt Betriebs- und Security-Nachweise am aktuellen Head")
 
     steps: list[dict[str, str | None]] = []
     login_commands = {
@@ -239,15 +243,15 @@ def project_resume(
         review_pr = PENDING_REVIEWS.get(gate["id"])
         steps.append({
             "title": f"{gate['id']} {gate['name']}",
-            "type": "url" if review_pr else "action" if gate["id"] in {"A1", "A2", "B0"} else "info",
+            "type": "url" if review_pr else "action" if gate["id"] in {"A1", "B0"} else "info",
             "value": (f"https://github.com/Kaancodm/GeniusNew/pull/{review_pr}"
-                      if review_pr else "tests" if gate["id"] in {"A1", "A2", "B0"} else ""),
+                      if review_pr else "tests" if gate["id"] in {"A1", "B0"} else ""),
             "detail": gate["detail"],
         })
         if len(steps) >= 5:
             break
 
-    merged = sum(1 for gate in gates if gate["status"] == "green")
+    merged = sum(1 for gate in gates if gate.get("implementation_status") == "green")
     return {
         "focus": focus,
         "stopped_at": stopped,
@@ -275,15 +279,22 @@ def snapshot(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
     gates = []
     for gate, name, ref in BETA_GATES:
         status = gate_status(repo, ref)
+        implementation_status = status
         review_pr = PENDING_REVIEWS.get(gate)
-        if status == "green" and review_pr:
+        if status == "green" and (review_pr or gate in PENDING_OPERATIONS):
             status = "yellow"
-        detail = (f"PR #{review_pr} gemergt; Claude DB Review am Head fehlt"
-                  if status == "yellow" and review_pr else
-                  "Noch nicht auf origin/main nachgewiesen" if status == "red" else
-                  "Auf origin/main nachgewiesen" if status == "green" else
-                  "Branch noch nicht auf origin/main")
-        gates.append({"id": gate, "name": name, "status": status, "detail": detail})
+        if implementation_status == "green" and review_pr:
+            detail = (f"PR #{review_pr} gemergt; historischer Claude-DB-Nachreview auf main "
+                      "7f81e240f6ec4b16d876f081249afb3d47240901 vorhanden; "
+                      "HOLD: Review am aktuellen Gesamt-Head nicht nachgewiesen")
+        elif implementation_status == "green" and gate in PENDING_OPERATIONS:
+            detail = PENDING_OPERATIONS[gate]
+        else:
+            detail = ("Implementierung auf origin/main nicht nachgewiesen" if status == "red" else
+                      "Implementierung auf origin/main nachgewiesen" if status == "green" else
+                      "Implementierungsnachweis noch nicht auf origin/main")
+        gates.append({"id": gate, "name": name, "status": status, "detail": detail,
+                      "implementation_status": implementation_status})
     tools = {
         "claude": tool_status("claude"),
         "codex": tool_status("codex"),

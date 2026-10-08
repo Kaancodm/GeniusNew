@@ -88,19 +88,21 @@ class ControlDeckTest(unittest.TestCase):
         self.assertEqual(state["resume"][0]["value"], "codex login")
         self.assertTrue(any(step["title"].startswith("A1 ") for step in state["resume"]))
 
-    def test_merged_gate_proofs_advance_resume_past_b1(self):
-        gates = []
-        for gate, name, ref in checks.BETA_GATES:
-            status = ("green" if gate in {"A1", "B0", "B1", "B2", "B3", "B6", "B7",
-                                          "C1", "C2", "C4", "A2"} else
-                      "yellow" if gate in checks.PENDING_REVIEWS else "red")
-            gates.append({"id": gate, "name": name, "status": status,
-                          "detail": "review pending" if status == "yellow" else "open"})
-        self.assertTrue(all(next(ref for gate, _, ref in checks.BETA_GATES if gate == item)
-                            for item in ("B1", "B2", "B3", "B4", "B5", "B6", "B7")))
-        tools = {name: {"status": "green", "detail": "logged in"}
-                 for name in ("claude", "codex", "gemini", "gh")}
-        state = checks.project_resume(gates, tools, checks.DEFAULT_REPO)
+    @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
+    @patch("tools.control_deck.checks.tool_status", return_value={"status": "green"})
+    def test_merged_code_keeps_missing_review_and_operational_evidence_open(self, _tools, _run):
+        snapshot = checks.snapshot(checks.DEFAULT_REPO)
+        gates = {gate["id"]: gate for gate in snapshot["gates"]}
+        for gate in ("B4", "B5", "A2", "C2"):
+            self.assertEqual(gates[gate]["status"], "yellow")
+            self.assertIn("HOLD", gates[gate]["detail"])
+        for gate in ("C3", "E1"):
+            self.assertEqual(gates[gate]["status"], "green")
+        self.assertEqual(gates["C5"]["status"], "red")
+        self.assertIn("historischer", gates["B4"]["detail"])
+        state = snapshot["project"]
+        self.assertGreater(state["merged_gates"],
+                           sum(gate["status"] == "green" for gate in gates.values()))
         self.assertEqual(state["focus"], "B4 – Pending Jobs + Approvals")
         self.assertTrue(state["resume"][0]["value"].endswith("/pull/94"))
         self.assertFalse(any(step["title"].startswith("B1 ") for step in state["resume"]))

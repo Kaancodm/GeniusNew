@@ -49,7 +49,7 @@ button:active{transform:translateY(1px)}.wide{grid-column:1/-1}.clickable{cursor
 <div class="grid">
 <section class="card"><h2>System</h2><div id="system"></div></section>
 <section class="card"><h2>Agenten</h2><div id="tools"></div></section>
-<section class="card wide"><h2>Beta Gates</h2><div id="gates" class="gates"></div></section>
+<section class="card wide"><h2>Implementierungen und offene Nachweise</h2><p class="muted">Gemergter Code allein belegt keine Beta-Freigabe. Betriebs- und Security-Nachweise am aktuellen Head bleiben erforderlich.</p><div id="gates" class="gates"></div></section>
 <section class="card wide"><h2>TERM Befehle</h2><div id="commands"></div></section>
 </div>
 <div id="panel" class="panel" role="dialog" aria-modal="true">
@@ -71,7 +71,7 @@ async function runAction(name){prun.disabled=true;poutput.hidden=false;poutput.t
 async function load(){
  const [r,mr]=await Promise.all([fetch('/api/status',{cache:'no-store'}),fetch('/api/mail',{cache:'no-store'})]); const d=await r.json(); const m=await mr.json(); updateMail(m);
  document.getElementById('stamp').textContent=new Date(d.generated_at*1000).toLocaleTimeString();
- document.getElementById('projectSummary').innerHTML='<div class="projectfocus">'+esc(d.project.focus)+'</div><div class="muted">Nächster Schritt: '+esc(d.project.stopped_at)+'</div><div class="projectmeta"><span class="pill">origin/main '+esc(d.project.main_head)+'</span><span class="pill">v0.2 Gates erfüllt: '+esc(d.project.merged_gates)+'/'+esc(d.project.total_gates)+'</span></div>';
+ document.getElementById('projectSummary').innerHTML='<div class="projectfocus">'+esc(d.project.focus)+'</div><div class="muted">Nächster Schritt: '+esc(d.project.stopped_at)+'</div><div class="projectmeta"><span class="pill">origin/main '+esc(d.project.main_head)+'</span><span class="pill">Implementierungen auf main: '+esc(d.project.merged_gates)+'/'+esc(d.project.total_gates)+'</span></div>';
  document.getElementById('resume').className='resume';
  document.getElementById('resume').innerHTML=d.project.resume.map((s,i)=>{let ctl='';if(s.type==='command')ctl='<button data-resume-cmd="'+esc(s.value)+'">TERM kopieren</button>';else if(s.type==='url')ctl='<a href="'+esc(s.value)+'" target="_blank" rel="noopener"><button>PR öffnen</button></a>';else if(s.type==='action')ctl='<button data-resume-action="'+esc(s.value)+'">Prüfung starten</button>';return '<div class="resumeitem"><div><b>'+(i+1)+'. '+esc(s.title)+'</b><div class="muted">'+esc(s.detail)+'</div></div>'+ctl+'</div>'}).join('')||'<div class="resumeitem">✓ Kein Wiedereinstiegspunkt offen</div>';
  document.getElementById('priorities').innerHTML=d.priorities.map((s,i)=>'<div class="row"><span><b>'+(i+1)+'.</b> '+esc(s.title)+'</span><span class="muted">'+esc(s.detail)+'</span></div>').join('')||'<div class="row">✓ Keine offenen Prioritäten</div>';
