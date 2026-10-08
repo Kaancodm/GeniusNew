@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   tests:
-    runs-on: self-hosted
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["self-hosted","genius-core-16gb"]') }}
     # Disposable CI database only; no production credentials or external endpoint.
     services:
       postgres:
@@ -20,12 +20,12 @@ jobs:
           POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: geniusnew_test_admin
         ports:
-          - 5432:5432
+          - 127.0.0.1::5432
         options: >-
           --health-cmd "pg_isready -U postgres -d geniusnew_test_admin"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      GENIUSNEW_TEST_ADMIN_DSN: "host=127.0.0.1 port=5432 dbname=geniusnew_test_admin user=postgres"
+      GENIUSNEW_TEST_ADMIN_DSN: "host=127.0.0.1 port=${{ job.services.postgres.ports[5432] }} dbname=geniusnew_test_admin user=postgres"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Use system Python
@@ -46,7 +46,7 @@ jobs:
         run: python scripts/demo_restore.py
 
   guarded:
-    runs-on: self-hosted
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["self-hosted","genius-core-16gb"]') }}
     outputs:
       modules: ${{ steps.list.outputs.modules }}
     steps:
@@ -61,7 +61,7 @@ jobs:
 
   refusals:
     needs: guarded
-    runs-on: self-hosted
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["self-hosted","genius-core-16gb"]') }}
     name: refusals (${{ matrix.module }})
     # Disposable CI database only; no production credentials or external endpoint.
     services:
@@ -71,12 +71,12 @@ jobs:
           POSTGRES_HOST_AUTH_METHOD: trust
           POSTGRES_DB: geniusnew_test_admin
         ports:
-          - 5432:5432
+          - 127.0.0.1::5432
         options: >-
           --health-cmd "pg_isready -U postgres -d geniusnew_test_admin"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      GENIUSNEW_TEST_ADMIN_DSN: "host=127.0.0.1 port=5432 dbname=geniusnew_test_admin user=postgres"
+      GENIUSNEW_TEST_ADMIN_DSN: "host=127.0.0.1 port=${{ job.services.postgres.ports[5432] }} dbname=geniusnew_test_admin user=postgres"
     strategy:
       fail-fast: false
       matrix:
@@ -99,7 +99,7 @@ jobs:
   contracts:
     needs: [tests, refusals]
     if: always()
-    runs-on: self-hosted
+    runs-on: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["self-hosted","genius-core-16gb"]') }}
     steps:
       - name: Tests and every refusal check passed
         env:
