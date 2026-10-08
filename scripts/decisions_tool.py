@@ -14,6 +14,7 @@ NAME = re.compile(r"^(\d{4}-\d{2}-\d{2})-(\d{2})-[a-z0-9-]+\.md$")
 
 
 def load(directory=DIR):
+    """Return every decision as a dict, newest first; refuse a malformed file."""
     entries = []
     for path in sorted(directory.glob("*.md"), reverse=True):
         match = NAME.match(path.name)
@@ -31,6 +32,7 @@ def load(directory=DIR):
 
 
 def render(entries):
+    """Join the decisions into one Markdown document."""
     out = ["# Entscheidungen (alle, neueste zuerst)\n"]
     for e in entries:
         out.append(f"## {e['date']} — {e['title']}\n\n{e['decision']}\n\n"

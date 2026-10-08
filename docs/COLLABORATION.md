@@ -70,7 +70,11 @@ Die Beschreibung autorisiert keinen tatsächlichen Upload; jeder Upload ist Kaan
    `docs/DATABASE.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`,
    `AGENTS.md`. Die Entscheidungen liegen einzeln in `docs/decisions/`; als Quelle
    dient die Ausgabe von `python3 scripts/decisions_tool.py` (ein Dokument, als
-   `DECISIONS.md` hochladen). Der SHA-256 im Protokoll gilt für diese Ausgabe. Nie das vollständige Repository, `.git`, Secrets, Logs oder DB-Dateien.
+   `DECISIONS.md` hochladen). Das Werkzeug liest den Arbeitsbaum. Deshalb den
+   gewählten SHA sauber auschecken (`git checkout <SHA>`, `git status` ohne
+   Änderungen) und erst dann ausführen; so gehören Upload und SHA-256 zum
+   protokollierten Commit. Der SHA-256 im Protokoll gilt für diese Ausgabe.
+   Nie das vollständige Repository, `.git`, Secrets, Logs oder DB-Dateien.
 3. Vor der Übertragung jede Datei lesen. Bei sensiblem oder unklarem Inhalt stoppen und
    Kaan fragen. Jede Redaktion ausdrücklich im Paketprotokoll kennzeichnen.
 4. Pro Paket dokumentieren (im PR oder der Übergabe, nie mit Zugangsdaten):
@@ -93,13 +97,14 @@ Freigabelinks und Authentifizierungs-Proxys.
 **Wer fragt wen:** Jedes Werkzeug und Kaan fragen bei Wissensfragen zuerst NotebookLM,
 also „Was wurde zu X entschieden?“, „Warum ist Y so?“ oder „Was ist der nächste
 Schritt?“. Steht es dort nicht, ist es noch nicht entschieden. Dann geht die Frage an
-Kaan; Claude Code trägt die Antwort in `docs/DECISIONS.md` ein und spiegelt sie bei
+Kaan; Claude Code trägt die Antwort als Datei in `docs/decisions/` ein und spiegelt sie bei
 Bedarf in `docs/STATUS.md`.
 
 **Pflege nach Merges** (gesammelt, höchstens ein PR am Tag):
 1. **Claude Code** überträgt die Wissensblöcke gemergter PRs nach `docs/STATUS.md` und
-   neue Entscheidungen und Konfliktergebnisse nach `docs/DECISIONS.md`, auf einem Branch
-   `claude/wissen-<datum>`; ein solcher PR ändert nur diese beiden Dateien. Zahlen
+   neue Entscheidungen und Konfliktergebnisse als neue Dateien nach `docs/decisions/`
+   (Regeln: `docs/DECISIONS.md`), auf einem Branch `claude/wissen-<datum>`; ein solcher
+   PR ändert nur `docs/STATUS.md` und `docs/decisions/`. Zahlen
    (Tests, Angriffe der Demo, Module im Refusal-Guard) kommen nur aus einem Wissensblock
    oder einer Befehlsausgabe, nie geschätzt. Kaan mergt (siehe „Konflikte“ unten).
 2. Kaan aktualisiert danach die Quellen in NotebookLM. Widersprüche zwischen den
@@ -246,8 +251,8 @@ DB-Entwurf sicherheitstechnisch frei und mergt nie eigene PRs.
    Stufe Critical/High: ein Codex-Review oder ein Kiro- oder Gemini-Review im Format unten.
    Claude gibt eigenen Code nie selbst frei.
 5. Claude Code überträgt den Wissensblock in `docs/STATUS.md` und trägt Entscheidungen
-   und Konfliktergebnisse in `docs/DECISIONS.md` ein (gesammelt, siehe „Pflege nach
-   Merges“).
+   und Konfliktergebnisse als Datei in `docs/decisions/` ein (gesammelt, siehe „Pflege
+   nach Merges“).
 
 **Kommunikation läuft über den PR**, nicht über Kopieren zwischen Chats. Plan,
 Rückfragen an Gemini oder Claude, Reviews, Begründungen und der Wissensblock stehen im
@@ -315,7 +320,7 @@ Claude Code entscheidet anhand von Code, Tests, `AGENTS.md` und `docs/DECISIONS.
 begründet die Entscheidung im PR oder Issue. **Jede Entscheidung endet mit einem fertigen
 Prompt für jedes betroffene Werkzeug**, den Kaan nur noch kopiert: was zu tun ist, in
 welcher Datei, bis wann es als erledigt gilt. Die Entscheidung ist für alle Werkzeuge
-verbindlich; Claude Code trägt sie selbst in `docs/DECISIONS.md` ein. Wo eine Datei
+verbindlich; Claude Code trägt sie selbst in `docs/decisions/` ein. Wo eine Datei
 korrigiert werden muss, darf Claude Code sie selbst ändern, auch die von Gemini
 (Überschreibrecht). Nicht überschreiben darf Claude Code Kaans Entscheidungen und die
 Ausnahmen (neue Abhängigkeit, Grenze aus `SECURITY.md`, Tags, Kaans Architektur- und
