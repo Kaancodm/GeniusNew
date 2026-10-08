@@ -35,3 +35,6 @@ audit/
 .DS_Store
 .idea/
 .vscode/
+# Local document workspace databases contain account data and page content.
+document_app/*.sqlite3
+document_app/*.sqlite3-*
