@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -35,14 +36,20 @@ class WorkspaceChecks(unittest.TestCase):
 
     def git(self, *args):
         return subprocess.run(["git", "-C", str(self.repo), *args], check=True,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")})
 
     def test_main_is_not_a_writing_workspace(self):
         with self.assertRaises(SystemExit):
             workflow.workspace(str(self.main_repo))
 
     def test_named_shared_checkout_is_rejected(self):
-        subprocess.run(["git", "-C", str(self.main_repo), "switch", "-q", "-c", "shared/task"], check=True)
+        old = self.repo
+        self.repo = self.main_repo
+        try:
+            self.git("switch", "-q", "-c", "shared/task")
+        finally:
+            self.repo = old
         with self.assertRaises(workflow.WorkflowRefused):
             workflow.workspace(str(self.main_repo))
 
@@ -137,7 +144,8 @@ class WorkspaceChecks(unittest.TestCase):
                 self.git("config", "--remove-section", "remote.origin")
                 self.git("remote", "add", "origin", "https://github.com/Kaancodm/GeniusNew.git")
                 subprocess.run(["git", "-C", str(self.repo), "config", "--remove-section",
-                                "url.https://other.test/"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                "url.https://other.test/"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")})
 
     def test_new_task_rejects_foreign_source_before_fetch(self):
         self.git("remote", "set-url", "origin", "https://other.test/repo")
@@ -209,6 +217,52 @@ class WorkspaceChecks(unittest.TestCase):
                                     include_stderr=True)
         self.assertEqual(rc, 0)
         self.assertIn("not logged in", output)
+
+    def test_git_overrides_cannot_redirect_workspace_validation(self):
+        git_dir = (self.repo / ".git").read_text().strip().removeprefix("gitdir: ")
+        overrides = {"GIT_DIR": git_dir, "GIT_WORK_TREE": str(self.main_repo),
+                     "GIT_COMMON_DIR": str(self.main_repo / ".git"),
+                     "GIT_INDEX_FILE": str(self.main_repo / ".git/index"),
+                     "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "remote.origin.url",
+                     "GIT_CONFIG_VALUE_0": "https://github.com/other/repo.git"}
+        with patch.dict(os.environ, overrides):
+            self.assertEqual(workflow.workspace(str(self.repo)), self.repo.resolve())
+            with self.assertRaises(workflow.WorkflowRefused):
+                workflow.workspace(str(self.main_repo))
+            with patch.object(workflow.shutil, "which", return_value="/usr/bin/example"):
+                for tool in workflow.TOOLS:
+                    _, env = workflow.argv_for(tool, self.repo, False)
+                    self.assertFalse(any(name.startswith("GIT_") for name in env))
+
+    def test_new_task_scrubs_git_overrides_before_fetch_and_worktree_add(self):
+        with patch.dict(os.environ, {"GIT_DIR": "/invalid/repository"}), \
+                patch.object(workflow, "REPO", self.main_repo), \
+                patch.object(workflow, "ROOT", Path(self.temp.name) / "tasks"), \
+                patch.object(workflow, "repository", return_value=self.main_repo), \
+                patch.object(workflow.subprocess, "run") as run:
+            workflow.new_task("safe-task")
+            self.assertEqual(run.call_count, 2)
+            for call in run.call_args_list:
+                self.assertFalse(any(name.startswith("GIT_") for name in call.kwargs["env"]))
+
+    def test_tmux_server_git_overrides_are_removed_in_the_actual_child(self):
+        out = Path(self.temp.name) / "child-env.txt"
+        with patch.object(workflow, "RUNTIME", self.state):
+            base = workflow.tmux_base()
+            subprocess.run(base + ["new-session", "-d", "-s", "fixture-server", "cat"], check=True)
+            for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG_COUNT"):
+                subprocess.run(base + ["set-environment", "-g", name, "synthetic-override"], check=True)
+            code = ("import os; from pathlib import Path; "
+                    f"Path({str(out)!r}).write_text(','.join(k for k in "
+                    "('GIT_DIR','GIT_WORK_TREE','GIT_CONFIG_COUNT') if k in os.environ))")
+            with patch.object(workflow, "argv_for", return_value=([sys.executable, "-c", code], dict(os.environ))):
+                workflow.start("codex", str(self.repo), False, False)
+            for _ in range(50):
+                if out.exists():
+                    break
+                time.sleep(.02)
+            self.assertTrue(out.exists())
+            self.assertEqual(out.read_text(), "")
 
 
 if __name__ == "__main__":

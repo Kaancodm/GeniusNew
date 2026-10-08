@@ -24,15 +24,26 @@ MODEL = "qwen2.5-coder:3b"
 GEMINI_AUTH_ENV = ("GEMINI_CLI_HOME", "GEMINI_API_KEY", "GOOGLE_API_KEY",
                    "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_ACCESS_TOKEN",
                    "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION")
+GIT_REPOSITORY_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+                      "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                      "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+                      "GIT_PREFIX", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+                      "GIT_CONFIG_SYSTEM", "GIT_CONFIG_GLOBAL", "GIT_SHALLOW_FILE", "GIT_NAMESPACE")
 
 
 class WorkflowRefused(SystemExit):
     """The launcher cannot establish an authorized isolated task environment."""
 
 
+def clean_environment() -> dict[str, str]:
+    """Repository selection must come from -C, never inherited Git overrides."""
+    return {name: value for name, value in os.environ.items() if not name.startswith("GIT_")}
+
+
 def probe(argv: list[str], timeout: int = 8, *, include_stderr: bool = False) -> tuple[int, str]:
     try:
-        result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
+                                env=clean_environment())
         return result.returncode, result.stdout + (result.stderr if include_stderr else "")
     except (OSError, subprocess.TimeoutExpired):
         return 125, ""
@@ -66,7 +77,7 @@ def workspace(raw: str) -> Path:
 
 
 def argv_for(tool: str, path: Path, review: bool) -> tuple[list[str], dict[str, str]]:
-    env = dict(os.environ)
+    env = clean_environment()
     if tool == "codex":
         argv = ["codex", "-C", str(path), "--sandbox",
                 "read-only" if review else "workspace-write",
@@ -136,11 +147,14 @@ def start(tool: str, raw: str, review: bool, dry_run: bool) -> None:
                 if active.returncode == 0:
                     raise WorkflowRefused("Eine Sitzung arbeitet bereits in diesem Worktree.")
         # The profile applies only to this new tmux session, never the user's HOME.
+        unset = sorted(set(GIT_REPOSITORY_ENV) | {name for name in os.environ if name.startswith("GIT_")})
+        assignments = []
         if tool.startswith("gemini-"):
             # tmux's existing server also has an environment: unset conflicting
             # credentials in the actual child, not just the client process.
-            argv = ["env", *[arg for name in GEMINI_AUTH_ENV for arg in ("-u", name)],
-                    "GEMINI_CLI_HOME=" + env["GEMINI_CLI_HOME"], *argv]
+            unset.extend(GEMINI_AUTH_ENV)
+            assignments.append("GEMINI_CLI_HOME=" + env["GEMINI_CLI_HOME"])
+        argv = ["env", *[arg for name in unset for arg in ("-u", name)], *assignments, *argv]
         subprocess.run(base + ["new-session", "-d", "-s", name, "-c", str(path), *argv],
                        env=env, check=True)
     print(f"Sitzung gestartet. Verbinden: genius-workflow attach {tool} {path}")
@@ -178,10 +192,12 @@ def new_task(task: str) -> None:
     if target.exists():
         raise WorkflowRefused("Aufgabe existiert bereits; vorhandene Arbeit bleibt erhalten.")
     repository(str(REPO))
-    subprocess.run(["git", "-C", str(REPO), "fetch", "origin", "main"], check=True)
+    subprocess.run(["git", "-C", str(REPO), "fetch", "origin", "main"],
+                   check=True, env=clean_environment())
     ROOT.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "-C", str(REPO), "worktree", "add", "-b",
-                    "workflow/" + task, str(target), "origin/main"], check=True)
+                    "workflow/" + task, str(target), "origin/main"],
+                   check=True, env=clean_environment())
     print(target)
 
 
