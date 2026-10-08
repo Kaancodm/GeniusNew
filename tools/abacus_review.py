@@ -81,7 +81,7 @@ def review(prompt: str, *, model: str, head: str, key: str) -> str:
         choice = data["choices"][0]
         message = choice["message"]
         content = message["content"]
-    except (ValueError, KeyError, IndexError, TypeError):
+    except (ValueError, KeyError, IndexError, TypeError, RecursionError):
         raise AbacusRefused("Ungültige API-Antwort; Ergebnis UNKNOWN.") from None
     if choice.get("finish_reason") != "stop" or message.get("tool_calls"):
         raise AbacusRefused("Unvollständige oder werkzeugbasierte Antwort; Ergebnis UNKNOWN.")

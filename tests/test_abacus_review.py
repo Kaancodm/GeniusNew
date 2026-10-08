@@ -129,6 +129,14 @@ class AbacusReviewTest(unittest.TestCase):
         with self.assertRaises(abacus.AbacusRefused):
             self.review()
 
+    def test_deeply_nested_json_is_unknown_without_exposing_provider_text(self):
+        self.response.read.return_value = b"[" * 20_000 + json.dumps(KEY).encode() + b"]" * 20_000
+        with self.assertRaises(abacus.AbacusRefused) as result:
+            self.review()
+        self.assertIn("UNKNOWN", str(result.exception))
+        self.assertNotIn(KEY, str(result.exception))
+        self.response.__exit__.assert_called_once()
+
     def test_tool_calls_and_truncated_answers_are_refused(self):
         self.set_content("run this", tool_calls=[{"function": {"name": "shell"}}])
         with self.assertRaises(abacus.AbacusRefused):
