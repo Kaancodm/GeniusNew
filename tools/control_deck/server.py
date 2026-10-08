@@ -29,6 +29,7 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def do_GET(self) -> None:
+        """Serve dashboard resources and snapshots only for an allowed Host header."""
         if not self._trusted_host():
             return
         path = urlparse(self.path).path
@@ -50,6 +51,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self) -> None:
+        """Route trusted-host writes through HARPA authentication or action validation."""
         if not self._trusted_host():
             return
         path = urlparse(self.path).path
@@ -87,6 +89,11 @@ class Handler(BaseHTTPRequestHandler):
         self._json(run_action(action, self.server.repo))
 
     def _harpa(self) -> None:
+        """Authenticate a bounded JSON report and acknowledge storage with HTTP 202.
+
+        Return an HTTP error if the inbox is disabled, authentication fails, or the
+        request cannot be validated or stored.
+        """
         token = self.server.harpa_token()
         if token is None or self.server.harpa_inbox is None:
             self.send_error(404)
@@ -115,6 +122,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(result, status=202)
 
     def _json(self, payload: object, *, status: int = 200) -> None:
+        """Send a JSON response with the requested status and cache/security headers."""
         body = json.dumps(payload, separators=(",", ":")).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -159,6 +167,7 @@ class Server(ThreadingHTTPServer):
         return frozenset(own | self.extra_hosts)
 
     def harpa_token(self) -> str | None:
+        """Read the stripped token, returning None if absent, unreadable, or invalid."""
         if self.harpa_token_file is None:
             return None
         try:
@@ -197,6 +206,7 @@ def host_name(value: str) -> str:
 
 
 def main() -> None:
+    """Parse listener, repository, and optional HARPA settings, then serve forever."""
     parser = argparse.ArgumentParser(description="GeniusNew read-only control deck")
     parser.add_argument("--host", type=bind_host, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)

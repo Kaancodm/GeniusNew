@@ -22,6 +22,7 @@ class HarpaPayloadError(ValueError):
 
 
 def _text(payload: dict[str, object], name: str, limit: int) -> str:
+    """Return stripped, bounded text or raise HarpaPayloadError for invalid input."""
     value = payload.get(name)
     if not isinstance(value, str):
         raise HarpaPayloadError(f"{name} must be text")
@@ -32,6 +33,10 @@ def _text(payload: dict[str, object], name: str, limit: int) -> str:
 
 
 def normalize(payload: object, *, received_at: int | None = None) -> dict[str, object]:
+    """Validate the fixed report contract and attach the supplied or current timestamp.
+
+    Raise HarpaPayloadError for invalid fields; reports carry no action requests.
+    """
     if not isinstance(payload, dict) or set(payload) != {
         "event_id", "kind", "title", "summary", "source_url"
     }:
@@ -57,6 +62,11 @@ def normalize(payload: object, *, received_at: int | None = None) -> dict[str, o
 
 
 def _items(path: Path, *, strict: bool = False) -> list[dict[str, Any]]:
+    """Read at most MAX_ITEMS recent records, treating a missing file as empty.
+
+    In strict mode, propagate read errors and reject malformed JSON or non-object
+    records with OSError; otherwise tolerate read errors and skip bad records.
+    """
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
@@ -82,6 +92,12 @@ def _items(path: Path, *, strict: bool = False) -> list[dict[str, Any]]:
 
 
 def store(payload: object, path: Path) -> dict[str, object]:
+    """Validate and store a report, deduplicating IDs within the retained records.
+
+    Serialize updates under a process-local lock and atomically replace the inbox
+    with at most MAX_ITEMS records in a mode-0600 file. Return acceptance and
+    duplicate status; propagate validation and storage errors.
+    """
     item = normalize(payload)
     with _STORE_LOCK:
         existing = _items(path, strict=True)
@@ -117,6 +133,7 @@ def store(payload: object, path: Path) -> dict[str, object]:
 
 
 def snapshot(path: Path | None) -> dict[str, object]:
+    """Return up to 20 newest reports, or disabled status when no path is configured."""
     if path is None:
         return {"status": "disabled", "items": []}
     items = _items(path)

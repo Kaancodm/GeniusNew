@@ -179,6 +179,7 @@ class Sandbox:
     """A private PATH, a log of every stubbed call, and throw-away target paths."""
 
     def __init__(self, tmp: Path, *, without: tuple[str, ...] = ()) -> None:
+        """Build isolated command stubs, synthetic host state, and disposable target paths."""
         self.tmp = tmp
         self.bin = tmp / "bin"
         self.bin.mkdir()
@@ -220,6 +221,7 @@ class Sandbox:
         self.sshd_config.write_text("Include /etc/ssh/sshd_config.d/*.conf\n#Match User anoncvs\n")
 
     def env(self, **extra: str) -> dict[str, str]:
+        """Return the sandbox environment with optional overrides for a command invocation."""
         env = {
             "PATH": str(self.bin),
             "HOME": str(self.home),
@@ -1082,6 +1084,7 @@ class DeckTest(ServerToolTestCase):
         self.assertFalse(self.sb.called("systemctl restart"))
 
     def test_apply_writes_the_unit_opens_tailscale_only_and_starts(self):
+        """Install the hardened deck unit and private HARPA token before opening Tailscale access."""
         result = self.sb.run("deck", "--apply")
         self.assertEqual(result.returncode, 0, result.stderr)
         unit = self.sb.deck_unit.read_text()
@@ -1113,12 +1116,14 @@ class DeckTest(ServerToolTestCase):
         self.assertIn("http://100.101.102.103:8787", result.stdout)
 
     def test_reapplying_the_deck_keeps_the_existing_harpa_token(self):
+        """Preserve the original HARPA credential when the deck installation is repeated."""
         self.assertEqual(self.sb.run("deck", "--apply").returncode, 0)
         original = self.sb.harpa_credential.read_text()
         self.assertEqual(self.sb.run("deck", "--apply").returncode, 0)
         self.assertEqual(self.sb.harpa_credential.read_text(), original)
 
     def test_unsafe_harpa_credential_paths_are_refused(self):
+        """Reject relative or unsafe credential paths before writing the service unit."""
         for path, message in (("relative-token", "absolut"),
                               (str(self.sb.tmp / "bad token"), "unsichere Zeichen")):
             with self.subTest(path=path):
@@ -1128,6 +1133,7 @@ class DeckTest(ServerToolTestCase):
         self.assertFalse(self.sb.deck_unit.exists())
 
     def test_empty_generated_harpa_token_is_refused(self):
+        """Abort installation before writing the unit if token generation produces no data."""
         python = self.sb.bin / "python3"
         python.unlink()
         python.write_text("#!/bin/bash\nexit 0\n")

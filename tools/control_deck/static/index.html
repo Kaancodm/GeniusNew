@@ -74,6 +74,7 @@ function updateMail(d){mailState=d;mailButton.dataset.attention=d.attention||'no
 function row(name,v){return '<button class="row clickable" data-kind="item" data-name="'+esc(name)+'"><span>'+badge(v.status)+esc(name)+'</span><span class="muted">'+esc(v.detail||v.head||'')+'</span></button>'}
 function openPanel(title,body,action){ptitle.textContent=title;pbody.textContent=body;poutput.hidden=true;prun.hidden=!action;prun.dataset.action=action||'';panel.classList.add('open')}
 async function runAction(name){prun.disabled=true;poutput.hidden=false;poutput.textContent='läuft…';const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:name})});const d=await r.json();poutput.textContent=(d.ok?'✓ PASS\n':'× FAIL\n')+(d.output||'');prun.disabled=false;load()}
+/** Refresh dashboard, mail, and HARPA snapshots and bind their controls. */
 async function load(){
  const [r,mr,hr]=await Promise.all([fetch('/api/status',{cache:'no-store'}),fetch('/api/mail',{cache:'no-store'}),fetch('/api/harpa',{cache:'no-store'})]); const d=await r.json(); const m=await mr.json(); const h=await hr.json(); updateMail(m);
  document.getElementById('stamp').textContent=new Date(d.generated_at*1000).toLocaleTimeString();

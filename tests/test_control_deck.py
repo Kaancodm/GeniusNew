@@ -141,6 +141,7 @@ class ControlDeckTest(unittest.TestCase):
         self.assertNotIn("body", state["threads"][0])
 
     def test_harpa_inbox_accepts_only_the_fixed_report_contract(self):
+        """Accept valid reports and reject extra fields, invalid text, kinds, IDs, and URLs."""
         payload = {
             "event_id": "prices:2026-10-08T08:00:00Z",
             "kind": "monitor",
@@ -166,6 +167,7 @@ class ControlDeckTest(unittest.TestCase):
                     harpa_inbox.normalize(changed)
 
     def test_harpa_inbox_deduplicates_event_ids(self):
+        """A repeated event ID must acknowledge a duplicate without adding a record."""
         payload = {
             "event_id": "weekly:42",
             "kind": "report",
@@ -183,10 +185,12 @@ class ControlDeckTest(unittest.TestCase):
         self.assertEqual(len(state["items"]), 1)
 
     def test_harpa_refusals_are_mutation_guarded(self):
+        """Keep HARPA validation errors and the inbox module covered by the refusal guard."""
         self.assertIn("tools/control_deck/harpa_inbox.py", refusals.GUARDED)
         self.assertIn("HarpaPayloadError", refusals._REFUSAL_RAISES)
 
     def test_harpa_inbox_storage_is_bounded_and_private(self):
+        """Retain only the newest MAX_ITEMS reports in a file with private permissions."""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "inbox.jsonl"
             for number in range(harpa_inbox.MAX_ITEMS + 5):
@@ -202,6 +206,7 @@ class ControlDeckTest(unittest.TestCase):
         self.assertEqual(mode, 0o600)
 
     def test_harpa_inbox_refuses_to_overwrite_corrupted_state(self):
+        """Reject storage over malformed JSON without changing the existing inbox."""
         payload = {
             "event_id": "monitor:1", "kind": "monitor", "title": "Monitor",
             "summary": "No material change.", "source_url": "https://example.test/",
@@ -218,6 +223,7 @@ class HostCheckTest(unittest.TestCase):
     """A browser page must not reach the deck through a rebound DNS name."""
 
     def setUp(self):
+        """Start an isolated HTTP server with temporary HARPA state and tracked actions."""
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.actions = []
@@ -264,6 +270,7 @@ class HostCheckTest(unittest.TestCase):
         return self.request("POST", "/api/action", host, headers, b'{"action":"git_status"}')
 
     def post_harpa(self, *, token="t" * 48, payload=None):
+        """Post a supplied or default report using a trusted host and HARPA bearer token."""
         body = json.dumps(payload or {
             "event_id": "monitor:1",
             "kind": "monitor",
@@ -291,6 +298,7 @@ class HostCheckTest(unittest.TestCase):
         hub.assert_called_once_with(self.deck.repo)
 
     def test_foreign_host_is_refused_before_any_route(self):
+        """Reject foreign Host headers before any dashboard or snapshot route is served."""
         for path in ("/", "/api/status", "/api/mail", "/api/agents", "/api/harpa"):
             with self.subTest(path=path):
                 status, body = self.request("GET", path, f"attacker.example:{self.port}")
@@ -298,10 +306,12 @@ class HostCheckTest(unittest.TestCase):
                 self.assertNotIn(b"MAIL-CANARY", body)
 
     def test_harpa_report_requires_its_own_token(self):
+        """Reject an incorrect HARPA token without creating an inbox."""
         self.assertEqual(self.post_harpa(token="wrong" * 8)[0], 401)
         self.assertFalse(self.deck.harpa_inbox.exists())
 
     def test_harpa_report_is_stored_but_cannot_request_an_action(self):
+        """Accept and expose a report while leaving the action runner untouched."""
         status, body = self.post_harpa(payload={
             "event_id": "research:1",
             "kind": "research",
@@ -317,6 +327,7 @@ class HostCheckTest(unittest.TestCase):
         self.assertEqual(json.loads(body)["items"][0]["event_id"], "research:1")
 
     def test_harpa_report_rejects_command_fields(self):
+        """Reject reports containing an action field without invoking the action runner."""
         status, _ = self.post_harpa(payload={
             "event_id": "attack:1", "kind": "report", "title": "No",
             "summary": "No", "source_url": "https://example.test/", "action": "tests",
@@ -447,6 +458,7 @@ class AgentControlTest(unittest.TestCase):
         self.assertNotIn("await copyCommand(b.dataset.resumeCmd);const old=b.textContent", html)
 
     def test_control_deck_docs_list_agents_route_and_action_commas(self):
+        """Keep the documented route and action lists consistent with the dashboard API."""
         text = (Path(__file__).parents[1] / "docs/CONTROL-DECK.md").read_text()
         self.assertIn("`/`, `/api/status`, `/api/mail`, `/api/agents` und `/api/harpa`", text)
         self.assertIn("`git_status`, `tests`, `demo`, `docker_status`", text)
