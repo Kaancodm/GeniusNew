@@ -70,7 +70,7 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/anchor_process.py", "geniusnew/config.py",
            "geniusnew/__main__.py", "geniusnew/database.py",
            "geniusnew/audit_store.py", "tools/control_deck/actions.py",
-           "ops/server/genius-server")
+           "ops/server/genius-server", "tools/abacus_review.py")
 
 # Guarded shell scripts and the one test module that runs each of them.
 GUARDED_SHELL = {"ops/server/genius-server": "test_server_tool.py"}
@@ -89,7 +89,7 @@ _SHELL_DIE = re.compile(r'(?<![\w-])die(\s+")')
 # The pattern is explicit: whatever a guarded module refuses with belongs here
 # the same day the module joins GUARDED.
 _REFUSAL_CALLS = {"_fail", "_deny"}
-_REFUSAL_RAISES = {"ContractError", "Rejected", "GatewayRejected", "AgentStartRefused"}
+_REFUSAL_RAISES = {"ContractError", "Rejected", "GatewayRejected", "AgentStartRefused", "AbacusRefused"}
 _REFUSAL_RETURNS = {"_refusal"}
 
 
