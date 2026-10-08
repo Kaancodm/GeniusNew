@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
+import stat
 import tempfile
 import threading
 import unittest
@@ -453,6 +454,45 @@ class HostCheckTest(unittest.TestCase):
                     status, body = self.post_harpa()
                 self.assertEqual(status, 503)
                 self.assertNotIn(b"private-", body)
+
+    def test_harpa_duplicate_retries_wait_for_directory_persistence(self):
+        """A visible rename must not bypass a failed directory flush on retry."""
+        real_fsync = harpa_inbox.os.fsync
+        flushes = []
+        directory_fails = True
+
+        def fsync(descriptor):
+            is_directory = stat.S_ISDIR(harpa_inbox.os.fstat(descriptor).st_mode)
+            flushes.append("directory" if is_directory else "file")
+            if is_directory and directory_fails:
+                raise OSError("private-directory-flush-canary")
+            real_fsync(descriptor)
+
+        with patch.object(harpa_inbox.os, "fsync", side_effect=fsync), \
+                patch.object(harpa_inbox.os, "replace", wraps=harpa_inbox.os.replace) as replace:
+            status, body = self.post_harpa()
+            self.assertEqual(status, 503)
+            self.assertNotIn(b"private-directory-flush-canary", body)
+            self.assertEqual(flushes, ["file", "directory"])
+            replace.assert_called_once()
+            persisted = self.deck.harpa_inbox.read_bytes()
+            self.assertEqual(json.loads(persisted)["event_id"], "monitor:1")
+
+            status, body = self.post_harpa()
+            self.assertEqual(status, 503)
+            self.assertNotIn(b"private-directory-flush-canary", body)
+            self.assertEqual(flushes, ["file", "directory", "directory"])
+            self.assertEqual(self.deck.harpa_inbox.read_bytes(), persisted)
+
+            directory_fails = False
+            status, body = self.post_harpa()
+            self.assertEqual(status, 202)
+            self.assertEqual(json.loads(body), {"accepted": True, "duplicate": True,
+                                                "event_id": "monitor:1"})
+            self.assertEqual(flushes, ["file", "directory", "directory", "directory"])
+            replace.assert_called_once()
+            self.assertEqual(self.deck.harpa_inbox.read_bytes(), persisted)
+        self.assertEqual(self.actions, [])
 
     def test_harpa_corrupt_inbox_stays_unavailable_over_http(self):
         self.deck.harpa_inbox.write_text("not-json\n")

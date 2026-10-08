@@ -108,6 +108,15 @@ def _items(path: Path) -> list[dict[str, Any]]:
     return items
 
 
+def _sync_directory(path: Path) -> None:
+    """Persist the rename before acknowledging a new report or its retry."""
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def store(payload: object, path: Path) -> dict[str, object]:
     """Validate and store a report, deduplicating IDs within the retained records.
 
@@ -119,6 +128,8 @@ def store(payload: object, path: Path) -> dict[str, object]:
     with _STORE_LOCK:
         existing = _items(path)
         if any(value.get("event_id") == item["event_id"] for value in existing):
+            # The prior rename may be visible after its directory flush failed.
+            _sync_directory(path.parent)
             return {"accepted": True, "duplicate": True, "event_id": item["event_id"]}
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         descriptor, temporary = tempfile.mkstemp(prefix=".harpa-", dir=path.parent)
@@ -140,11 +151,7 @@ def store(payload: object, path: Path) -> dict[str, object]:
             finally:
                 os.close(descriptor)
             os.replace(temporary, path)
-            parent = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(parent)
-            finally:
-                os.close(parent)
+            _sync_directory(path.parent)
         except OSError:
             try:
                 os.unlink(temporary)
