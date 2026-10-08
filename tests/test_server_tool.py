@@ -24,7 +24,7 @@ REAL_TOOLS = (
     "bash", "env", "cat", "cut", "head", "tail", "sed", "awk", "grep", "mktemp", "rm",
     "install", "stat", "touch", "chmod", "chown", "dirname", "basename", "tr", "wc",
     "sleep", "timeout", "python3", "hostname", "uptime", "df", "ps", "who", "free",
-    "clear", "true", "date", "mkdir", "ls", "sort",
+    "clear", "true", "date", "mkdir", "ls", "sort", "test", "realpath",
 )
 
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIfakefakefake termius-ipad"
@@ -52,7 +52,8 @@ fi
     "sudo": """\
 echo "sudo $*" >>"$LOG"
 [ "${1:-}" != "-n" ] || shift
-exec "$@"
+# The stub does not elevate; its effective UID must match its real file owner.
+FAKE_UID="$SANDBOX_UID" exec "$@"
 """,
     "apt-get": 'echo "apt-get $*" >>"$LOG"\n',
     "systemd-run": 'echo "systemd-run $*" >>"$LOG"\necho active >"$STATE/timer"\n',
@@ -179,6 +180,7 @@ class Sandbox:
     """A private PATH, a log of every stubbed call, and throw-away target paths."""
 
     def __init__(self, tmp: Path, *, without: tuple[str, ...] = ()) -> None:
+        """Build isolated command stubs, synthetic host state, and disposable target paths."""
         self.tmp = tmp
         self.bin = tmp / "bin"
         self.bin.mkdir()
@@ -209,6 +211,7 @@ class Sandbox:
         (tmp / "run").mkdir()
         self.lockdown_session = tmp / "run" / "lockdown-session"
         self.deck_unit = tmp / "systemd" / "geniusnew-deck.service"
+        self.harpa_credential = tmp / "etc" / "geniusnew" / "harpa-token"
         self.repo = tmp / "repo"
         (self.repo / "tools" / "control_deck").mkdir(parents=True)
         (self.repo / "tools" / "control_deck" / "__main__.py").write_text("")
@@ -219,6 +222,7 @@ class Sandbox:
         self.sshd_config.write_text("Include /etc/ssh/sshd_config.d/*.conf\n#Match User anoncvs\n")
 
     def env(self, **extra: str) -> dict[str, str]:
+        """Return the sandbox environment with optional overrides for a command invocation."""
         env = {
             "PATH": str(self.bin),
             "HOME": str(self.home),
@@ -226,6 +230,7 @@ class Sandbox:
             "LOG": str(self.log),
             "STATE": str(self.state),
             "FAKE_HOME": str(self.home),
+            "SANDBOX_UID": str(os.getuid()),
             "GENIUS_OS_RELEASE": str(self.os_release),
             "GENIUS_TS_KEYRING": str(self.keyring),
             "GENIUS_TS_APT_LIST": str(self.apt_list),
@@ -235,6 +240,7 @@ class Sandbox:
             "GENIUS_LOCKDOWN_SESSION": str(self.lockdown_session),
             "GENIUS_KERNEL_RELEASE": str(self.kernel_release),
             "GENIUS_DECK_UNIT": str(self.deck_unit),
+            "GENIUS_HARPA_CREDENTIAL": str(self.harpa_credential),
             "GENIUS_DECK_SETTLE": "0",
             "GENIUS_REPO_ROOT": str(self.repo),
         }
@@ -1080,6 +1086,7 @@ class DeckTest(ServerToolTestCase):
         self.assertFalse(self.sb.called("systemctl restart"))
 
     def test_apply_writes_the_unit_opens_tailscale_only_and_starts(self):
+        """Install the hardened deck unit and private HARPA token before opening Tailscale access."""
         result = self.sb.run("deck", "--apply")
         self.assertEqual(result.returncode, 0, result.stderr)
         unit = self.sb.deck_unit.read_text()
@@ -1088,6 +1095,14 @@ class DeckTest(ServerToolTestCase):
         self.assertIn(f"-m tools.control_deck --host 100.101.102.103 --port 8787 --repo {self.sb.repo}", unit)
         self.assertIn("NoNewPrivileges=yes", unit)
         self.assertIn("ProtectHome=read-only\n", unit)
+        self.assertIn(f"LoadCredential=harpa-token:{self.sb.harpa_credential}\n", unit)
+        self.assertIn("StateDirectory=geniusnew-control-deck\n", unit)
+        self.assertIn("--harpa-token-file %d/harpa-token", unit)
+        self.assertIn("--harpa-inbox /var/lib/geniusnew-control-deck/harpa.jsonl", unit)
+        self.assertTrue(self.sb.harpa_credential.is_file())
+        self.assertEqual(self.sb.harpa_credential.stat().st_mode & 0o777, 0o600)
+        self.assertTrue(self.sb.called(f"sudo realpath -m -- {self.sb.harpa_credential}"))
+        self.assertTrue(self.sb.called(f"sudo realpath -m -- {self.sb.repo}"))
         python_dir = Path(shutil.which("python3", path=str(self.sb.bin))).parent
         self.assertIn(f"Environment=PATH={python_dir}:/usr/local/sbin:", unit)
         self.assertFalse(self.sb.called("ufw delete"))
@@ -1103,6 +1118,199 @@ class DeckTest(ServerToolTestCase):
             if call.startswith("ufw allow"):
                 self.assertIn("on tailscale0", call)
         self.assertIn("http://100.101.102.103:8787", result.stdout)
+
+    def test_reapplying_the_deck_keeps_the_existing_harpa_token(self):
+        """Preserve the original HARPA credential when the deck installation is repeated."""
+        self.assertEqual(self.sb.run("deck", "--apply").returncode, 0)
+        original = self.sb.harpa_credential.read_text()
+        self.assertEqual(self.sb.run("deck", "--apply").returncode, 0)
+        self.assertEqual(self.sb.harpa_credential.read_text(), original)
+
+    def test_harpa_reapply_with_a_different_simulated_caller_uid(self):
+        """Stubbed sudo keeps the real file owner even when the caller UID differs."""
+        caller_uid = str(os.getuid() + 1)
+        for _ in range(2):
+            result = self.sb.run("deck", "--apply", FAKE_UID=caller_uid)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_harpa_token_temporary_file_is_removed_after_generation_failure(self):
+        """A generator that writes partial credential bytes must leave no copy."""
+        python = self.sb.bin / "python3"
+        python.unlink()
+        python.write_text("#!/bin/bash\nprintf 'partial-credential-canary'\nexit 1\n")
+        python.chmod(0o700)
+        scratch = self.sb.tmp / "token-scratch"
+        scratch.mkdir()
+        result = self.sb.run("deck", "--apply", TMPDIR=str(scratch))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(list(scratch.iterdir()), [])
+        self.assertFalse(self.sb.harpa_credential.exists())
+        self.assertFalse(self.sb.deck_unit.exists())
+        self.assertFalse(self.sb.called("systemctl enable"))
+        self.assertFalse(self.sb.called("ufw allow"))
+
+    def test_harpa_token_temporary_file_is_removed_after_install_failure(self):
+        """Failed credential installation must remove the generated temporary copy."""
+        install = self.sb.bin / "install"
+        install.unlink()
+        real_install = shutil.which("install")
+        install.write_text(f'#!/bin/bash\nif [ "$2" = 0600 ]; then exit 1; fi\nexec {real_install} "$@"\n')
+        install.chmod(0o700)
+        scratch = self.sb.tmp / "token-scratch"
+        scratch.mkdir()
+        result = self.sb.run("deck", "--apply", TMPDIR=str(scratch))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(list(scratch.iterdir()), [])
+        self.assertFalse(self.sb.harpa_credential.exists())
+        self.assertFalse(self.sb.deck_unit.exists())
+        self.assertFalse(self.sb.called("systemctl enable"))
+        self.assertFalse(self.sb.called("ufw allow"))
+
+    def test_unsafe_harpa_credential_paths_are_refused(self):
+        """Reject relative or unsafe credential paths before writing the service unit."""
+        for path, message in (("relative-token", "absolut"),
+                              (str(self.sb.tmp / "bad token"), "unsichere Zeichen")):
+            with self.subTest(path=path):
+                result = self.sb.run("deck", "--apply", GENIUS_HARPA_CREDENTIAL=path)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(message, result.stderr)
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_empty_generated_harpa_token_is_refused(self):
+        """Abort installation before writing the unit if token generation produces no data."""
+        python = self.sb.bin / "python3"
+        python.unlink()
+        real_python = shutil.which("python3")
+        python.write_text(f'#!/bin/bash\ncase "$2" in *secrets*) exit 0;; esac\nexec {real_python} "$@"\n')
+        python.chmod(0o700)
+        result = self.sb.run("deck", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("HARPA-Eingangsschlüssel fehlt", result.stderr)
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_harpa_credential_path_resolution_failure_is_refused(self):
+        resolver = self.sb.bin / "realpath"
+        resolver.unlink()
+        resolver.write_text("#!/bin/bash\nexit 0\n")
+        resolver.chmod(0o700)
+        result = self.sb.run("deck", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("kann nicht geprüft werden", result.stderr)
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_harpa_path_probe_requires_coreutils_realpath(self):
+        (self.sb.bin / "realpath").unlink()
+        result = self.sb.run("deck", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("realpath aus coreutils fehlt", result.stderr)
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_harpa_credentials_inside_repository_or_alias_are_refused(self):
+        alias = self.sb.tmp / "repo-alias"
+        alias.symlink_to(self.sb.repo, target_is_directory=True)
+        for root, path in ((self.sb.repo, self.sb.repo),
+                           (self.sb.repo, self.sb.repo / "token"),
+                           (self.sb.repo, alias / "token"),
+                           (alias, self.sb.repo / "token")):
+            with self.subTest(root=root, path=path):
+                result = self.sb.run("deck", "--apply", GENIUS_HARPA_CREDENTIAL=str(path),
+                                     GENIUS_REPO_ROOT=str(root))
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("nicht im Repository", result.stderr)
+        self.assertFalse((self.sb.repo / "token").exists())
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_harpa_existing_insecure_modes_are_refused_without_repair(self):
+        for directory_mode, token_mode in ((0o700, 0o644), (0o755, 0o600)):
+            with self.subTest(directory=directory_mode, token=token_mode):
+                self.sb.harpa_credential.parent.mkdir(parents=True, exist_ok=True)
+                self.sb.harpa_credential.parent.chmod(directory_mode)
+                self.sb.harpa_credential.write_text("private-credential-canary")
+                self.sb.harpa_credential.chmod(token_mode)
+                result = self.sb.run("deck", "--apply")
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("privaten Besitz", result.stderr)
+                self.assertNotIn("private-credential-canary", result.stdout + result.stderr)
+                self.assertEqual(self.sb.harpa_credential.stat().st_mode & 0o777, token_mode)
+                self.assertEqual(self.sb.harpa_credential.parent.stat().st_mode & 0o777, directory_mode)
+                self.assertEqual(self.sb.harpa_credential.read_text(), "private-credential-canary")
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_harpa_existing_foreign_ownership_is_refused(self):
+        self.assertEqual(self.sb.run("deck", "--apply").returncode, 0)
+        self.sb.deck_unit.unlink()
+        original = self.sb.harpa_credential.read_bytes()
+        real_stat = shutil.which("stat")
+        tool = self.sb.bin / "stat"
+        tool.unlink()
+        foreign_uid = os.getuid() + 1
+        for target in (self.sb.harpa_credential, self.sb.harpa_credential.parent):
+            with self.subTest(target=target):
+                mode = "600" if target == self.sb.harpa_credential else "700"
+                tool.write_text(f'#!/bin/bash\nif [ "$2" = "%u:%a" ] && [ "$3" = "{target}" ]; then echo {foreign_uid}:{mode}; else exec {real_stat} "$@"; fi\n')
+                tool.chmod(0o700)
+                result = self.sb.run("deck", "--apply")
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("privaten Besitz", result.stderr)
+                self.assertEqual(self.sb.harpa_credential.read_bytes(), original)
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_harpa_symlink_credential_and_directory_are_refused(self):
+        directory = self.sb.tmp / "private"
+        directory.mkdir(mode=0o700)
+        token = directory / "token"
+        token.write_text("private-credential-canary")
+        token.chmod(0o600)
+        alias = self.sb.tmp / "private-alias"
+        alias.symlink_to(directory, target_is_directory=True)
+        token_alias = directory / "token-alias"
+        token_alias.symlink_to(token)
+        for path in (alias / "token", token_alias):
+            with self.subTest(path=path):
+                result = self.sb.run("deck", "--apply", GENIUS_HARPA_CREDENTIAL=str(path))
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("Symlinks", result.stderr)
+        self.assertEqual(token.read_text(), "private-credential-canary")
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_harpa_privileged_checks_reject_symlinks_after_path_resolution(self):
+        """Recheck leaf and parent if the path changes after the canonical-path probe."""
+        directory = self.sb.tmp / "private"
+        directory.mkdir(mode=0o700)
+        token = directory / "token"
+        token.write_text("private-credential-canary")
+        token.chmod(0o600)
+        alias = self.sb.tmp / "private-alias"
+        alias.symlink_to(directory, target_is_directory=True)
+        token_alias = directory / "token-alias"
+        token_alias.symlink_to(token)
+        resolver = self.sb.bin / "realpath"
+        resolver.unlink()
+        # Simulate the path resolver seeing ordinary paths before their replacement.
+        resolver.write_text('#!/bin/bash\necho "$3"\n')
+        resolver.chmod(0o700)
+        for path, message in ((alias / "token", "Schlüsselverzeichnis darf kein Symlink"),
+                              (token_alias, "Schlüssel darf kein Symlink")):
+            with self.subTest(path=path):
+                result = self.sb.run("deck", "--apply", GENIUS_HARPA_CREDENTIAL=str(path))
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(message, result.stderr)
+        self.assertEqual(token.read_text(), "private-credential-canary")
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_harpa_nonregular_credential_and_parent_are_refused(self):
+        self.sb.harpa_credential.parent.mkdir(parents=True, mode=0o700)
+        self.sb.harpa_credential.mkdir(mode=0o600)
+        result = self.sb.run("deck", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("keine reguläre Datei", result.stderr)
+        self.sb.harpa_credential.rmdir()
+        self.sb.harpa_credential.parent.rmdir()
+        self.sb.harpa_credential.parent.write_text("not a directory")
+        result = self.sb.run("deck", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("kein Verzeichnis", result.stderr)
+        self.assertFalse(self.sb.deck_unit.exists())
 
     def test_another_port_is_used_everywhere(self):
         result = self.sb.run("deck", "--apply", GENIUS_DECK_PORT="9000")

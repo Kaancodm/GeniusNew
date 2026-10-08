@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
+import stat
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tools.control_deck import actions, checks, mail_center, server
+from tools.control_deck import actions, checks, harpa_inbox, mail_center, server
 from scripts import refusals
 
 
@@ -140,11 +141,151 @@ class ControlDeckTest(unittest.TestCase):
         self.assertEqual(state["categories"]["system"]["critical"], 1)
         self.assertNotIn("body", state["threads"][0])
 
+    def test_harpa_inbox_accepts_only_the_fixed_report_contract(self):
+        """Accept valid reports and reject extra fields, invalid text, kinds, IDs, and URLs."""
+        payload = {
+            "event_id": "prices:2026-10-08T08:00:00Z",
+            "kind": "monitor",
+            "title": "Pricing changed",
+            "summary": "The public pricing page changed.",
+            "source_url": "https://example.test/pricing",
+        }
+        item = harpa_inbox.normalize(payload, received_at=123)
+        self.assertEqual(item["received_at"], 123)
+        for changed in (
+            {**payload, "command": "git push"},
+            {**payload, "kind": "shell"},
+            {**payload, "title": 7},
+            {**payload, "summary": ""},
+            {**payload, "summary": "x" * 8001},
+            {**payload, "summary": "hidden\x00value"},
+            {**payload, "event_id": "invalid event"},
+            {**payload, "source_url": "file:///etc/passwd"},
+            {**payload, "source_url": "https://user:pass@example.test/"},
+            {**payload, "source_url": "https://[broken"},
+            {**payload, "source_url": "https://example.test/\nscript"},
+            {**payload, "summary": "hidden\u202evalue"},
+            {**payload, "summary": "hidden\x7fvalue"},
+        ):
+            with self.subTest(changed=changed):
+                with self.assertRaises(harpa_inbox.HarpaPayloadError):
+                    harpa_inbox.normalize(changed)
+
+    def test_harpa_inbox_deduplicates_event_ids(self):
+        """A repeated event ID must acknowledge a duplicate without adding a record."""
+        payload = {
+            "event_id": "weekly:42",
+            "kind": "report",
+            "title": "Weekly report",
+            "summary": "No material changes.",
+            "source_url": "https://example.test/status",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "inbox.jsonl"
+            first = harpa_inbox.store(payload, path)
+            second = harpa_inbox.store(payload, path)
+            state = harpa_inbox.snapshot(path)
+        self.assertFalse(first["duplicate"])
+        self.assertTrue(second["duplicate"])
+        self.assertEqual(len(state["items"]), 1)
+
+    def test_harpa_refusals_are_mutation_guarded(self):
+        """Keep HARPA validation errors and the inbox module covered by the refusal guard."""
+        self.assertIn("tools/control_deck/harpa_inbox.py", refusals.GUARDED)
+        self.assertIn("HarpaPayloadError", refusals._REFUSAL_RAISES)
+        self.assertIn("HarpaStorageError", refusals._REFUSAL_RAISES)
+        guarded = refusals.find_refusals(refusals.ROOT / "tools/control_deck/harpa_inbox.py")
+        messages = {item.message for item in guarded}
+        self.assertLessEqual({"HARPA inbox cannot be read", "invalid HARPA inbox",
+                              "HARPA inbox write failed"}, messages)
+
+    def test_harpa_inbox_storage_is_bounded_and_private(self):
+        """Retain only the newest MAX_ITEMS reports in a file with private permissions."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "inbox.jsonl"
+            for number in range(harpa_inbox.MAX_ITEMS + 5):
+                harpa_inbox.store({
+                    "event_id": f"monitor:{number}", "kind": "monitor",
+                    "title": f"Monitor {number}", "summary": "No material change.",
+                    "source_url": "https://example.test/status",
+                }, path)
+            lines = path.read_text().splitlines()
+            mode = path.stat().st_mode & 0o777
+        self.assertEqual(len(lines), harpa_inbox.MAX_ITEMS)
+        self.assertEqual(json.loads(lines[0])["event_id"], "monitor:5")
+        self.assertEqual(mode, 0o600)
+
+    def test_harpa_inbox_refuses_to_overwrite_corrupted_state(self):
+        """Keep corrupt bytes intact and report them as unavailable, never ready."""
+        payload = {
+            "event_id": "monitor:1", "kind": "monitor", "title": "Monitor",
+            "summary": "No material change.", "source_url": "https://example.test/",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "inbox.jsonl"
+            for content in (b"not-json\n", b"[]\n", b"\xff\n"):
+                with self.subTest(content=content):
+                    path.write_bytes(content)
+                    with self.assertRaises(harpa_inbox.HarpaStorageError):
+                        harpa_inbox.store(payload, path)
+                    self.assertEqual(path.read_bytes(), content)
+                    self.assertEqual(harpa_inbox.snapshot(path), {"status": "error", "items": []})
+
+    def test_harpa_stored_reports_are_revalidated_before_display_or_overwrite(self):
+        payload = {"event_id": "monitor:1", "kind": "monitor", "title": "Monitor",
+                   "summary": "No change.", "source_url": "https://example.test/"}
+        original = harpa_inbox.normalize(payload, received_at=123)
+        for item in ({**original, "source_url": "javascript:alert(1)"},
+                     {**original, "received_at": True}, {**original, "received_at": -1},
+                     {**original, "command": "git push"}, {"event_id": "missing-fields"}):
+            with self.subTest(item=item), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "inbox.jsonl"
+                content = (json.dumps(item) + "\n").encode()
+                path.write_bytes(content)
+                self.assertEqual(harpa_inbox.snapshot(path), {"status": "error", "items": []})
+                with self.assertRaises(harpa_inbox.HarpaStorageError):
+                    harpa_inbox.store(payload, path)
+                self.assertEqual(path.read_bytes(), content)
+
+    def test_harpa_inbox_read_failure_is_not_empty_ready_state(self):
+        """A restored unreadable inbox must block writes and signal dashboard failure."""
+        payload = {"event_id": "monitor:1", "kind": "monitor", "title": "Monitor",
+                   "summary": "No change.", "source_url": "https://example.test/"}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "inbox.jsonl"
+            with patch.object(Path, "read_text", side_effect=PermissionError("private canary")):
+                self.assertEqual(harpa_inbox.snapshot(path), {"status": "error", "items": []})
+                with self.assertRaises(harpa_inbox.HarpaStorageError):
+                    harpa_inbox.store(payload, path)
+            self.assertFalse(path.exists())
+
+    def test_harpa_failed_write_keeps_existing_state_and_removes_temporary_file(self):
+        """Zero writes, fsync and rename failures must not acknowledge or replace reports."""
+        payload = {"event_id": "monitor:1", "kind": "monitor", "title": "Monitor",
+                   "summary": "No change.", "source_url": "https://example.test/"}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "inbox.jsonl"
+            harpa_inbox.store(payload, path)
+            before = path.read_bytes()
+            for name, options in (("write", {"side_effect": [0, AssertionError("retried a zero write")]}),
+                                  ("write", {"side_effect": OSError("disk full")}),
+                                  ("fsync", {"side_effect": OSError("flush failed")}),
+                                  ("replace", {"side_effect": OSError("rename failed")})):
+                with self.subTest(operation=name, options=options):
+                    with patch.object(harpa_inbox.os, name, **options):
+                        with self.assertRaises(OSError):
+                            harpa_inbox.store({**payload, "event_id": "monitor:2"}, path)
+                    self.assertEqual(path.read_bytes(), before)
+                    self.assertEqual(list(path.parent.iterdir()), [path])
+
 
 class HostCheckTest(unittest.TestCase):
     """A browser page must not reach the deck through a rebound DNS name."""
 
     def setUp(self):
+        """Start an isolated HTTP server with temporary HARPA state and tracked actions."""
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.actions = []
         patches = [
             patch.object(server, "mail_snapshot", return_value={"subject": "MAIL-CANARY"}),
@@ -156,6 +297,9 @@ class HostCheckTest(unittest.TestCase):
             self.addCleanup(p.stop)
         self.deck = server.Server(("127.0.0.1", 0), server.Handler)
         self.deck.repo = checks.DEFAULT_REPO
+        self.deck.harpa_inbox = Path(self.tmp.name) / "harpa.jsonl"
+        self.deck.harpa_token_file = Path(self.tmp.name) / "harpa-token"
+        self.deck.harpa_token_file.write_text("t" * 48)
         self.port = self.deck.server_address[1]
         loop = threading.Thread(target=self.deck.serve_forever, daemon=True)
         loop.start()
@@ -185,6 +329,21 @@ class HostCheckTest(unittest.TestCase):
             headers["Origin"] = origin
         return self.request("POST", "/api/action", host, headers, b'{"action":"git_status"}')
 
+    def post_harpa(self, *, token="t" * 48, payload=None):
+        """Post a supplied or default report using a trusted host and HARPA bearer token."""
+        body = json.dumps(payload or {
+            "event_id": "monitor:1",
+            "kind": "monitor",
+            "title": "Public page changed",
+            "summary": "A public page changed.",
+            "source_url": "https://example.test/page",
+        }).encode()
+        return self.request(
+            "POST", "/api/harpa", f"127.0.0.1:{self.port}",
+            {"Content-Type": "application/json", "Authorization": f"Bearer {token}",
+             "Origin": "chrome-extension://harpa"}, body,
+        )
+
     def test_loopback_host_reads_mail(self):
         for name in ("127.0.0.1", "localhost"):
             with self.subTest(name=name):
@@ -199,11 +358,204 @@ class HostCheckTest(unittest.TestCase):
         hub.assert_called_once_with(self.deck.repo)
 
     def test_foreign_host_is_refused_before_any_route(self):
-        for path in ("/", "/api/status", "/api/mail", "/api/agents"):
+        """Reject foreign Host headers before any dashboard or snapshot route is served."""
+        for path in ("/", "/api/status", "/api/mail", "/api/agents", "/api/harpa"):
             with self.subTest(path=path):
                 status, body = self.request("GET", path, f"attacker.example:{self.port}")
                 self.assertEqual(status, 421)
                 self.assertNotIn(b"MAIL-CANARY", body)
+
+    def test_harpa_report_requires_its_own_token(self):
+        """Reject an incorrect HARPA token without creating an inbox."""
+        self.assertEqual(self.post_harpa(token="wrong" * 8)[0], 401)
+        self.assertFalse(self.deck.harpa_inbox.exists())
+
+    def test_harpa_ingress_refusals_never_store_a_report(self):
+        body = json.dumps({"event_id": "guard", "kind": "monitor", "title": "guard",
+                           "summary": "guard", "source_url": "https://example.test"}).encode()
+        cases = [
+            ({"Content-Type": "application/json"}, body, 401),
+            ({"Content-Type": "text/plain", "Authorization": "Bearer " + "t" * 48}, body, 415),
+            ({"Content-Type": "application/json", "Authorization": "Bearer " + "t" * 48},
+             b" " * 16385, 413),
+            ({"Content-Type": "application/json", "Authorization": "Bearer " + "t" * 48},
+             b"", 413),
+        ]
+        for headers, data, status in cases:
+            with self.subTest(status=status, length=len(data)):
+                self.assertEqual(self.request("POST", "/api/harpa", f"127.0.0.1:{self.port}",
+                                              headers, data)[0], status)
+                self.assertFalse(self.deck.harpa_inbox.exists())
+
+    def test_harpa_missing_short_or_unreadable_credentials_disable_ingress(self):
+        original = self.deck.harpa_token_file
+        for token in ("short", "t" * 257, "t" * 33 + "\n" + "t" * 33):
+            with self.subTest(token_length=len(token)):
+                original.write_text(token)
+                self.assertEqual(self.post_harpa()[0], 404)
+                self.assertFalse(self.deck.harpa_inbox.exists())
+        original.unlink()
+        self.assertEqual(self.post_harpa()[0], 404)
+        self.deck.harpa_token_file = None
+        self.assertEqual(self.post_harpa()[0], 404)
+        original.write_text("t" * 48)
+        self.deck.harpa_token_file = original
+        self.deck.harpa_inbox = None
+        self.assertEqual(self.post_harpa()[0], 404)
+
+    def test_harpa_report_is_stored_but_cannot_request_an_action(self):
+        """Accept and expose a report while leaving the action runner untouched."""
+        status, body = self.post_harpa(payload={
+            "event_id": "research:1",
+            "kind": "research",
+            "title": "Research result",
+            "summary": "Public-source summary only.",
+            "source_url": "https://example.test/research",
+        })
+        self.assertEqual(status, 202)
+        self.assertTrue(json.loads(body)["accepted"])
+        self.assertEqual(self.actions, [])
+        status, body = self.request("GET", "/api/harpa", f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["items"][0]["event_id"], "research:1")
+
+    def test_harpa_report_rejects_command_fields(self):
+        """Reject reports containing an action field without invoking the action runner."""
+        status, _ = self.post_harpa(payload={
+            "event_id": "attack:1", "kind": "report", "title": "No",
+            "summary": "No", "source_url": "https://example.test/", "action": "tests",
+        })
+        self.assertEqual(status, 400)
+        self.assertEqual(self.actions, [])
+
+    def test_harpa_invalid_utf8_and_non_object_json_return_400(self):
+        """Malformed bytes are client errors without tracebacks or stored reports."""
+        for body in (b"\xff", b"[]", b"null"):
+            with self.subTest(body=body):
+                status, _ = self.request(
+                    "POST", "/api/harpa", f"127.0.0.1:{self.port}",
+                    {"Content-Type": "application/json", "Authorization": "Bearer " + "t" * 48},
+                    body)
+                self.assertEqual(status, 400)
+        self.assertFalse(self.deck.harpa_inbox.exists())
+
+    def test_harpa_malformed_authority_returns_400(self):
+        self.assertEqual(self.post_harpa(payload={
+            "event_id": "monitor:1", "kind": "monitor", "title": "Monitor",
+            "summary": "No change.", "source_url": "https://[broken",
+        })[0], 400)
+        self.assertFalse(self.deck.harpa_inbox.exists())
+
+    def test_harpa_persistence_failures_are_503_without_exception_details(self):
+        for error in (OSError("private-storage-canary"),
+                      harpa_inbox.HarpaStorageError("private-corruption-canary")):
+            with self.subTest(error=error):
+                with patch.object(server, "store_harpa", side_effect=error):
+                    status, body = self.post_harpa()
+                self.assertEqual(status, 503)
+                self.assertNotIn(b"private-", body)
+
+    def test_harpa_duplicate_retries_wait_for_directory_persistence(self):
+        """A visible rename must not bypass a failed directory flush on retry."""
+        real_fsync = harpa_inbox.os.fsync
+        flushes = []
+        directory_fails = True
+
+        def fsync(descriptor):
+            is_directory = stat.S_ISDIR(harpa_inbox.os.fstat(descriptor).st_mode)
+            flushes.append("directory" if is_directory else "file")
+            if is_directory and directory_fails:
+                raise OSError("private-directory-flush-canary")
+            real_fsync(descriptor)
+
+        with patch.object(harpa_inbox.os, "fsync", side_effect=fsync), \
+                patch.object(harpa_inbox.os, "replace", wraps=harpa_inbox.os.replace) as replace:
+            status, body = self.post_harpa()
+            self.assertEqual(status, 503)
+            self.assertNotIn(b"private-directory-flush-canary", body)
+            self.assertEqual(flushes, ["file", "directory"])
+            replace.assert_called_once()
+            persisted = self.deck.harpa_inbox.read_bytes()
+            self.assertEqual(json.loads(persisted)["event_id"], "monitor:1")
+
+            status, body = self.post_harpa()
+            self.assertEqual(status, 503)
+            self.assertNotIn(b"private-directory-flush-canary", body)
+            self.assertEqual(flushes, ["file", "directory", "directory"])
+            self.assertEqual(self.deck.harpa_inbox.read_bytes(), persisted)
+
+            directory_fails = False
+            status, body = self.post_harpa()
+            self.assertEqual(status, 202)
+            self.assertEqual(json.loads(body), {"accepted": True, "duplicate": True,
+                                                "event_id": "monitor:1"})
+            self.assertEqual(flushes, ["file", "directory", "directory", "directory"])
+            replace.assert_called_once()
+            self.assertEqual(self.deck.harpa_inbox.read_bytes(), persisted)
+        self.assertEqual(self.actions, [])
+
+    def test_harpa_corrupt_inbox_stays_unavailable_over_http(self):
+        self.deck.harpa_inbox.write_text("not-json\n")
+        self.assertEqual(self.post_harpa()[0], 503)
+        status, body = self.request("GET", "/api/harpa", f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"status": "error", "items": []})
+        self.assertEqual(self.deck.harpa_inbox.read_text(), "not-json\n")
+
+    def test_harpa_invalid_utf8_credential_disables_ingress(self):
+        self.deck.harpa_token_file.write_bytes(b"\xff" * 48)
+        self.assertEqual(self.post_harpa()[0], 404)
+
+    def test_harpa_non_ascii_authorization_returns_401(self):
+        self.assertEqual(self.post_harpa(token="ä" * 48)[0], 401)
+        self.assertFalse(self.deck.harpa_inbox.exists())
+
+    def test_harpa_non_ascii_credential_disables_ingress(self):
+        self.deck.harpa_token_file.write_text("ä" * 48, encoding="utf-8")
+        self.assertEqual(self.post_harpa()[0], 404)
+        self.assertFalse(self.deck.harpa_inbox.exists())
+
+    def test_harpa_parser_recursion_is_a_payload_or_storage_error(self):
+        """Exercise stdlib's Python scanner because C decoder depth limits vary by version."""
+        nested = b"[" * 1100 + b"0" + b"]" * 1100
+        decoder = json.JSONDecoder()
+        decoder.scan_once = json.scanner.py_make_scanner(decoder)
+
+        def decode(value):
+            return decoder.decode(value.decode("utf-8") if isinstance(value, bytes) else value)
+
+        with patch.object(json, "loads", side_effect=decode):
+            with self.assertRaises(RecursionError):
+                decode(nested)
+            status, _ = self.request(
+                "POST", "/api/harpa", f"127.0.0.1:{self.port}",
+                {"Content-Type": "application/json", "Authorization": "Bearer " + "t" * 48},
+                nested)
+            self.assertEqual(status, 400)
+            self.assertFalse(self.deck.harpa_inbox.exists())
+            self.deck.harpa_inbox.write_bytes(nested + b"\n")
+            self.assertEqual(harpa_inbox.snapshot(self.deck.harpa_inbox),
+                             {"status": "error", "items": []})
+            self.assertEqual(self.post_harpa()[0], 503)
+        self.assertEqual(self.deck.harpa_inbox.read_bytes(), nested + b"\n")
+
+    def test_harpa_integer_parser_limit_is_a_payload_or_storage_error(self):
+        """A valid JSON integer beyond Python's limit must not escape as a traceback."""
+        body = b"9" * 5000
+        with self.assertRaises(ValueError):
+            json.loads(body)
+        status, _ = self.request(
+            "POST", "/api/harpa", f"127.0.0.1:{self.port}",
+            {"Content-Type": "application/json", "Authorization": "Bearer " + "t" * 48},
+            body)
+        self.assertEqual(status, 400)
+        self.assertFalse(self.deck.harpa_inbox.exists())
+        original = body + b"\n"
+        self.deck.harpa_inbox.write_bytes(original)
+        self.assertEqual(harpa_inbox.snapshot(self.deck.harpa_inbox),
+                         {"status": "error", "items": []})
+        self.assertEqual(self.post_harpa()[0], 503)
+        self.assertEqual(self.deck.harpa_inbox.read_bytes(), original)
 
     def test_missing_host_and_wrong_port_are_refused(self):
         self.assertEqual(self.request("GET", "/api/mail", None)[0], 421)
@@ -218,6 +570,20 @@ class HostCheckTest(unittest.TestCase):
         status, _ = self.post_action(f"127.0.0.1:{self.port}", origin="http://attacker.example")
         self.assertEqual(status, 403)
         self.assertEqual(self.actions, [])
+
+    def test_action_route_type_and_size_refusals_precede_execution(self):
+        valid = b'{"action":"git_status"}'
+        for path, content_type, body, expected in (
+            ("/api/unknown", "application/json", valid, 404),
+            ("/api/action", "text/plain", valid, 415),
+            ("/api/action", "application/json", valid + b" " * 1024, 413),
+            ("/api/action", "application/json", b"", 413),
+        ):
+            with self.subTest(path=path, content_type=content_type, length=len(body)):
+                status, _ = self.request("POST", path, f"127.0.0.1:{self.port}",
+                                         {"Content-Type": content_type}, body)
+                self.assertEqual(status, expected)
+                self.assertEqual(self.actions, [])
 
     def test_own_origin_starts_an_action(self):
         status, _ = self.post_action(f"127.0.0.1:{self.port}",
@@ -328,8 +694,9 @@ class AgentControlTest(unittest.TestCase):
         self.assertNotIn("await copyCommand(b.dataset.resumeCmd);const old=b.textContent", html)
 
     def test_control_deck_docs_list_agents_route_and_action_commas(self):
+        """Keep the documented route and action lists consistent with the dashboard API."""
         text = (Path(__file__).parents[1] / "docs/CONTROL-DECK.md").read_text()
-        self.assertIn("`/`, `/api/status`, `/api/mail` und `/api/agents`", text)
+        self.assertIn("`/`, `/api/status`, `/api/mail`, `/api/agents` und `/api/harpa`", text)
         self.assertIn("`git_status`, `tests`, `demo`, `docker_status`", text)
 
 
