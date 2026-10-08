@@ -65,7 +65,8 @@ echten Server), D1-Code, D2, D3, E2 (Security-Review am Head). Was in der
 eigener Docs-PR an (die Roadmap gehört nicht zu diesem Wissens-PR).
 
 **Messbar (am 08.10.2026 auf `7f81e24` ausgeführt):**
-- 1078 Tests laufen in etwa 94 Sekunden, Ergebnis `OK`.
+- 1078 Tests laufen in etwa 94 Sekunden, Ergebnis `OK`. Ein zweiter Lauf unter
+  Python 3.13.16 mit lokalem PostgreSQL 16 endete ebenfalls `OK` (etwa 104 Sekunden).
 - Die Demo endet mit „PASS“, dabei werden **15 von 15 Angriffe** abgelehnt.
 - Der Refusal-Guard führt 19 Python-Module in `GUARDED` plus eine Shell-Datei
   (`GUARDED_SHELL`). Er wurde in dieser Sitzung **nicht** ausgeführt: UNKNOWN.
@@ -86,22 +87,51 @@ Vollständig in `SECURITY.md` (maßgeblich). Die wichtigsten:
   `docs/REVERSE-PROXY.md`).
 - Gespeicherte Annahmen sind an aktuelle Policy und Schlüssel gebunden (Entscheidung 7).
 
+## Technische Risiken (Bewertung vom 08.10.2026)
+
+Eine externe Bewertung von `7f81e24` hat Claude Code am Code nachgeprüft. Bestätigt:
+
+- **Die Audit-Kette wird mit jedem Event teurer.** Jeder Append liest und prüft die ganze
+  gespeicherte Kette (`_append` ruft `_read` in `geniusnew/audit_store.py`), und jeder
+  Commit schickt die ganze Kette an den Anker. An der Größengrenze (64 MiB Anfrage,
+  16 MiB Ankerzustand, `SECURITY.md`) verweigert der Dienst weitere Events (fail
+  closed). Für Dauerbetrieb braucht es ein inkrementelles Protokoll.
+- **Eine Datenbankverbindung für alles.** `python -m geniusnew serve` teilt eine
+  Verbindung zwischen Job-Ledger, Annahme-Ledger und Audit-Kette
+  (`geniusnew/__main__.py`), gewollt für die B6-Atomarität. Der Durchsatz ist damit
+  einspurig, ein Verbindungsabbruch braucht einen Neustart (`SECURITY.md`).
+- **Die CI testet nur Python 3.11** (`.github/workflows/verify.yml`). Laut Bewertung
+  läuft der Server unter 3.13 (hier nicht geprüft, UNKNOWN). Lokal lief die Suite unter
+  3.13 grün (Messwerte oben); die CI sichert das nicht ab.
+- **Kein Linter, keine Typprüfung, keine Coverage-Messung** in der CI. Jedes Werkzeug
+  dafür wäre eine neue Abhängigkeit und damit Kaans Entscheidung.
+
+Nicht übernommen: DB-Tests ohne `GENIUSNEW_TEST_ADMIN_DSN` überspringen.
+`tests/postgres_support.py` wertet fehlende Infrastruktur bewusst als Fehler, und kein
+Test wird übersprungen (`AGENTS.md`, Regel 4).
+
 ## Nächste Schritte
 
 Reihenfolge laut `docs/ROADMAP-V02.md`; Entscheidungen von Kaan sind dort unter „Offene
 Entscheidungen“ gelistet (Portal in der Beta, Portal→Kern-Authentisierung, abgelaufene
 Jobs, Annahmen und Policy).
 
-1. Roadmap-Spalte „Stand“ an die gemergten PRs angleichen (Docs-PR).
+1. Roadmap-Spalte „Stand“ an die gemergten PRs angleichen (Docs-PR #130).
 2. `Claude DB Review` für B4 (#94) und B5 (#95) am gemergten Stand nachholen.
-3. Server einrichten (`ops/server/genius-server`, Kaan) und Landlock dort prüfen.
-4. C5: Betriebsanleitung mit systemd-Units, eigenen OS-Nutzern (Worker, Anker),
-   Schlüsselrotation.
-5. E3: frischer Klon folgt der Anleitung wörtlich bis zum laufenden Dienst, Protokoll
+3. Kaan entscheidet: Python-Version der CI (3.13 zusätzlich oder statt 3.11) und ob
+   Linter, Typprüfung, Coverage und `pip-audit` als Entwicklungswerkzeuge dazukommen.
+4. Server einrichten (`ops/server/genius-server`, Kaan) und Landlock dort prüfen.
+5. C5: Betriebsanleitung mit systemd-Units, eigenen OS-Nutzern (Worker, Anker),
+   Schlüsselrotation (Entwurf von ChatGPT in #117, Draft).
+6. E3: frischer Klon folgt der Anleitung wörtlich bis zum laufenden Dienst, Protokoll
    mit SHA.
-6. Quellenpaket für NotebookLM nach Verfahren (`docs/COLLABORATION.md`).
-7. D1-Code (Codex) nach dem Vertrag aus #120, danach D2 und D3.
-8. E2: Security-Review des vollständigen Heads (Claude und Copilot).
+7. Audit-Append inkrementell machen: erst ein Messtest zum Wachstum (Codex), dann der
+   Entwurf in `docs/DATABASE.md` (ChatGPT im Auftrag von Kaan, Design-Vorprüfung durch
+   Gemini, Freigabe Kaan), dann die Umsetzung (Codex, `Claude DB Review`, Grenze aus
+   `SECURITY.md` mit Kaans OK).
+8. Quellenpaket für NotebookLM nach Verfahren (`docs/COLLABORATION.md`).
+9. D1-Code (Codex) nach dem Vertrag aus #120, danach D2 und D3.
+10. E2: Security-Review des vollständigen Heads (Claude und Copilot).
 
 ## Zusammenarbeit der Werkzeuge
 
