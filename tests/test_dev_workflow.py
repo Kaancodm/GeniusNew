@@ -247,14 +247,19 @@ class WorkspaceChecks(unittest.TestCase):
 
     def test_tmux_server_git_overrides_are_removed_in_the_actual_child(self):
         out = Path(self.temp.name) / "child-env.txt"
-        with patch.object(workflow, "RUNTIME", self.state):
+        server_names = ("GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG_COUNT",
+                        "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
+                        "GIT_CONFIG_KEY_47", "GIT_CONFIG_VALUE_47")
+        client_env = {name: value for name, value in os.environ.items()
+                      if not name.startswith("GIT_")}
+        with patch.object(workflow, "RUNTIME", self.state), patch.dict(os.environ, client_env, clear=True):
             base = workflow.tmux_base()
             subprocess.run(base + ["new-session", "-d", "-s", "fixture-server", "cat"], check=True)
-            for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG_COUNT"):
+            for name in server_names:
                 subprocess.run(base + ["set-environment", "-g", name, "synthetic-override"], check=True)
             code = ("import os; from pathlib import Path; "
-                    f"Path({str(out)!r}).write_text(','.join(k for k in "
-                    "('GIT_DIR','GIT_WORK_TREE','GIT_CONFIG_COUNT') if k in os.environ))")
+                    f"Path({str(out)!r}).write_text(','.join(sorted(k for k in os.environ "
+                    "if k.startswith('GIT_'))))")
             with patch.object(workflow, "argv_for", return_value=([sys.executable, "-c", code], dict(os.environ))):
                 workflow.start("codex", str(self.repo), False, False)
             for _ in range(50):
@@ -263,6 +268,11 @@ class WorkspaceChecks(unittest.TestCase):
                 time.sleep(.02)
             self.assertTrue(out.exists())
             self.assertEqual(out.read_text(), "")
+            # Sanitize only the child, preserving the private fixture server.
+            for name in server_names:
+                result = subprocess.run(base + ["show-environment", "-g", name],
+                                        capture_output=True, text=True, check=True)
+                self.assertTrue(result.stdout.startswith(name + "="))
 
 
 if __name__ == "__main__":

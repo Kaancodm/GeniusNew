@@ -12,6 +12,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import urllib.request
 
 HOME_DIR = Path.home()
@@ -154,7 +155,13 @@ def start(tool: str, raw: str, review: bool, dry_run: bool) -> None:
             # credentials in the actual child, not just the client process.
             unset.extend(GEMINI_AUTH_ENV)
             assignments.append("GEMINI_CLI_HOME=" + env["GEMINI_CLI_HOME"])
-        argv = ["env", *[arg for name in unset for arg in ("-u", name)], *assignments, *argv]
+        # The server may retain numbered Git config values absent from the client.
+        # Scrub the actual child environment without reading or changing the server's.
+        child_exec = ("import os, sys; "
+                      "env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}; "
+                      "os.execvpe(sys.argv[1], sys.argv[1:], env)")
+        argv = ["env", *[arg for name in unset for arg in ("-u", name)], *assignments,
+                sys.executable, "-I", "-c", child_exec, *argv]
         subprocess.run(base + ["new-session", "-d", "-s", name, "-c", str(path), *argv],
                        env=env, check=True)
     print(f"Sitzung gestartet. Verbinden: genius-workflow attach {tool} {path}")
