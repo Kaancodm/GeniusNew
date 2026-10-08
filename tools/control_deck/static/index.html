@@ -39,6 +39,11 @@ button:active{transform:translateY(1px)}.wide{grid-column:1/-1}.clickable{cursor
 <div id="agentCards" class="agentgrid" aria-live="polite">Serverstatus wird geprüft…</div>
 <p class="agentnote">TERM: Befehl kopieren und in Termius auf dem Server einfügen. Statusabfragen starten keine Modellaufträge.</p>
 </section>
+<section class="card wide" id="harpaCard">
+<h2>HARPA Automationen</h2>
+<p class="muted">Automatisch eingegangene Browser-Berichte. Sie können keine Serveraktion auslösen.</p>
+<div id="harpaItems" aria-live="polite">Eingang wird geprüft…</div>
+</section>
 <section class="card wide" id="projectCard">
  <h2>Projektstand / Weiterarbeiten</h2>
  <div id="projectSummary"></div>
@@ -70,7 +75,7 @@ function row(name,v){return '<button class="row clickable" data-kind="item" data
 function openPanel(title,body,action){ptitle.textContent=title;pbody.textContent=body;poutput.hidden=true;prun.hidden=!action;prun.dataset.action=action||'';panel.classList.add('open')}
 async function runAction(name){prun.disabled=true;poutput.hidden=false;poutput.textContent='läuft…';const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:name})});const d=await r.json();poutput.textContent=(d.ok?'✓ PASS\n':'× FAIL\n')+(d.output||'');prun.disabled=false;load()}
 async function load(){
- const [r,mr]=await Promise.all([fetch('/api/status',{cache:'no-store'}),fetch('/api/mail',{cache:'no-store'})]); const d=await r.json(); const m=await mr.json(); updateMail(m);
+ const [r,mr,hr]=await Promise.all([fetch('/api/status',{cache:'no-store'}),fetch('/api/mail',{cache:'no-store'}),fetch('/api/harpa',{cache:'no-store'})]); const d=await r.json(); const m=await mr.json(); const h=await hr.json(); updateMail(m);
  document.getElementById('stamp').textContent=new Date(d.generated_at*1000).toLocaleTimeString();
  document.getElementById('projectSummary').innerHTML='<div class="projectfocus">'+esc(d.project.focus)+'</div><div class="muted">Zuletzt gestoppt: '+esc(d.project.stopped_at)+'</div><div class="projectmeta"><span class="pill">main '+esc(d.project.main_head)+'</span><span class="pill">v0.2 Gates auf main: '+esc(d.project.merged_gates)+'/'+esc(d.project.total_gates)+'</span></div>';
  document.getElementById('resume').className='resume';
@@ -84,6 +89,7 @@ async function load(){
  document.getElementById('tools').innerHTML=Object.entries(d.tools).map(([k,v])=>row(k,v)).join('');
  document.getElementById('gates').innerHTML=d.gates.map(g=>'<button class="gate clickable" data-kind="gate" data-id="'+esc(g.id)+'" data-name="'+esc(g.name)+'">'+badge(g.status)+'<b>'+esc(g.id)+'</b> '+esc(g.name)+'</button>').join('');
  document.getElementById('commands').innerHTML=Object.entries(d.commands).map(([k,v])=>'<div class="cmd"><button data-cmd="'+esc(v)+'">Kopieren</button><code>'+esc(k)+': '+esc(v)+'</code></div>').join('');
+ document.getElementById('harpaItems').innerHTML=h.status==='disabled'?'<div class="row">HARPA-Eingang nicht eingerichtet</div>':(h.items||[]).map(x=>'<div class="row"><span><b>'+esc(x.title)+'</b><br><span class="muted">'+esc(x.kind)+' · '+new Date(x.received_at*1000).toLocaleString()+'</span><br>'+esc(x.summary)+'</span><a href="'+esc(x.source_url)+'" target="_blank" rel="noopener noreferrer">Quelle</a></div>').join('')||'<div class="row">Noch keine HARPA-Berichte</div>';
  document.querySelectorAll('[data-kind="item"]').forEach(b=>b.onclick=()=>openPanel(b.dataset.name,'Statusdetails und sichere Aktion für '+b.dataset.name,actionFor[b.dataset.name]));
  document.querySelectorAll('[data-kind="gate"]').forEach(b=>b.onclick=()=>openPanel(b.dataset.id+' '+b.dataset.name,nextFor[b.dataset.id]||'Gate ist noch offen. Abhängigkeiten zuerst abschließen.',null));
  document.querySelectorAll('[data-research]').forEach(b=>b.onclick=()=>openPanel(b.dataset.research,b.dataset.reason,null));

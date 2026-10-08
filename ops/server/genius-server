@@ -16,6 +16,7 @@ SSHD_DROPIN="${GENIUS_SSHD_DROPIN:-/etc/ssh/sshd_config.d/00-geniusnew.conf}"
 SSHD_CONFIG="${GENIUS_SSHD_CONFIG:-/etc/ssh/sshd_config}"
 LOCKDOWN_SESSION="${GENIUS_LOCKDOWN_SESSION:-/run/geniusnew-lockdown-session}"
 DECK_UNIT="${GENIUS_DECK_UNIT:-/etc/systemd/system/geniusnew-deck.service}"
+HARPA_CREDENTIAL="${GENIUS_HARPA_CREDENTIAL:-/etc/geniusnew/harpa-token}"
 DECK_PORT="${GENIUS_DECK_PORT:-8787}"
 DECK_SETTLE="${GENIUS_DECK_SETTLE:-2}"
 REPO_ROOT="${GENIUS_REPO_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
@@ -595,7 +596,9 @@ Type=simple
 User=$TARGET_USER
 WorkingDirectory=$REPO_ROOT
 Environment=PATH=$(dirname "$python"):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=$python -m tools.control_deck --host $ip --port $port --repo $REPO_ROOT$allow
+LoadCredential=harpa-token:$HARPA_CREDENTIAL
+StateDirectory=geniusnew-control-deck
+ExecStart=$python -m tools.control_deck --host $ip --port $port --repo $REPO_ROOT --harpa-token-file %d/harpa-token --harpa-inbox /var/lib/geniusnew-control-deck/harpa.jsonl$allow
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=yes
@@ -616,7 +619,7 @@ cmd_deck() {
   # Checked up front: the firewall step comes after the start, and a missing
   # ufw there would stop the run with the service already up.
   have ufw || die "ufw fehlt; erst '$SELF setup --apply'"
-  local ip name python tmp old_port="" cleaned
+  local ip name python tmp token_tmp="" old_port="" cleaned
   ip="$(tailscale_ip)"
   [ -n "$ip" ] || die "Tailscale ist nicht verbunden (kein 'tailscale ip -4'); erst setup"
   # The address goes into the unit unquoted, like the paths below.
@@ -639,6 +642,8 @@ cmd_deck() {
   [ -n "$python" ] || die "python3 fehlt"
   case "$python" in /*) ;; *) die "python3-Pfad muss absolut sein: $python" ;; esac
   case "$python" in *[!A-Za-z0-9._/-]*) die "python3-Pfad enthält Zeichen, die eine systemd-Unit nicht sicher trägt: $python" ;; esac
+  case "$HARPA_CREDENTIAL" in /*) ;; *) die "HARPA-Schlüsselpfad muss absolut sein: $HARPA_CREDENTIAL" ;; esac
+  case "$HARPA_CREDENTIAL" in *[!A-Za-z0-9._/-]*) die "HARPA-Schlüsselpfad enthält unsichere Zeichen: $HARPA_CREDENTIAL" ;; esac
   name="$(tailscale_dns)"
   case "$name" in *[!a-z0-9.-]*) name="" ;; esac
   # ufw only ever adds on "allow"; the rule for a port the deck no longer uses
@@ -646,9 +651,20 @@ cmd_deck() {
   if [ -r "$DECK_UNIT" ]; then
     old_port="$(sed -n 's/^ExecStart=.* --port \([0-9][0-9]*\)\( .*\)\{0,1\}$/\1/p' "$DECK_UNIT" | head -n 1)"
   fi
-  TOTAL=3
+  TOTAL=4
   say "Control Deck als Dienst, nur über Tailscale erreichbar: http://$ip:$DECK_PORT"
   if [ "$DRY" -eq 1 ]; then say "TROCKENLAUF: es wird nichts verändert. Zum Ausführen: $SELF deck --apply"; fi
+  step "HARPA-Eingangsschlüssel" \
+    "erzeugt einmalig einen eigenen, begrenzten Schlüssel außerhalb des Repositorys"
+  show "$(sudo_prefix)install -m 0600 <zufälliger Schlüssel> $HARPA_CREDENTIAL"
+  if [ "$DRY" -eq 0 ] && [ ! -s "$HARPA_CREDENTIAL" ]; then
+    token_tmp="$(mktemp)"
+    "$python" -c 'import secrets; print(secrets.token_urlsafe(48))' >"$token_tmp"
+    as_root install -d -m 0700 "$(dirname "$HARPA_CREDENTIAL")"
+    as_root install -m 0600 "$token_tmp" "$HARPA_CREDENTIAL"
+    rm -f "$token_tmp"
+  fi
+  [ "$DRY" -eq 1 ] || [ -s "$HARPA_CREDENTIAL" ] || die "HARPA-Eingangsschlüssel fehlt"
   step "Dienst-Datei schreiben" \
     "startet das Dashboard beim Booten, als Benutzer $TARGET_USER, gebunden an die Tailscale-Adresse"
   tmp="$(mktemp)"
@@ -688,6 +704,7 @@ cmd_deck() {
     say ""
     say "Dashboard läuft. Auf dem iPad (Tailscale an): http://$ip:$DECK_PORT"
     [ -z "$name" ] || say "  oder: http://$name:$DECK_PORT"
+    say "HARPA-Schlüssel einmalig lokal kopieren: $(sudo_prefix)cat $HARPA_CREDENTIAL"
   fi
 }
 

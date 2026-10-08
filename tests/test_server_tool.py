@@ -209,6 +209,7 @@ class Sandbox:
         (tmp / "run").mkdir()
         self.lockdown_session = tmp / "run" / "lockdown-session"
         self.deck_unit = tmp / "systemd" / "geniusnew-deck.service"
+        self.harpa_credential = tmp / "etc" / "geniusnew" / "harpa-token"
         self.repo = tmp / "repo"
         (self.repo / "tools" / "control_deck").mkdir(parents=True)
         (self.repo / "tools" / "control_deck" / "__main__.py").write_text("")
@@ -235,6 +236,7 @@ class Sandbox:
             "GENIUS_LOCKDOWN_SESSION": str(self.lockdown_session),
             "GENIUS_KERNEL_RELEASE": str(self.kernel_release),
             "GENIUS_DECK_UNIT": str(self.deck_unit),
+            "GENIUS_HARPA_CREDENTIAL": str(self.harpa_credential),
             "GENIUS_DECK_SETTLE": "0",
             "GENIUS_REPO_ROOT": str(self.repo),
         }
@@ -1088,6 +1090,12 @@ class DeckTest(ServerToolTestCase):
         self.assertIn(f"-m tools.control_deck --host 100.101.102.103 --port 8787 --repo {self.sb.repo}", unit)
         self.assertIn("NoNewPrivileges=yes", unit)
         self.assertIn("ProtectHome=read-only\n", unit)
+        self.assertIn(f"LoadCredential=harpa-token:{self.sb.harpa_credential}\n", unit)
+        self.assertIn("StateDirectory=geniusnew-control-deck\n", unit)
+        self.assertIn("--harpa-token-file %d/harpa-token", unit)
+        self.assertIn("--harpa-inbox /var/lib/geniusnew-control-deck/harpa.jsonl", unit)
+        self.assertTrue(self.sb.harpa_credential.is_file())
+        self.assertEqual(self.sb.harpa_credential.stat().st_mode & 0o777, 0o600)
         python_dir = Path(shutil.which("python3", path=str(self.sb.bin))).parent
         self.assertIn(f"Environment=PATH={python_dir}:/usr/local/sbin:", unit)
         self.assertFalse(self.sb.called("ufw delete"))
@@ -1103,6 +1111,31 @@ class DeckTest(ServerToolTestCase):
             if call.startswith("ufw allow"):
                 self.assertIn("on tailscale0", call)
         self.assertIn("http://100.101.102.103:8787", result.stdout)
+
+    def test_reapplying_the_deck_keeps_the_existing_harpa_token(self):
+        self.assertEqual(self.sb.run("deck", "--apply").returncode, 0)
+        original = self.sb.harpa_credential.read_text()
+        self.assertEqual(self.sb.run("deck", "--apply").returncode, 0)
+        self.assertEqual(self.sb.harpa_credential.read_text(), original)
+
+    def test_unsafe_harpa_credential_paths_are_refused(self):
+        for path, message in (("relative-token", "absolut"),
+                              (str(self.sb.tmp / "bad token"), "unsichere Zeichen")):
+            with self.subTest(path=path):
+                result = self.sb.run("deck", "--apply", GENIUS_HARPA_CREDENTIAL=path)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(message, result.stderr)
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_empty_generated_harpa_token_is_refused(self):
+        python = self.sb.bin / "python3"
+        python.unlink()
+        python.write_text("#!/bin/bash\nexit 0\n")
+        python.chmod(0o700)
+        result = self.sb.run("deck", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("HARPA-Eingangsschlüssel fehlt", result.stderr)
+        self.assertFalse(self.sb.deck_unit.exists())
 
     def test_another_port_is_used_everywhere(self):
         result = self.sb.run("deck", "--apply", GENIUS_DECK_PORT="9000")

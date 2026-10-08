@@ -43,14 +43,52 @@ Das Symbol zeigt `!!` bei kritischen Nachrichten, `!` bei wichtigen Nachrichten 
 ansonsten die Zahl ungelesener Nachrichten. Es gibt bewusst keine Aktion zum Senden,
 Löschen, Archivieren oder Markieren von E-Mails.
 
+## HARPA-Automationen
+
+Der optionale HARPA-Eingang nimmt zeitgesteuerte Browser-Berichte über
+`POST /api/harpa` an und zeigt die letzten Einträge im Dashboard. Ein Bericht kann
+keine Control-Deck-Aktion, keinen Shell-Befehl und keinen Agentenstart anfordern.
+Wiederholungen mit derselben `event_id` werden nicht doppelt gespeichert.
+
+`genius-server deck --apply` erzeugt den eigenen Eingangsschlüssel einmalig außerhalb
+des Repositorys und bindet ihn als systemd-Credential ein. Der Schlüssel wird beim
+erneuten Einrichten nicht ersetzt und niemals im Dashboard oder in Logs ausgegeben.
+Er wird einmal lokal in HARPA als `Authorization: Bearer …` hinterlegt.
+
+HARPA `REQUEST`-Schritt:
+
+- Methode: `POST`;
+- URL: `http://<Tailscale-IP>:8787/api/harpa`;
+- Header: `Content-Type: application/json` und `Authorization: Bearer <Schlüssel>`;
+- Body: exakt die fünf Felder `event_id`, `kind`, `title`, `summary` und `source_url`.
+
+Beispiel ohne echten Schlüssel:
+
+```json
+{
+  "event_id": "pricing-2026-10-08T08:00:00Z",
+  "kind": "monitor",
+  "title": "Preisseite geändert",
+  "summary": "Kurze Zusammenfassung der öffentlichen Änderung.",
+  "source_url": "https://example.com/pricing"
+}
+```
+
+`kind` ist auf `monitor`, `report` oder `research` begrenzt. Die Quelladresse muss
+HTTP(S) verwenden und darf keine Zugangsdaten enthalten. Der Zeitplan wird in HARPA
+unter **Automate → Run AI command** einmal eingerichtet. Der Laptop-Browser mit HARPA
+muss zum Ausführungszeitpunkt erreichbar sein und Tailscale-Zugriff auf den Server haben.
+
 ## Sicherheitsgrenze
 
-- GET-Routen: `/`, `/api/status`, `/api/mail` und `/api/agents`;
-- POST ist ausschließlich auf `/api/action` erlaubt;
+- GET-Routen: `/`, `/api/status`, `/api/mail`, `/api/agents` und `/api/harpa`;
+- POST ist ausschließlich auf `/api/action` und `/api/harpa` erlaubt;
 - `/api/action` akzeptiert nur die feste Allowlist `git_status`, `tests`, `demo`, `docker_status` und `hermes_status`;
+- `/api/harpa` akzeptiert nur den festen Berichtvertrag und einen eigenen Bearer-Schlüssel;
 - unbekannte Aktionen werden vor Prozessstart abgelehnt;
 - keine freie Shell, kein Merge, kein Deploy und keine Security-Freigabe aus dem Browser;
-- keine Secrets, Remote-URLs oder Environment-Werte werden angezeigt;
+- keine Secrets oder Environment-Werte werden angezeigt; HARPA-Berichte zeigen nur
+  ihre validierte HTTP(S)-Quelladresse;
 - Standard-Bindung nur auf Loopback; der Serverbetrieb bindet explizit an die private
   Tailscale-IP. `--host` lehnt jede andere Adresse ab, auch `0.0.0.0`: erlaubt sind
   IPv4-Loopback und `100.64.0.0/10`; IPv6 unterstützt der Server nicht. Nutzt der Provider des Servers
@@ -60,7 +98,8 @@ Löschen, Archivieren oder Markieren von E-Mails.
 - jede Anfrage muss einen `Host`-Header tragen, der zur gebundenen Adresse und zum Port
   passt (oder zu `localhost`/`127.0.0.1`), sonst `421`. Das verhindert DNS-Rebinding:
   Eine fremde Webseite, deren Name auf die Deck-Adresse zeigt, kann weder `/api/mail`
-  lesen noch Aktionen starten. POST mit fremdem `Origin` wird mit `403` abgelehnt;
+  lesen noch Aktionen starten. `/api/action` lehnt POST mit fremdem `Origin` mit `403`
+  ab; der HARPA-Eingang verwendet stattdessen seinen eigenen Bearer-Schlüssel;
 - Zugriff über einen Namen statt der IP (z. B. `tailscale serve` oder MagicDNS) braucht
   den Namen ausdrücklich: `--allow-host <name>` bzw. `--allow-host <name>:<port>`.
 

@@ -91,6 +91,10 @@ Booten neu.
   `ProtectSystem=full` und `ProtectHome=read-only`: Test und Demo aus dem Dashboard können
   das Repository und dein Home nicht verändern.
 - Er bekommt das Repository ausdrücklich (`--repo`), nicht über einen eingebauten Standardpfad.
+- Er erzeugt einmalig `/etc/geniusnew/harpa-token` mit Modus `0600`, bindet den Wert
+  als systemd-Credential ein und speichert HARPA-Berichte in
+  `/var/lib/geniusnew-control-deck/harpa.jsonl`. Ein erneutes `deck --apply` behält den
+  vorhandenen Schlüssel.
 - Er ist nur an die Tailscale-Adresse gebunden. Das Control Deck selbst lehnt jede andere Adresse ab
   (`docs/CONTROL-DECK.md`).
 - Gibt es im Repository `.venv`, nimmt der Dienst dessen Python, sonst `python3` des Systems.

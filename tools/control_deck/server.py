@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import ipaddress
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -10,6 +11,7 @@ from urllib.parse import urlparse
 from .actions import allowed_actions, run_action
 from .checks import DEFAULT_REPO, snapshot, agent_hub
 from .mail_center import snapshot as mail_snapshot
+from .harpa_inbox import HarpaPayloadError, snapshot as harpa_snapshot, store as store_harpa
 
 STATIC = Path(__file__).with_name("static")
 
@@ -42,19 +44,26 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/mail":
             self._json(mail_snapshot())
             return
+        if path == "/api/harpa":
+            self._json(harpa_snapshot(self.server.harpa_inbox))
+            return
         self.send_error(404)
 
     def do_POST(self) -> None:
         if not self._trusted_host():
+            return
+        path = urlparse(self.path).path
+        if path == "/api/harpa":
+            self._harpa()
+            return
+        if path != "/api/action":
+            self.send_error(404)
             return
         origin = self.headers.get("Origin")
         if origin is not None and origin not in {
                 f"{scheme}://{host}" for host in self.server.allowed_hosts()
                 for scheme in ("http", "https")}:
             self.send_error(403)
-            return
-        if urlparse(self.path).path != "/api/action":
-            self.send_error(404)
             return
         if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
             self.send_error(415)
@@ -77,9 +86,37 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._json(run_action(action, self.server.repo))
 
-    def _json(self, payload: object) -> None:
+    def _harpa(self) -> None:
+        token = self.server.harpa_token()
+        if token is None or self.server.harpa_inbox is None:
+            self.send_error(404)
+            return
+        supplied = self.headers.get("Authorization", "")
+        if not hmac.compare_digest(supplied, f"Bearer {token}"):
+            self.send_error(401)
+            return
+        if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+            self.send_error(415)
+            return
+        try:
+            size = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self.send_error(400)
+            return
+        if size <= 0 or size > 16384:
+            self.send_error(413)
+            return
+        try:
+            payload = json.loads(self.rfile.read(size))
+            result = store_harpa(payload, self.server.harpa_inbox)
+        except (json.JSONDecodeError, HarpaPayloadError, OSError):
+            self.send_error(400)
+            return
+        self._json(result, status=202)
+
+    def _json(self, payload: object, *, status: int = 200) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode()
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -106,6 +143,8 @@ class Handler(BaseHTTPRequestHandler):
 
 class Server(ThreadingHTTPServer):
     repo: Path
+    harpa_inbox: Path | None = None
+    harpa_token_file: Path | None = None
     # Names a local proxy presents, such as `tailscale serve` or an SSH tunnel;
     # each one is named explicitly by whoever starts the deck.
     extra_hosts: frozenset[str] = frozenset()
@@ -118,6 +157,15 @@ class Server(ThreadingHTTPServer):
             # Clients leave the default port out of Host.
             own |= names
         return frozenset(own | self.extra_hosts)
+
+    def harpa_token(self) -> str | None:
+        if self.harpa_token_file is None:
+            return None
+        try:
+            token = self.harpa_token_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        return token if 32 <= len(token) <= 256 and "\n" not in token else None
 
 
 # Tailscale hands out IPv4 addresses from this range only. On a host whose ISP
@@ -153,6 +201,8 @@ def main() -> None:
     parser.add_argument("--host", type=bind_host, default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--repo", type=Path, default=DEFAULT_REPO)
+    parser.add_argument("--harpa-inbox", type=Path)
+    parser.add_argument("--harpa-token-file", type=Path)
     parser.add_argument("--allow-host", type=host_name, action="append", default=[],
                         help="extra Host header a local proxy presents, e.g. a tailnet name")
     args = parser.parse_args()
@@ -160,6 +210,8 @@ def main() -> None:
         parser.error("port must be between 1 and 65535")
     server = Server((args.host, args.port), Handler)
     server.repo = args.repo.resolve()
+    server.harpa_inbox = args.harpa_inbox
+    server.harpa_token_file = args.harpa_token_file
     server.extra_hosts = frozenset(args.allow_host)
     print(f"Control Deck: http://{args.host}:{args.port}")
     server.serve_forever()

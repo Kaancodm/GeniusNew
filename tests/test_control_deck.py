@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tools.control_deck import actions, checks, mail_center, server
+from tools.control_deck import actions, checks, harpa_inbox, mail_center, server
 from scripts import refusals
 
 
@@ -140,11 +140,86 @@ class ControlDeckTest(unittest.TestCase):
         self.assertEqual(state["categories"]["system"]["critical"], 1)
         self.assertNotIn("body", state["threads"][0])
 
+    def test_harpa_inbox_accepts_only_the_fixed_report_contract(self):
+        payload = {
+            "event_id": "prices:2026-10-08T08:00:00Z",
+            "kind": "monitor",
+            "title": "Pricing changed",
+            "summary": "The public pricing page changed.",
+            "source_url": "https://example.test/pricing",
+        }
+        item = harpa_inbox.normalize(payload, received_at=123)
+        self.assertEqual(item["received_at"], 123)
+        for changed in (
+            {**payload, "command": "git push"},
+            {**payload, "kind": "shell"},
+            {**payload, "title": 7},
+            {**payload, "summary": ""},
+            {**payload, "summary": "x" * 8001},
+            {**payload, "summary": "hidden\x00value"},
+            {**payload, "event_id": "invalid event"},
+            {**payload, "source_url": "file:///etc/passwd"},
+            {**payload, "source_url": "https://user:pass@example.test/"},
+        ):
+            with self.subTest(changed=changed):
+                with self.assertRaises(harpa_inbox.HarpaPayloadError):
+                    harpa_inbox.normalize(changed)
+
+    def test_harpa_inbox_deduplicates_event_ids(self):
+        payload = {
+            "event_id": "weekly:42",
+            "kind": "report",
+            "title": "Weekly report",
+            "summary": "No material changes.",
+            "source_url": "https://example.test/status",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "inbox.jsonl"
+            first = harpa_inbox.store(payload, path)
+            second = harpa_inbox.store(payload, path)
+            state = harpa_inbox.snapshot(path)
+        self.assertFalse(first["duplicate"])
+        self.assertTrue(second["duplicate"])
+        self.assertEqual(len(state["items"]), 1)
+
+    def test_harpa_refusals_are_mutation_guarded(self):
+        self.assertIn("tools/control_deck/harpa_inbox.py", refusals.GUARDED)
+        self.assertIn("HarpaPayloadError", refusals._REFUSAL_RAISES)
+
+    def test_harpa_inbox_storage_is_bounded_and_private(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "inbox.jsonl"
+            for number in range(harpa_inbox.MAX_ITEMS + 5):
+                harpa_inbox.store({
+                    "event_id": f"monitor:{number}", "kind": "monitor",
+                    "title": f"Monitor {number}", "summary": "No material change.",
+                    "source_url": "https://example.test/status",
+                }, path)
+            lines = path.read_text().splitlines()
+            mode = path.stat().st_mode & 0o777
+        self.assertEqual(len(lines), harpa_inbox.MAX_ITEMS)
+        self.assertEqual(json.loads(lines[0])["event_id"], "monitor:5")
+        self.assertEqual(mode, 0o600)
+
+    def test_harpa_inbox_refuses_to_overwrite_corrupted_state(self):
+        payload = {
+            "event_id": "monitor:1", "kind": "monitor", "title": "Monitor",
+            "summary": "No material change.", "source_url": "https://example.test/",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "inbox.jsonl"
+            path.write_text("not-json\n")
+            with self.assertRaises(OSError):
+                harpa_inbox.store(payload, path)
+            self.assertEqual(path.read_text(), "not-json\n")
+
 
 class HostCheckTest(unittest.TestCase):
     """A browser page must not reach the deck through a rebound DNS name."""
 
     def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.actions = []
         patches = [
             patch.object(server, "mail_snapshot", return_value={"subject": "MAIL-CANARY"}),
@@ -156,6 +231,9 @@ class HostCheckTest(unittest.TestCase):
             self.addCleanup(p.stop)
         self.deck = server.Server(("127.0.0.1", 0), server.Handler)
         self.deck.repo = checks.DEFAULT_REPO
+        self.deck.harpa_inbox = Path(self.tmp.name) / "harpa.jsonl"
+        self.deck.harpa_token_file = Path(self.tmp.name) / "harpa-token"
+        self.deck.harpa_token_file.write_text("t" * 48)
         self.port = self.deck.server_address[1]
         loop = threading.Thread(target=self.deck.serve_forever, daemon=True)
         loop.start()
@@ -185,6 +263,20 @@ class HostCheckTest(unittest.TestCase):
             headers["Origin"] = origin
         return self.request("POST", "/api/action", host, headers, b'{"action":"git_status"}')
 
+    def post_harpa(self, *, token="t" * 48, payload=None):
+        body = json.dumps(payload or {
+            "event_id": "monitor:1",
+            "kind": "monitor",
+            "title": "Public page changed",
+            "summary": "A public page changed.",
+            "source_url": "https://example.test/page",
+        }).encode()
+        return self.request(
+            "POST", "/api/harpa", f"127.0.0.1:{self.port}",
+            {"Content-Type": "application/json", "Authorization": f"Bearer {token}",
+             "Origin": "chrome-extension://harpa"}, body,
+        )
+
     def test_loopback_host_reads_mail(self):
         for name in ("127.0.0.1", "localhost"):
             with self.subTest(name=name):
@@ -199,11 +291,38 @@ class HostCheckTest(unittest.TestCase):
         hub.assert_called_once_with(self.deck.repo)
 
     def test_foreign_host_is_refused_before_any_route(self):
-        for path in ("/", "/api/status", "/api/mail", "/api/agents"):
+        for path in ("/", "/api/status", "/api/mail", "/api/agents", "/api/harpa"):
             with self.subTest(path=path):
                 status, body = self.request("GET", path, f"attacker.example:{self.port}")
                 self.assertEqual(status, 421)
                 self.assertNotIn(b"MAIL-CANARY", body)
+
+    def test_harpa_report_requires_its_own_token(self):
+        self.assertEqual(self.post_harpa(token="wrong" * 8)[0], 401)
+        self.assertFalse(self.deck.harpa_inbox.exists())
+
+    def test_harpa_report_is_stored_but_cannot_request_an_action(self):
+        status, body = self.post_harpa(payload={
+            "event_id": "research:1",
+            "kind": "research",
+            "title": "Research result",
+            "summary": "Public-source summary only.",
+            "source_url": "https://example.test/research",
+        })
+        self.assertEqual(status, 202)
+        self.assertTrue(json.loads(body)["accepted"])
+        self.assertEqual(self.actions, [])
+        status, body = self.request("GET", "/api/harpa", f"127.0.0.1:{self.port}")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["items"][0]["event_id"], "research:1")
+
+    def test_harpa_report_rejects_command_fields(self):
+        status, _ = self.post_harpa(payload={
+            "event_id": "attack:1", "kind": "report", "title": "No",
+            "summary": "No", "source_url": "https://example.test/", "action": "tests",
+        })
+        self.assertEqual(status, 400)
+        self.assertEqual(self.actions, [])
 
     def test_missing_host_and_wrong_port_are_refused(self):
         self.assertEqual(self.request("GET", "/api/mail", None)[0], 421)
@@ -329,7 +448,7 @@ class AgentControlTest(unittest.TestCase):
 
     def test_control_deck_docs_list_agents_route_and_action_commas(self):
         text = (Path(__file__).parents[1] / "docs/CONTROL-DECK.md").read_text()
-        self.assertIn("`/`, `/api/status`, `/api/mail` und `/api/agents`", text)
+        self.assertIn("`/`, `/api/status`, `/api/mail`, `/api/agents` und `/api/harpa`", text)
         self.assertIn("`git_status`, `tests`, `demo`, `docker_status`", text)
 
 
