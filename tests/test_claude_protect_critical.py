@@ -264,6 +264,25 @@ class ProtectCriticalBoundaryTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(decision(self.call("Write", {"file_path": path})), "deny")
 
+    def test_separate_session_under_claude_parent_preserves_project_guards(self):
+        outer = self.root
+        self.root = outer / ".claude" / "worktrees" / "own-task"
+        self.hooks = self.root / ".claude" / "hooks"
+        self.hooks.mkdir(parents=True)
+        self.hook = self.hooks / HOOK.name
+        self.policy = self.hooks / "critical-paths.txt"
+        shutil.copy2(HOOK, self.hook)
+        shutil.copy2(HOOK.with_name("critical-paths.txt"), self.policy)
+        result = self.call("Write", {"file_path": "ordinary.txt"})
+        self.assertEqual(result.returncode, 0)
+        self.assertIsNone(decision(result))
+        self.assertEqual(decision(self.call("Edit", {"file_path": "docs/DATABASE.md"})), "ask")
+        for name in (".claude/settings.json", ".Claude/settings.json", ".git/config", "server.key",
+                     str(outer / ".claude/settings.json"), str(outer / ".git/hooks/pre-commit")):
+            with self.subTest(path=name):
+                self.assertEqual(decision(self.call("Write", {"file_path": name})), "deny")
+        self.assertEqual(self.call("Write", {"file_path": "ordinary.txt"}, cwd=outer).returncode, 2)
+
     def test_missing_python_interpreter_is_a_blocking_hook_failure(self):
         settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
         with tempfile.TemporaryDirectory() as empty_path:

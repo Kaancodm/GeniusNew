@@ -92,13 +92,20 @@ def path_decisions(raw: str, cwd: Path, rules: list[tuple[str, str]]) -> set[str
     # Check both the named path and the symlink target. Resolving alone would
     # forget that a protected filename can itself be a symlink.
     for candidate in (Path(os.path.abspath(path)), path.resolve(strict=False)):
-        if any(part.casefold() in {".claude", ".git"} for part in candidate.parts):
-            decisions.add("deny")
         try:
-            rel = candidate.relative_to(ROOT).as_posix()
+            relative = candidate.relative_to(ROOT)
         except ValueError:
+            if any(part.casefold() in {".claude", ".git"} for part in candidate.parts):
+                decisions.add("deny")
             decisions.add("ask")
             continue
+        # A separate session may own a checkout below an outer .claude folder.
+        # Its own hook/config remains protected. Git metadata stays denied even
+        # when an invalid checkout is placed inside another repository's .git.
+        if (any(part.casefold() == ".git" for part in candidate.parts)
+                or any(part.casefold() in {".claude", ".git"} for part in relative.parts)):
+            decisions.add("deny")
+        rel = relative.as_posix()
         if rel in {".", ".claude", ".git"} or rel.startswith((".claude/", ".git/")):
             decisions.add("deny")
         for mode, pattern in rules:
