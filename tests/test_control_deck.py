@@ -499,6 +499,24 @@ class HostCheckTest(unittest.TestCase):
             self.assertEqual(self.post_harpa()[0], 503)
         self.assertEqual(self.deck.harpa_inbox.read_bytes(), nested + b"\n")
 
+    def test_harpa_integer_parser_limit_is_a_payload_or_storage_error(self):
+        """A valid JSON integer beyond Python's limit must not escape as a traceback."""
+        body = b"9" * 5000
+        with self.assertRaises(ValueError):
+            json.loads(body)
+        status, _ = self.request(
+            "POST", "/api/harpa", f"127.0.0.1:{self.port}",
+            {"Content-Type": "application/json", "Authorization": "Bearer " + "t" * 48},
+            body)
+        self.assertEqual(status, 400)
+        self.assertFalse(self.deck.harpa_inbox.exists())
+        original = body + b"\n"
+        self.deck.harpa_inbox.write_bytes(original)
+        self.assertEqual(harpa_inbox.snapshot(self.deck.harpa_inbox),
+                         {"status": "error", "items": []})
+        self.assertEqual(self.post_harpa()[0], 503)
+        self.assertEqual(self.deck.harpa_inbox.read_bytes(), original)
+
     def test_missing_host_and_wrong_port_are_refused(self):
         self.assertEqual(self.request("GET", "/api/mail", None)[0], 421)
         self.assertEqual(self.request("GET", "/api/mail", "127.0.0.1:1")[0], 421)

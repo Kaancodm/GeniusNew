@@ -91,7 +91,7 @@ def _items(path: Path) -> list[dict[str, Any]]:
         item = None
         try:
             item = json.loads(line)
-        except (json.JSONDecodeError, RecursionError):
+        except (ValueError, RecursionError):
             pass
         verified = None
         if isinstance(item, dict) and set(item) == {"event_id", "kind", "title", "summary", "source_url", "received_at"}:

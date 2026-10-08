@@ -127,7 +127,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             payload = json.loads(self.rfile.read(size))
             result = store_harpa(payload, self.server.harpa_inbox)
-        except (json.JSONDecodeError, UnicodeDecodeError, RecursionError, HarpaPayloadError):
+        except (ValueError, UnicodeDecodeError, RecursionError):
             _deny(self, 400)
             return
         except OSError:
