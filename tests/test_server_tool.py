@@ -52,7 +52,8 @@ fi
     "sudo": """\
 echo "sudo $*" >>"$LOG"
 [ "${1:-}" != "-n" ] || shift
-exec "$@"
+# The stub does not elevate; its effective UID must match its real file owner.
+FAKE_UID="$SANDBOX_UID" exec "$@"
 """,
     "apt-get": 'echo "apt-get $*" >>"$LOG"\n',
     "systemd-run": 'echo "systemd-run $*" >>"$LOG"\necho active >"$STATE/timer"\n',
@@ -229,6 +230,7 @@ class Sandbox:
             "LOG": str(self.log),
             "STATE": str(self.state),
             "FAKE_HOME": str(self.home),
+            "SANDBOX_UID": str(os.getuid()),
             "GENIUS_OS_RELEASE": str(self.os_release),
             "GENIUS_TS_KEYRING": str(self.keyring),
             "GENIUS_TS_APT_LIST": str(self.apt_list),
@@ -1124,6 +1126,46 @@ class DeckTest(ServerToolTestCase):
         self.assertEqual(self.sb.run("deck", "--apply").returncode, 0)
         self.assertEqual(self.sb.harpa_credential.read_text(), original)
 
+    def test_harpa_reapply_with_a_different_simulated_caller_uid(self):
+        """Stubbed sudo keeps the real file owner even when the caller UID differs."""
+        caller_uid = str(os.getuid() + 1)
+        for _ in range(2):
+            result = self.sb.run("deck", "--apply", FAKE_UID=caller_uid)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_harpa_token_temporary_file_is_removed_after_generation_failure(self):
+        """A generator that writes partial credential bytes must leave no copy."""
+        python = self.sb.bin / "python3"
+        python.unlink()
+        python.write_text("#!/bin/bash\nprintf 'partial-credential-canary'\nexit 1\n")
+        python.chmod(0o700)
+        scratch = self.sb.tmp / "token-scratch"
+        scratch.mkdir()
+        result = self.sb.run("deck", "--apply", TMPDIR=str(scratch))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(list(scratch.iterdir()), [])
+        self.assertFalse(self.sb.harpa_credential.exists())
+        self.assertFalse(self.sb.deck_unit.exists())
+        self.assertFalse(self.sb.called("systemctl enable"))
+        self.assertFalse(self.sb.called("ufw allow"))
+
+    def test_harpa_token_temporary_file_is_removed_after_install_failure(self):
+        """Failed credential installation must remove the generated temporary copy."""
+        install = self.sb.bin / "install"
+        install.unlink()
+        real_install = shutil.which("install")
+        install.write_text(f'#!/bin/bash\nif [ "$2" = 0600 ]; then exit 1; fi\nexec {real_install} "$@"\n')
+        install.chmod(0o700)
+        scratch = self.sb.tmp / "token-scratch"
+        scratch.mkdir()
+        result = self.sb.run("deck", "--apply", TMPDIR=str(scratch))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(list(scratch.iterdir()), [])
+        self.assertFalse(self.sb.harpa_credential.exists())
+        self.assertFalse(self.sb.deck_unit.exists())
+        self.assertFalse(self.sb.called("systemctl enable"))
+        self.assertFalse(self.sb.called("ufw allow"))
+
     def test_unsafe_harpa_credential_paths_are_refused(self):
         """Reject relative or unsafe credential paths before writing the service unit."""
         for path, message in (("relative-token", "absolut"),
@@ -1201,10 +1243,11 @@ class DeckTest(ServerToolTestCase):
         real_stat = shutil.which("stat")
         tool = self.sb.bin / "stat"
         tool.unlink()
+        foreign_uid = os.getuid() + 1
         for target in (self.sb.harpa_credential, self.sb.harpa_credential.parent):
             with self.subTest(target=target):
                 mode = "600" if target == self.sb.harpa_credential else "700"
-                tool.write_text(f'#!/bin/bash\nif [ "$2" = "%u:%a" ] && [ "$3" = "{target}" ]; then echo 999:{mode}; else exec {real_stat} "$@"; fi\n')
+                tool.write_text(f'#!/bin/bash\nif [ "$2" = "%u:%a" ] && [ "$3" = "{target}" ]; then echo {foreign_uid}:{mode}; else exec {real_stat} "$@"; fi\n')
                 tool.chmod(0o700)
                 result = self.sb.run("deck", "--apply")
                 self.assertEqual(result.returncode, 1)

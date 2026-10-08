@@ -685,10 +685,12 @@ cmd_deck() {
       [ "$(as_root stat -c '%u:%a' "$HARPA_CREDENTIAL")" = "$credential_owner:600" ] \
         || die "HARPA-Schlüssel braucht privaten Besitz und Modus 0600"
     else
-      token_tmp="$(mktemp)"
-      "$python" -c 'import secrets; print(secrets.token_urlsafe(48))' >"$token_tmp"
-      as_root install -m 0600 "$token_tmp" "$HARPA_CREDENTIAL"
-      rm -f "$token_tmp"
+      (
+        token_tmp="$(mktemp)"
+        trap 'rm -f -- "$token_tmp"' EXIT
+        "$python" -c 'import secrets; print(secrets.token_urlsafe(48))' >"$token_tmp"
+        as_root install -m 0600 "$token_tmp" "$HARPA_CREDENTIAL"
+      )
     fi
     as_root test -s "$HARPA_CREDENTIAL" || die "HARPA-Eingangsschlüssel fehlt"
   fi
