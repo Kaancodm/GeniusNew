@@ -19,5 +19,5 @@ nicht mehr zu Merge-Konflikten.
 - **Alles in einem Dokument:** `python3 scripts/decisions_tool.py` gibt alle
   Entscheidungen, neueste zuerst, als ein Dokument aus. Das ist die Datei für einen
   NotebookLM-Export (Verfahren: `docs/COLLABORATION.md`, „NotebookLM-Quellenpaket“).
-- **Stand 07.10.2026:** Die bisherige Tabelle (41 Einträge) wurde ohne inhaltliche
+- **Stand 07.10.2026:** Die bisherige Tabelle (41 Einträge; danach kommen neue Dateien hinzu) wurde ohne inhaltliche
   Änderung in diese Dateien überführt.
