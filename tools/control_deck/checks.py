@@ -27,15 +27,15 @@ BETA_GATES = [
     ("C4", "HTTP-Härtung", "080f1f4e4460aa28b54ef3f9f698e598d8be03e5"),
     ("A2", "Landlock / Host-Dateien", "3297f939e99479249de352e96b2bb00aa9c67d8b"),
     ("C5", "Betrieb + Restore", None),
+    ("E3", "Fresh-host-Probe", None),
     ("D1", "Portal→Core-Vertrag", None),
     ("D2", "Portal-Identität", None),
     ("D3", "Portal-Ansichten", None),
     ("E1", "Persistenz-Angriffs-Demo", "122a6902fc8a88488dd9312b4803571fb85c8ab2"),
     ("E2", "Security-Review final", None),
-    ("E3", "Fresh-host-Probe", None),
 ]
 
-# Historical follow-up reviews cover main 7f81e24, not the current full head.
+# The required DB reviews have not been evidenced at the current head.
 PENDING_REVIEWS = {"B4": 94, "B5": 95}
 PENDING_OPERATIONS = {
     "A2": "Landlock implementiert; HOLD: eigener Worker-OS-Nutzer im Betrieb nicht nachgewiesen",
@@ -284,9 +284,8 @@ def snapshot(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
         if status == "green" and (review_pr or gate in PENDING_OPERATIONS):
             status = "yellow"
         if implementation_status == "green" and review_pr:
-            detail = (f"PR #{review_pr} gemergt; historischer Claude-DB-Nachreview auf main "
-                      "7f81e240f6ec4b16d876f081249afb3d47240901 vorhanden; "
-                      "HOLD: Review am aktuellen Gesamt-Head nicht nachgewiesen")
+            detail = (f"PR #{review_pr} gemergt; "
+                      "HOLD: erforderlicher Claude-DB-Review nicht nachgewiesen")
         elif implementation_status == "green" and gate in PENDING_OPERATIONS:
             detail = PENDING_OPERATIONS[gate]
         else:

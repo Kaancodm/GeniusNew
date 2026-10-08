@@ -17,7 +17,21 @@ class ControlDeckTest(unittest.TestCase):
     def test_beta_gate_count_is_fixed(self):
         self.assertEqual(len(checks.BETA_GATES), 21)
         self.assertEqual(checks.BETA_GATES[0][0], "A1")
-        self.assertEqual(checks.BETA_GATES[-1][0], "E3")
+        self.assertEqual(checks.BETA_GATES[-1][0], "E2")
+
+    def test_fresh_host_probe_precedes_the_portal(self):
+        order = [gate for gate, _, _ in checks.BETA_GATES]
+        self.assertLess(order.index("C5"), order.index("E3"))
+        for gate in ("D1", "D2", "D3"):
+            self.assertLess(order.index("E3"), order.index(gate))
+        gates = [{"id": gate, "name": name,
+                  "status": "red" if gate in ("E3", "D1", "D2", "D3", "E2") else "green",
+                  "detail": "evidence pending"}
+                 for gate, name, _ in checks.BETA_GATES]
+        tools = {name: {"status": "green"} for name in ("codex", "claude", "gemini", "gh")}
+        with patch.object(checks, "_run", return_value=(0, "abc123")):
+            state = checks.project_resume(gates, tools, checks.DEFAULT_REPO)
+        self.assertTrue(state["focus"].startswith("E3"))
 
     def test_commands_are_fixed_copy_only_commands(self):
         self.assertTrue(checks.COMMANDS)
@@ -99,7 +113,9 @@ class ControlDeckTest(unittest.TestCase):
         for gate in ("C3", "E1"):
             self.assertEqual(gates[gate]["status"], "green")
         self.assertEqual(gates["C5"]["status"], "red")
-        self.assertIn("historischer", gates["B4"]["detail"])
+        for gate in ("B4", "B5"):
+            self.assertIn("erforderlicher Claude-DB-Review nicht nachgewiesen", gates[gate]["detail"])
+            self.assertNotIn("vorhanden", gates[gate]["detail"])
         state = snapshot["project"]
         self.assertGreater(state["merged_gates"],
                            sum(gate["status"] == "green" for gate in gates.values()))
