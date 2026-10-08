@@ -241,6 +241,15 @@ class ProtectCriticalBoundaryTest(unittest.TestCase):
                    "tool_input": {"file_path": ".claude/settings.json"}}
         self.assertEqual(self.run_payload(payload, project=self.root.parent).returncode, 2)
 
+    def test_foreign_or_nested_claude_worktree_cannot_downgrade_the_policy(self):
+        nested = self.root / ".claude" / "worktrees" / "task"
+        nested.mkdir(parents=True)
+        with tempfile.TemporaryDirectory() as foreign:
+            for cwd in (Path(foreign), nested):
+                for name in ("ordinary.txt", ".claude/settings.json", "server.key"):
+                    with self.subTest(cwd=str(cwd), path=name):
+                        self.assertEqual(self.call("Write", {"file_path": name}, cwd=cwd).returncode, 2)
+
     def test_unexpected_path_resolution_error_blocks(self):
         (self.root / "loop").symlink_to("loop")
         self.assertEqual(self.call("Write", {"file_path": "loop/file"}).returncode, 2)

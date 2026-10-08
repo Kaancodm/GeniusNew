@@ -23,6 +23,13 @@ und den Aufruf-Arbeitsordner geprüft; symbolische Links werden aufgelöst. Ein 
 außerhalb des Projekts benötigt `ask`. Fehlende oder unerwartete Eingaben, eine fehlende
 oder ungültige Policy und Laufzeitfehler blockieren mit Exit-Code 2.
 
+Die Sitzung bleibt im Worktree, zu dem die Hook-Dateien gehören. Ein `cwd` außerhalb
+dieses Projekts oder unter `.claude/worktrees/` wird mit Exit-Code 2 blockiert, damit
+ein Wechsel des Arbeitsordners geschützte Dateien nicht auf `ask` herabstuft. Für einen
+anderen verknüpften Worktree wird eine separate Sitzung mit dessen eigenen Hooks und
+passendem `CLAUDE_PROJECT_DIR` gestartet. Automatischer Worktree-Wechsel innerhalb
+derselben Sitzung ist hier nicht freigegeben.
+
 Ein interner POSIX-Watchdog beendet blockiertes Einlesen nach fünf Sekunden mit
 Exit-Code 2, vor dem konfigurierten äußeren Timeout von zehn Sekunden. Fehlt die
 Watchdog-Unterstützung, blockiert der Hook. Getestet wird direkt als Python-Subprozess,

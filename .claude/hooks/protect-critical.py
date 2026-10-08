@@ -118,6 +118,9 @@ def main() -> int:
     configured_root = os.environ.get("CLAUDE_PROJECT_DIR")
     if configured_root is not None and Path(configured_root).resolve() != ROOT:
         raise CriticalPathRefused("Hook does not belong to configured project")
+    active_cwd = Path(cwd).resolve(strict=True)
+    if not active_cwd.is_relative_to(ROOT) or active_cwd.is_relative_to(ROOT / ".claude" / "worktrees"):
+        raise CriticalPathRefused("Start a separate Claude session with the hook in the active worktree")
     rules = load_rules()
     if tool_name in READ_ONLY_TOOLS:
         return 0
