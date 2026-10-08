@@ -1,4 +1,6 @@
 import json
+import importlib.util
+import io
 import os
 import re
 import shutil
@@ -6,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -59,6 +62,12 @@ class ProtectCriticalNegativeTest(unittest.TestCase):
                 f"stdout={result.stdout!r}, stderr={result.stderr!r}"
             ),
         )
+
+    def test_security_evidence_and_db_design_require_approval(self):
+        for name in (".github/workflows/verify.yml", "docs/DATABASE.md",
+                     "tests/test_claude_protect_critical.py", "scripts/demo_restore.py"):
+            with self.subTest(path=name):
+                self.assertAsked(run_hook("Edit", {"file_path": name}))
 
     def test_guard_denies_writes_to_its_own_settings(self):
         self.assertDenied(run_hook("Write", {"file_path": ".claude/settings.json"}))
@@ -249,6 +258,41 @@ class ProtectCriticalBoundaryTest(unittest.TestCase):
                 for name in ("ordinary.txt", ".claude/settings.json", "server.key"):
                     with self.subTest(cwd=str(cwd), path=name):
                         self.assertEqual(self.call("Write", {"file_path": name}, cwd=cwd).returncode, 2)
+
+    def test_case_aliases_and_shared_git_metadata_remain_denied(self):
+        for path in (".Claude/settings.json", ".Git/config", str(self.root.parent / ".git" / "hooks" / "pre-commit")):
+            with self.subTest(path=path):
+                self.assertEqual(decision(self.call("Write", {"file_path": path})), "deny")
+
+    def test_missing_python_interpreter_is_a_blocking_hook_failure(self):
+        settings = json.loads(SETTINGS.read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as empty_path:
+            for event in ("PreToolUse", "PostToolUse"):
+                command = settings["hooks"][event][0]["hooks"][0]["command"]
+                result = subprocess.run(["/bin/sh", "-c", command], env={
+                    "PATH": empty_path, "CLAUDE_PROJECT_DIR": str(self.root)},
+                    text=True, capture_output=True, timeout=3)
+                self.assertEqual(result.returncode, 2)
+
+    def test_malformed_protocol_uses_explicit_refusals_not_unexpected_errors(self):
+        spec = importlib.util.spec_from_file_location("isolated_critical_guard", self.hook)
+        guard = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(guard)
+        valid = {"cwd": str(self.root), "tool_name": "Write", "tool_input": {"file_path": "ordinary.txt"}}
+        for payload in ([], {**valid, "tool_name": []}, {**valid, "tool_input": []},
+                        {**valid, "tool_name": "Read", "tool_input": []},
+                        {**valid, "cwd": None}, {**valid, "tool_input": {"paths": "file"}},
+                        {**valid, "tool_input": {"file_path": 1}}):
+            with self.subTest(payload=payload), \
+                    patch.object(guard.sys, "stdin", io.StringIO(json.dumps(payload))), \
+                    patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": str(self.root)}), \
+                    self.assertRaises(guard.CriticalPathRefused):
+                guard.main()
+
+    def test_oversized_valid_json_is_refused_before_read_only_dispatch(self):
+        payload = {"cwd": str(self.root), "tool_name": "Read", "tool_input": {}}
+        raw = json.dumps(payload) + " " * 1_048_577
+        self.assertEqual(self.run_payload(None, raw=raw).returncode, 2)
 
     def test_unexpected_path_resolution_error_blocks(self):
         (self.root / "loop").symlink_to("loop")

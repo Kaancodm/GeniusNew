@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Approval guard for tool calls; this is not a shell or filesystem sandbox."""
+"""Write/execution approval guard, not a read filter or OS sandbox.
+
+Read/Grep/Glob retain the client's normal permissions, including its secret-read
+restrictions. This hook alone does not prevent secrets entering model context.
+"""
 from __future__ import annotations
 
 import fnmatch
@@ -88,6 +92,8 @@ def path_decisions(raw: str, cwd: Path, rules: list[tuple[str, str]]) -> set[str
     # Check both the named path and the symlink target. Resolving alone would
     # forget that a protected filename can itself be a symlink.
     for candidate in (Path(os.path.abspath(path)), path.resolve(strict=False)):
+        if any(part.casefold() in {".claude", ".git"} for part in candidate.parts):
+            decisions.add("deny")
         try:
             rel = candidate.relative_to(ROOT).as_posix()
         except ValueError:
@@ -145,8 +151,10 @@ def main() -> int:
         decisions.add("ask")
     if "deny" in decisions:
         _deny("deny", "Protected path; tool call denied.")
-    elif "ask" in decisions:
+        return 0
+    if "ask" in decisions:
         _deny("ask", "Critical path or unclassified execution requires approval.")
+        return 0
     return 0
 
 

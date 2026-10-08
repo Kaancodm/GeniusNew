@@ -18,12 +18,14 @@ class PostCheckRefused(RuntimeError):
     """A post-edit check lacks trustworthy input or cannot complete."""
 
 
-def edited_path(payload: dict) -> str | None:
+def edited_path(payload: dict) -> str:
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):
         raise PostCheckRefused("Invalid tool input")
     value = tool_input.get("file_path") or tool_input.get("path")
-    return value if isinstance(value, str) else None
+    if not isinstance(value, str) or not value or "\0" in value:
+        raise PostCheckRefused("Invalid edited path")
+    return value
 
 def main() -> int:
     data = sys.stdin.read(MAX_INPUT + 1)
@@ -59,7 +61,7 @@ def main() -> int:
         if result.returncode:
             raise PostCheckRefused("Post-edit check failed")
 
-    print("post-python-check: edited file compiles; git diff --check PASS")
+    print("post-python-check: edited file compiles; tracked diff whitespace check PASS")
     return 0
 
 def timeout_handler(signum: int, frame: object) -> None:

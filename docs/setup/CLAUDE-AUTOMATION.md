@@ -42,6 +42,10 @@ python3 -W error::ResourceWarning -m unittest tests/test_claude_protect_critical
 ## Sicherheitsgrenze
 
 Dieser Hook ist eine zusätzliche Freigabeprüfung, keine Shell- oder Dateisystem-Sandbox.
+Er prüft Schreibpfade und Ausführungen. `Read`, `Grep` und `Glob` behalten die normalen
+Client-Berechtigungen; der Hook filtert keine Leseinhalte und verhindert allein keinen
+Secret-Import in den Modellkontext. Das Quellenpaket eines Reviews enthält deshalb nur
+die ausdrücklich ausgewählten Repository-Dateien, niemals Credentials oder private Daten.
 Ein freigegebener Shell-/MCP-Aufruf kann Dateien verändern, einschließlich der Hooks;
 die Freigabe muss deshalb den ganzen Aufruf berücksichtigen. Es gibt keine automatische
 Freigabe anhand von Shell-Text oder Regex-Heuristiken. Die bestehende Prüfung auf

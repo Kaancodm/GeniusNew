@@ -59,6 +59,20 @@ class PostPythonTest(unittest.TestCase):
             with self.subTest(payload=payload):
                 self.assertEqual(self.invoke(payload), 2)
 
+    def test_malformed_protocol_is_an_explicit_refusal(self):
+        for payload in ([], {"tool_input": "bad"}, {"tool_input": {}},
+                        {"tool_input": {"file_path": 1}}):
+            with self.subTest(payload=payload), \
+                    patch.object(hook.sys, "stdin", io.StringIO(json.dumps(payload))), \
+                    self.assertRaises(hook.PostCheckRefused):
+                hook.main()
+
+    def test_valid_json_over_input_limit_is_refused_before_skipping_non_python(self):
+        raw = json.dumps({"tool_input": {"file_path": "ordinary.txt"}}) + " " * (hook.MAX_INPUT + 1)
+        with patch.object(hook.sys, "stdin", io.StringIO(raw)), \
+                self.assertRaises(hook.PostCheckRefused):
+            hook.main()
+
     def test_directory_cannot_be_the_edited_python_file(self):
         directory = self.root / "directory.py"
         directory.mkdir()
@@ -75,13 +89,15 @@ class PostPythonTest(unittest.TestCase):
             self.assertEqual(self.invoke(), 2)
 
     def test_configured_project_mismatch_blocks(self):
-        with patch.object(hook, "ROOT", self.root / "other"):
-            # invoke() binds ROOT itself; call main with an independently bad setting.
-            with patch.dict(hook.os.environ, {"CLAUDE_PROJECT_DIR": str(self.root)}), \
+        with patch.object(hook, "ROOT", self.root):
+            # The edited file belongs to ROOT; only the configured project is wrong.
+            with patch.dict(hook.os.environ, {"CLAUDE_PROJECT_DIR": str(self.root / "other")}), \
                     patch.object(hook.sys, "stdin", io.StringIO(json.dumps({
-                        "cwd": str(self.root), "tool_input": {"file_path": str(self.file)}}))):
+                        "cwd": str(self.root), "tool_input": {"file_path": str(self.file)}}))), \
+                    patch.object(hook.subprocess, "run") as run:
                 with self.assertRaises(hook.PostCheckRefused):
                     hook.main()
+                run.assert_not_called()
 
     def test_commands_are_bounded_and_watchdog_precedes_outer_timeout(self):
         with patch.object(hook.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:

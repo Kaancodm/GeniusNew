@@ -19,6 +19,10 @@ ask:GEMINI.md
 ask:docs/COLLABORATION.md
 ask:docs/DECISIONS.md
 ask:docs/STATUS.md
+ask:docs/DATABASE.md
+ask:.github/workflows/**
+ask:tests/test_claude_*.py
 ask:scripts/refusals.py
 ask:scripts/demo.py
 ask:scripts/demo.sh
+ask:scripts/demo_*.py
