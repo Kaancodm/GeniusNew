@@ -116,8 +116,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             payload = json.loads(self.rfile.read(size))
             result = store_harpa(payload, self.server.harpa_inbox)
-        except (json.JSONDecodeError, HarpaPayloadError, OSError):
+        except (json.JSONDecodeError, UnicodeDecodeError, HarpaPayloadError):
             self.send_error(400)
+            return
+        except OSError:
+            self.send_error(503)
             return
         self._json(result, status=202)
 
@@ -172,7 +175,7 @@ class Server(ThreadingHTTPServer):
             return None
         try:
             token = self.harpa_token_file.read_text(encoding="utf-8").strip()
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             return None
         return token if 32 <= len(token) <= 256 and "\n" not in token else None
 

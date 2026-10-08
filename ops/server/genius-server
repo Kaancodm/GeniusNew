@@ -620,6 +620,7 @@ cmd_deck() {
   # ufw there would stop the run with the service already up.
   have ufw || die "ufw fehlt; erst '$SELF setup --apply'"
   local ip name python tmp token_tmp="" old_port="" cleaned
+  local credential_dir resolved_credential resolved_repo credential_owner
   ip="$(tailscale_ip)"
   [ -n "$ip" ] || die "Tailscale ist nicht verbunden (kein 'tailscale ip -4'); erst setup"
   # The address goes into the unit unquoted, like the paths below.
@@ -644,6 +645,17 @@ cmd_deck() {
   case "$python" in *[!A-Za-z0-9._/-]*) die "python3-Pfad enthält Zeichen, die eine systemd-Unit nicht sicher trägt: $python" ;; esac
   case "$HARPA_CREDENTIAL" in /*) ;; *) die "HARPA-Schlüsselpfad muss absolut sein: $HARPA_CREDENTIAL" ;; esac
   case "$HARPA_CREDENTIAL" in *[!A-Za-z0-9._/-]*) die "HARPA-Schlüsselpfad enthält unsichere Zeichen: $HARPA_CREDENTIAL" ;; esac
+  have realpath || die "realpath aus coreutils fehlt"
+  # Root can resolve aliases hidden behind a private credential directory;
+  # never run the repository's Python with elevated privileges for this probe.
+  local -a path_reader=(realpath -m --)
+  if [ "$DRY" -eq 0 ]; then path_reader=(as_root realpath -m --); fi
+  resolved_repo="$("${path_reader[@]}" "$REPO_ROOT")"
+  resolved_credential="$("${path_reader[@]}" "$HARPA_CREDENTIAL")"
+  [ -n "$resolved_repo" ] && [ -n "$resolved_credential" ] || die "HARPA-Schlüsselpfad kann nicht geprüft werden"
+  case "$resolved_credential/" in "$resolved_repo/"*) die "HARPA-Schlüssel darf nicht im Repository liegen" ;; esac
+  [ "$resolved_credential" = "$HARPA_CREDENTIAL" ] || die "HARPA-Schlüsselpfad muss kanonisch und ohne Symlinks sein"
+  credential_dir="$(dirname "$HARPA_CREDENTIAL")"
   name="$(tailscale_dns)"
   case "$name" in *[!a-z0-9.-]*) name="" ;; esac
   # ufw only ever adds on "allow"; the rule for a port the deck no longer uses
@@ -657,14 +669,29 @@ cmd_deck() {
   step "HARPA-Eingangsschlüssel" \
     "erzeugt einmalig einen eigenen, begrenzten Schlüssel außerhalb des Repositorys"
   show "$(sudo_prefix)install -m 0600 <zufälliger Schlüssel> $HARPA_CREDENTIAL"
-  if [ "$DRY" -eq 0 ] && [ ! -s "$HARPA_CREDENTIAL" ]; then
-    token_tmp="$(mktemp)"
-    "$python" -c 'import secrets; print(secrets.token_urlsafe(48))' >"$token_tmp"
-    as_root install -d -m 0700 "$(dirname "$HARPA_CREDENTIAL")"
-    as_root install -m 0600 "$token_tmp" "$HARPA_CREDENTIAL"
-    rm -f "$token_tmp"
+  if [ "$DRY" -eq 0 ]; then
+    credential_owner="$(as_root id -u)"
+    as_root test ! -L "$credential_dir" || die "HARPA-Schlüsselverzeichnis darf kein Symlink sein"
+    if as_root test -e "$credential_dir"; then
+      as_root test -d "$credential_dir" || die "HARPA-Schlüsselverzeichnis ist kein Verzeichnis"
+      [ "$(as_root stat -c '%u:%a' "$credential_dir")" = "$credential_owner:700" ] \
+        || die "HARPA-Schlüsselverzeichnis braucht privaten Besitz und Modus 0700"
+    else
+      as_root install -d -m 0700 "$credential_dir"
+    fi
+    as_root test ! -L "$HARPA_CREDENTIAL" || die "HARPA-Schlüssel darf kein Symlink sein"
+    if as_root test -e "$HARPA_CREDENTIAL"; then
+      as_root test -f "$HARPA_CREDENTIAL" || die "HARPA-Schlüssel ist keine reguläre Datei"
+      [ "$(as_root stat -c '%u:%a' "$HARPA_CREDENTIAL")" = "$credential_owner:600" ] \
+        || die "HARPA-Schlüssel braucht privaten Besitz und Modus 0600"
+    else
+      token_tmp="$(mktemp)"
+      "$python" -c 'import secrets; print(secrets.token_urlsafe(48))' >"$token_tmp"
+      as_root install -m 0600 "$token_tmp" "$HARPA_CREDENTIAL"
+      rm -f "$token_tmp"
+    fi
+    as_root test -s "$HARPA_CREDENTIAL" || die "HARPA-Eingangsschlüssel fehlt"
   fi
-  [ "$DRY" -eq 1 ] || [ -s "$HARPA_CREDENTIAL" ] || die "HARPA-Eingangsschlüssel fehlt"
   step "Dienst-Datei schreiben" \
     "startet das Dashboard beim Booten, als Benutzer $TARGET_USER, gebunden an die Tailscale-Adresse"
   tmp="$(mktemp)"

@@ -92,7 +92,7 @@ _SHELL_DIE = re.compile(r'(?<![\w-])die(\s+")')
 _REFUSAL_CALLS = {"_fail", "_deny"}
 _REFUSAL_RAISES = {
     "ContractError", "Rejected", "GatewayRejected", "AgentStartRefused",
-    "HarpaPayloadError",
+    "HarpaPayloadError", "HarpaStorageError",
 }
 _REFUSAL_RETURNS = {"_refusal"}
 

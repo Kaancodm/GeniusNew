@@ -24,7 +24,7 @@ REAL_TOOLS = (
     "bash", "env", "cat", "cut", "head", "tail", "sed", "awk", "grep", "mktemp", "rm",
     "install", "stat", "touch", "chmod", "chown", "dirname", "basename", "tr", "wc",
     "sleep", "timeout", "python3", "hostname", "uptime", "df", "ps", "who", "free",
-    "clear", "true", "date", "mkdir", "ls", "sort",
+    "clear", "true", "date", "mkdir", "ls", "sort", "test", "realpath",
 )
 
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIfakefakefake termius-ipad"
@@ -1099,6 +1099,8 @@ class DeckTest(ServerToolTestCase):
         self.assertIn("--harpa-inbox /var/lib/geniusnew-control-deck/harpa.jsonl", unit)
         self.assertTrue(self.sb.harpa_credential.is_file())
         self.assertEqual(self.sb.harpa_credential.stat().st_mode & 0o777, 0o600)
+        self.assertTrue(self.sb.called(f"sudo realpath -m -- {self.sb.harpa_credential}"))
+        self.assertTrue(self.sb.called(f"sudo realpath -m -- {self.sb.repo}"))
         python_dir = Path(shutil.which("python3", path=str(self.sb.bin))).parent
         self.assertIn(f"Environment=PATH={python_dir}:/usr/local/sbin:", unit)
         self.assertFalse(self.sb.called("ufw delete"))
@@ -1136,11 +1138,135 @@ class DeckTest(ServerToolTestCase):
         """Abort installation before writing the unit if token generation produces no data."""
         python = self.sb.bin / "python3"
         python.unlink()
-        python.write_text("#!/bin/bash\nexit 0\n")
+        real_python = shutil.which("python3")
+        python.write_text(f'#!/bin/bash\ncase "$2" in *secrets*) exit 0;; esac\nexec {real_python} "$@"\n')
         python.chmod(0o700)
         result = self.sb.run("deck", "--apply")
         self.assertEqual(result.returncode, 1)
         self.assertIn("HARPA-Eingangsschlüssel fehlt", result.stderr)
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_harpa_credential_path_resolution_failure_is_refused(self):
+        resolver = self.sb.bin / "realpath"
+        resolver.unlink()
+        resolver.write_text("#!/bin/bash\nexit 0\n")
+        resolver.chmod(0o700)
+        result = self.sb.run("deck", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("kann nicht geprüft werden", result.stderr)
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_harpa_path_probe_requires_coreutils_realpath(self):
+        (self.sb.bin / "realpath").unlink()
+        result = self.sb.run("deck", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("realpath aus coreutils fehlt", result.stderr)
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_harpa_credentials_inside_repository_or_alias_are_refused(self):
+        alias = self.sb.tmp / "repo-alias"
+        alias.symlink_to(self.sb.repo, target_is_directory=True)
+        for root, path in ((self.sb.repo, self.sb.repo),
+                           (self.sb.repo, self.sb.repo / "token"),
+                           (self.sb.repo, alias / "token"),
+                           (alias, self.sb.repo / "token")):
+            with self.subTest(root=root, path=path):
+                result = self.sb.run("deck", "--apply", GENIUS_HARPA_CREDENTIAL=str(path),
+                                     GENIUS_REPO_ROOT=str(root))
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("nicht im Repository", result.stderr)
+        self.assertFalse((self.sb.repo / "token").exists())
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_harpa_existing_insecure_modes_are_refused_without_repair(self):
+        for directory_mode, token_mode in ((0o700, 0o644), (0o755, 0o600)):
+            with self.subTest(directory=directory_mode, token=token_mode):
+                self.sb.harpa_credential.parent.mkdir(parents=True, exist_ok=True)
+                self.sb.harpa_credential.parent.chmod(directory_mode)
+                self.sb.harpa_credential.write_text("private-credential-canary")
+                self.sb.harpa_credential.chmod(token_mode)
+                result = self.sb.run("deck", "--apply")
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("privaten Besitz", result.stderr)
+                self.assertNotIn("private-credential-canary", result.stdout + result.stderr)
+                self.assertEqual(self.sb.harpa_credential.stat().st_mode & 0o777, token_mode)
+                self.assertEqual(self.sb.harpa_credential.parent.stat().st_mode & 0o777, directory_mode)
+                self.assertEqual(self.sb.harpa_credential.read_text(), "private-credential-canary")
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_harpa_existing_foreign_ownership_is_refused(self):
+        self.assertEqual(self.sb.run("deck", "--apply").returncode, 0)
+        self.sb.deck_unit.unlink()
+        original = self.sb.harpa_credential.read_bytes()
+        real_stat = shutil.which("stat")
+        tool = self.sb.bin / "stat"
+        tool.unlink()
+        for target in (self.sb.harpa_credential, self.sb.harpa_credential.parent):
+            with self.subTest(target=target):
+                mode = "600" if target == self.sb.harpa_credential else "700"
+                tool.write_text(f'#!/bin/bash\nif [ "$2" = "%u:%a" ] && [ "$3" = "{target}" ]; then echo 999:{mode}; else exec {real_stat} "$@"; fi\n')
+                tool.chmod(0o700)
+                result = self.sb.run("deck", "--apply")
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("privaten Besitz", result.stderr)
+                self.assertEqual(self.sb.harpa_credential.read_bytes(), original)
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_harpa_symlink_credential_and_directory_are_refused(self):
+        directory = self.sb.tmp / "private"
+        directory.mkdir(mode=0o700)
+        token = directory / "token"
+        token.write_text("private-credential-canary")
+        token.chmod(0o600)
+        alias = self.sb.tmp / "private-alias"
+        alias.symlink_to(directory, target_is_directory=True)
+        token_alias = directory / "token-alias"
+        token_alias.symlink_to(token)
+        for path in (alias / "token", token_alias):
+            with self.subTest(path=path):
+                result = self.sb.run("deck", "--apply", GENIUS_HARPA_CREDENTIAL=str(path))
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("Symlinks", result.stderr)
+        self.assertEqual(token.read_text(), "private-credential-canary")
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_harpa_privileged_checks_reject_symlinks_after_path_resolution(self):
+        """Recheck leaf and parent if the path changes after the canonical-path probe."""
+        directory = self.sb.tmp / "private"
+        directory.mkdir(mode=0o700)
+        token = directory / "token"
+        token.write_text("private-credential-canary")
+        token.chmod(0o600)
+        alias = self.sb.tmp / "private-alias"
+        alias.symlink_to(directory, target_is_directory=True)
+        token_alias = directory / "token-alias"
+        token_alias.symlink_to(token)
+        resolver = self.sb.bin / "realpath"
+        resolver.unlink()
+        # Simulate the path resolver seeing ordinary paths before their replacement.
+        resolver.write_text('#!/bin/bash\necho "$3"\n')
+        resolver.chmod(0o700)
+        for path, message in ((alias / "token", "Schlüsselverzeichnis darf kein Symlink"),
+                              (token_alias, "Schlüssel darf kein Symlink")):
+            with self.subTest(path=path):
+                result = self.sb.run("deck", "--apply", GENIUS_HARPA_CREDENTIAL=str(path))
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(message, result.stderr)
+        self.assertEqual(token.read_text(), "private-credential-canary")
+        self.assertFalse(self.sb.deck_unit.exists())
+
+    def test_harpa_nonregular_credential_and_parent_are_refused(self):
+        self.sb.harpa_credential.parent.mkdir(parents=True, mode=0o700)
+        self.sb.harpa_credential.mkdir(mode=0o600)
+        result = self.sb.run("deck", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("keine reguläre Datei", result.stderr)
+        self.sb.harpa_credential.rmdir()
+        self.sb.harpa_credential.parent.rmdir()
+        self.sb.harpa_credential.parent.write_text("not a directory")
+        result = self.sb.run("deck", "--apply")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("kein Verzeichnis", result.stderr)
         self.assertFalse(self.sb.deck_unit.exists())
 
     def test_another_port_is_used_everywhere(self):

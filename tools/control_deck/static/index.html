@@ -76,7 +76,8 @@ function openPanel(title,body,action){ptitle.textContent=title;pbody.textContent
 async function runAction(name){prun.disabled=true;poutput.hidden=false;poutput.textContent='läuft…';const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:name})});const d=await r.json();poutput.textContent=(d.ok?'✓ PASS\n':'× FAIL\n')+(d.output||'');prun.disabled=false;load()}
 /** Refresh dashboard, mail, and HARPA snapshots and bind their controls. */
 async function load(){
- const [r,mr,hr]=await Promise.all([fetch('/api/status',{cache:'no-store'}),fetch('/api/mail',{cache:'no-store'}),fetch('/api/harpa',{cache:'no-store'})]); const d=await r.json(); const m=await mr.json(); const h=await hr.json(); updateMail(m);
+ void loadHarpa();
+ const [r,mr]=await Promise.all([fetch('/api/status',{cache:'no-store'}),fetch('/api/mail',{cache:'no-store'})]); const d=await r.json(); const m=await mr.json(); updateMail(m);
  document.getElementById('stamp').textContent=new Date(d.generated_at*1000).toLocaleTimeString();
  document.getElementById('projectSummary').innerHTML='<div class="projectfocus">'+esc(d.project.focus)+'</div><div class="muted">Zuletzt gestoppt: '+esc(d.project.stopped_at)+'</div><div class="projectmeta"><span class="pill">main '+esc(d.project.main_head)+'</span><span class="pill">v0.2 Gates auf main: '+esc(d.project.merged_gates)+'/'+esc(d.project.total_gates)+'</span></div>';
  document.getElementById('resume').className='resume';
@@ -90,13 +91,24 @@ async function load(){
  document.getElementById('tools').innerHTML=Object.entries(d.tools).map(([k,v])=>row(k,v)).join('');
  document.getElementById('gates').innerHTML=d.gates.map(g=>'<button class="gate clickable" data-kind="gate" data-id="'+esc(g.id)+'" data-name="'+esc(g.name)+'">'+badge(g.status)+'<b>'+esc(g.id)+'</b> '+esc(g.name)+'</button>').join('');
  document.getElementById('commands').innerHTML=Object.entries(d.commands).map(([k,v])=>'<div class="cmd"><button data-cmd="'+esc(v)+'">Kopieren</button><code>'+esc(k)+': '+esc(v)+'</code></div>').join('');
- document.getElementById('harpaItems').innerHTML=h.status==='disabled'?'<div class="row">HARPA-Eingang nicht eingerichtet</div>':(h.items||[]).map(x=>'<div class="row"><span><b>'+esc(x.title)+'</b><br><span class="muted">'+esc(x.kind)+' · '+new Date(x.received_at*1000).toLocaleString()+'</span><br>'+esc(x.summary)+'</span><a href="'+esc(x.source_url)+'" target="_blank" rel="noopener noreferrer">Quelle</a></div>').join('')||'<div class="row">Noch keine HARPA-Berichte</div>';
  document.querySelectorAll('[data-kind="item"]').forEach(b=>b.onclick=()=>openPanel(b.dataset.name,'Statusdetails und sichere Aktion für '+b.dataset.name,actionFor[b.dataset.name]));
  document.querySelectorAll('[data-kind="gate"]').forEach(b=>b.onclick=()=>openPanel(b.dataset.id+' '+b.dataset.name,nextFor[b.dataset.id]||'Gate ist noch offen. Abhängigkeiten zuerst abschließen.',null));
  document.querySelectorAll('[data-research]').forEach(b=>b.onclick=()=>openPanel(b.dataset.research,b.dataset.reason,null));
  document.querySelectorAll('button[data-cmd]').forEach(b=>b.onclick=()=>copyCommand(b.dataset.cmd));
  document.querySelectorAll('[data-resume-cmd]').forEach(b=>b.onclick=async()=>{if(await copyCommand(b.dataset.resumeCmd)){const old=b.textContent;b.textContent='✓ Kopiert';setTimeout(()=>b.textContent=old,1200)}});
  document.querySelectorAll('[data-resume-action]').forEach(b=>b.onclick=()=>{openPanel('Wiedereinstieg','Sichere Prüfung wird gestartet.',b.dataset.resumeAction)});
+}
+
+async function loadHarpa(){
+ const target=document.getElementById('harpaItems');
+ try{
+  const response=await fetch('/api/harpa',{cache:'no-store'});
+  if(!response.ok)throw new Error('HARPA request failed');
+  const h=await response.json();
+  if(h.status==='disabled'){target.innerHTML='<div class="row">HARPA-Eingang nicht eingerichtet</div>';return}
+  if(h.status!=='ready'||!Array.isArray(h.items))throw new Error('HARPA inbox unavailable');
+  target.innerHTML=h.items.map(x=>'<div class="row"><span><b>'+esc(x.title)+'</b><br><span class="muted">'+esc(x.kind)+' · '+new Date(x.received_at*1000).toLocaleString()+'</span><br>'+esc(x.summary)+'</span><a href="'+esc(x.source_url)+'" target="_blank" rel="noopener noreferrer">Quelle</a></div>').join('')||'<div class="row">Noch keine HARPA-Berichte</div>';
+ }catch(error){target.textContent='HARPA-Berichte derzeit nicht verfügbar'}
 }
 
 let agentsLoading=false;

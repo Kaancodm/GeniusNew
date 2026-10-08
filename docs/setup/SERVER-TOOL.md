@@ -94,7 +94,10 @@ Booten neu.
 - Er erzeugt einmalig `/etc/geniusnew/harpa-token` mit Modus `0600`, bindet den Wert
   als systemd-Credential ein und speichert HARPA-Berichte in
   `/var/lib/geniusnew-control-deck/harpa.jsonl`. Ein erneutes `deck --apply` behält den
-  vorhandenen Schlüssel.
+  vorhandenen Schlüssel nur als reguläre Datei mit Modus `0600` in einem privaten
+  Verzeichnis (`0700`), beide im Besitz des Installationsadministrators (root).
+  Unsichere vorhandene Rechte, Symlinks und Pfade im Repository werden abgelehnt;
+  vorhandene Dateien oder Verzeichnisse werden nicht automatisch umberechtigt.
 - Er ist nur an die Tailscale-Adresse gebunden. Das Control Deck selbst lehnt jede andere Adresse ab
   (`docs/CONTROL-DECK.md`).
 - Gibt es im Repository `.venv`, nimmt der Dienst dessen Python, sonst `python3` des Systems.
@@ -135,9 +138,11 @@ Booten neu.
 
 - Es richtet **keinen Laptop** ein. Unter WSL brechen `setup` und `lockdown` ab: Auf dem
   Laptop gehört Tailscale zu Windows, nicht in WSL, und `ufw` hat in WSL keine Wirkung.
-- Es legt keinen Benutzer an und erzeugt keine Schlüssel (der Schlüssel entsteht in Termius).
+- Es legt keinen Benutzer an und erzeugt keine SSH-Schlüssel (diese entstehen in Termius).
 - Es installiert keine GeniusNew-Dienste, keine Datenbank, keinen Reverse-Proxy, keine TLS-Zertifikate.
-- Es ändert keine Zugangsdaten und speichert keine Geheimnisse.
+- `deck --apply` erzeugt und speichert ausschließlich den eigenen HARPA-Schlüssel
+  außerhalb des Repositorys unter `/etc/geniusnew/harpa-token`. Bestehende
+  Zugangsdaten werden nicht rotiert; der Wert erscheint nicht in Logs oder der Unit.
 - Es ersetzt keinen Server-Review: Release, Deployment und Zugriffsrechte brauchen Kaans OK
   (`AGENTS.md`).
 

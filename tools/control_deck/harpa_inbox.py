@@ -21,6 +21,10 @@ class HarpaPayloadError(ValueError):
     """Reject malformed or overpowered HARPA input."""
 
 
+class HarpaStorageError(OSError):
+    """Refuse inaccessible or corrupt inbox state without replacing it."""
+
+
 def _text(payload: dict[str, object], name: str, limit: int) -> str:
     """Return stripped, bounded text or raise HarpaPayloadError for invalid input."""
     value = payload.get(name)
@@ -48,7 +52,13 @@ def normalize(payload: object, *, received_at: int | None = None) -> dict[str, o
     if kind not in _KINDS:
         raise HarpaPayloadError("invalid kind")
     source_url = _text(payload, "source_url", 2048)
-    parsed = urlparse(source_url)
+    parsed = None
+    try:
+        parsed = urlparse(source_url)
+    except ValueError:
+        pass
+    if parsed is None:
+        raise HarpaPayloadError("invalid source_url")
     if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
         raise HarpaPayloadError("invalid source_url")
     return {
@@ -61,32 +71,29 @@ def normalize(payload: object, *, received_at: int | None = None) -> dict[str, o
     }
 
 
-def _items(path: Path, *, strict: bool = False) -> list[dict[str, Any]]:
+def _items(path: Path) -> list[dict[str, Any]]:
     """Read at most MAX_ITEMS recent records, treating a missing file as empty.
 
-    In strict mode, propagate read errors and reject malformed JSON or non-object
-    records with OSError; otherwise tolerate read errors and skip bad records.
+    Existing unreadable or malformed state is never an empty, healthy inbox.
     """
+    lines = None
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         return []
-    except OSError:
-        if strict:
-            raise
-        return []
+    except (OSError, UnicodeDecodeError):
+        pass
+    if lines is None:
+        raise HarpaStorageError("HARPA inbox cannot be read")
     items: list[dict[str, Any]] = []
     for line in lines[-MAX_ITEMS:]:
+        item = None
         try:
             item = json.loads(line)
         except json.JSONDecodeError:
-            if strict:
-                raise OSError("invalid HARPA inbox")
-            continue
+            pass
         if not isinstance(item, dict):
-            if strict:
-                raise OSError("invalid HARPA inbox")
-            continue
+            raise HarpaStorageError("invalid HARPA inbox")
         items.append(item)
     return items
 
@@ -100,7 +107,7 @@ def store(payload: object, path: Path) -> dict[str, object]:
     """
     item = normalize(payload)
     with _STORE_LOCK:
-        existing = _items(path, strict=True)
+        existing = _items(path)
         if any(value.get("event_id") == item["event_id"] for value in existing):
             return {"accepted": True, "duplicate": True, "event_id": item["event_id"]}
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -117,7 +124,7 @@ def store(payload: object, path: Path) -> dict[str, object]:
                 while remaining:
                     written = os.write(descriptor, remaining)
                     if written <= 0:
-                        raise OSError("HARPA inbox write failed")
+                        raise HarpaStorageError("HARPA inbox write failed")
                     remaining = remaining[written:]
                 os.fsync(descriptor)
             finally:
@@ -133,9 +140,12 @@ def store(payload: object, path: Path) -> dict[str, object]:
 
 
 def snapshot(path: Path | None) -> dict[str, object]:
-    """Return up to 20 newest reports, or disabled status when no path is configured."""
+    """Return recent reports, distinguishing disabled or unreadable inbox state."""
     if path is None:
         return {"status": "disabled", "items": []}
-    items = _items(path)
+    try:
+        items = _items(path)
+    except HarpaStorageError:
+        return {"status": "error", "items": []}
     items.reverse()
     return {"status": "ready", "items": items[:20]}
