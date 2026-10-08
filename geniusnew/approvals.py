@@ -7,10 +7,11 @@ import hashlib
 import hmac
 import secrets
 from threading import RLock
-from typing import Callable
+from types import MappingProxyType
+from typing import Callable, Iterable, Mapping
 
-from .contracts import (ContractError, Handoff, HandoffSigner, HandoffVerifier, canonical,
-                        validate_pending)
+from .contracts import (ContractError, Handoff, HandoffSigner, HandoffVerifier,
+                        Policy, canonical, validate_pending)
 
 
 _GRANTED = "GRANTED"
@@ -149,6 +150,42 @@ def create_scope(wire: bytes, *, subject: str, job_id: str, policy: object,
     )
 
 
+class ApproverPolicy:
+    """An immutable role/identity snapshot supplied by the server configuration.
+
+    Job owners are identified by their policy grant's user_id. An approver
+    sharing that identity cannot grant its own job, even under another subject.
+    """
+
+    def __init__(self, approvers: Mapping[str, str], *, policy: Policy,
+                 principal_subjects: Iterable[str]) -> None:
+        if not isinstance(approvers, Mapping):
+            _fail("approvers must be a mapping of subject to user_id")
+        known = frozenset(principal_subjects)
+        owners = {grant.subject: grant.user_id for grant in policy.grants}
+        identities = {}
+        for subject, user_id in approvers.items():
+            _string(subject, "approver subject")
+            _string(user_id, "approver user_id")
+            if max(len(subject.encode("utf-8", "surrogatepass")),
+                   len(user_id.encode("utf-8", "surrogatepass"))) > 160:
+                _fail("approver identifiers must be at most 160 bytes")
+            if subject not in known:
+                _fail("approver subject must have a configured principal")
+            if subject in owners and owners[subject] != user_id:
+                _fail("approver identity must match its policy grant")
+            identities[subject] = user_id
+        self.identities = MappingProxyType(identities)
+
+    def user_id(self, subject: str) -> str:
+        if type(subject) is not str or subject not in self.identities:
+            _fail("subject has no approver role")
+        return self.identities[subject]
+
+    def __len__(self) -> int:
+        return len(self.identities)
+
+
 class ApprovalStore:
     """Thread-safe in-memory store; production callers must provide durable storage."""
 
@@ -181,7 +218,10 @@ class ApprovalStore:
         record = _Record(digest, scope, now, expires_at, _GRANTED, now, None, record_hash)
         return token, record
 
-    def grant(self, scope: ApprovalScope, *, now: int, ttl_seconds: int) -> ApprovalGrant:
+    def grant(self, scope: ApprovalScope, *, now: int, ttl_seconds: int,
+              transaction=None) -> ApprovalGrant:
+        if transaction is not None:
+            _fail("process-local approval store cannot join a database transaction")
         token, record = self._new_grant(scope, now=now, ttl_seconds=ttl_seconds)
         with self._lock:
             if record.token_digest in self._records:
@@ -190,10 +230,15 @@ class ApprovalStore:
         return ApprovalGrant(token, scope, record.issued_at, record.expires_at, record.record_hash)
 
     def consume(self, token: bytes, scope: ApprovalScope, *, now: int,
-                subject: str | None = None) -> ApprovalReceipt:
+                subject: str | None = None, transaction=None) -> ApprovalReceipt:
+        if transaction is not None:
+            _fail("process-local approval store cannot join a database transaction")
         return self._transition(token, scope, now=now, new_state=_CONSUMED, require_unexpired=True)
 
-    def revoke(self, token: bytes, scope: ApprovalScope, *, now: int) -> ApprovalReceipt:
+    def revoke(self, token: bytes, scope: ApprovalScope, *, now: int,
+               transaction=None) -> ApprovalReceipt:
+        if transaction is not None:
+            _fail("process-local approval store cannot join a database transaction")
         return self._transition(token, scope, now=now, new_state=_REVOKED, require_unexpired=False)
 
     def _transition(self, token: bytes, scope: ApprovalScope, *, now: int, new_state: str,

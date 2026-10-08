@@ -38,8 +38,15 @@ _SCOPE_KEYS = frozenset({"handoff_sha256", "handoff_expires_at", "job_id", "user
 _MIGRATIONS = ((1, "0001_core_foundation.sql"), (2, "0002_pending_jobs.sql"),
                (3, "0003_approval_store.sql"), (4, "0004_audit_chain.sql"))
 _MIGRATION_DIR = Path(__file__).with_name("migrations")
-# Serialize competing migration processes, including the first installation.
+# Distinct advisory locks serialize migrations, audit appends and pending admission.
 _MIGRATION_LOCK = 0x47454E4955534231
+_AUDIT_LOCK = 0x47454E4955534235
+_PENDING_LOCK = 513812742
+
+# Full-chain startup verification and append take about 18 seconds on the
+# disposable PostgreSQL benchmark; allow room for slower hosts without an
+# indefinitely idle transaction.
+_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS = 60_000
 
 # The audit contract's upper bound for a timestamp, as `orchestrator.py` and
 # `audit.py` use it; a test pins the three together.
@@ -89,7 +96,7 @@ def migration_files() -> tuple[tuple[int, bytes, str], ...]:
 
 
 @contextmanager
-def _connect(dsn: str):
+def _connect(dsn: str, *, application_name: str):
     try:
         parameters = conninfo_to_dict(dsn)
         if not all(parameters.get(key) for key in ("host", "dbname", "user")):
@@ -97,8 +104,13 @@ def _connect(dsn: str):
         # Bound startup and lock waits, regardless of libpq/user defaults. Fixed
         # qualification prevents a caller-controlled search_path shadowing tables.
         with psycopg.connect(dsn, autocommit=True, connect_timeout=5,
+                             application_name=application_name,
+                             keepalives=1, keepalives_idle=30,
+                             keepalives_interval=10, keepalives_count=3,
                              options="-c search_path=pg_catalog,public "
-                                     "-c statement_timeout=10000 -c lock_timeout=5000") as connection:
+                                     "-c statement_timeout=10000 -c lock_timeout=5000 "
+                                     f"-c idle_in_transaction_session_timeout="
+                                     f"{_IDLE_IN_TRANSACTION_SESSION_TIMEOUT_MS}") as connection:
             yield connection
     except psycopg.Error:
         # libpq errors can contain the DSN, usernames and server-supplied text.
@@ -225,7 +237,7 @@ def _check_acceptance_bindings(connection) -> None:
 def open_database(dsn: str):
     """Validate the installed foundation before any listener or worker exists."""
     expected = migration_files()
-    with _connect(dsn) as connection:
+    with _connect(dsn, application_name="geniusnew-core") as connection:
         with connection.transaction():
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             _check_history(_history(connection), expected, complete=True)
@@ -267,9 +279,11 @@ class PostgresJobLedger(JobLedger):
                             "WHERE job_id=%s", (job_id,), fetch=True)
         return row is None or row == ("PENDING_APPROVAL", subject, handoff_sha256)
 
-    def reserve_admitted(self, reservation: Reservation, *, approval_record_hash: str | None) -> bool:
+    def reserve_admitted(self, reservation: Reservation, *,
+                         approval_record_hash: str | None,
+                         transaction=None) -> bool:
         if approval_record_hash is None:
-            return self.reserve(reservation)
+            return self.reserve(reservation, transaction=transaction)
         row = self._execute(
             "SELECT CASE WHEN octet_length(r.scope) <= %s THEN r.scope ELSE NULL END,"
             "r.changed_at FROM public.job_ledger j "
@@ -281,7 +295,7 @@ class PostgresJobLedger(JobLedger):
             "AND r.state='CONSUMED'", (_MAX_WIRE_BYTES, approval_record_hash,
             reservation.job_id,
             reservation.subject, reservation.handoff_sha256, reservation.expires_at,
-            reservation.reserved_at), fetch=True)
+            reservation.reserved_at), fetch=True, transaction=transaction)
         if row is None:
             return False
         scope = ApprovalScope(**decode_wire(row[0], keys=_SCOPE_KEYS, noun="approval scope"))
@@ -290,7 +304,7 @@ class PostgresJobLedger(JobLedger):
                 and scope.handoff_expires_at == reservation.expires_at
                 and row[1] == reservation.reserved_at)
 
-    def reserve(self, reservation: Reservation) -> bool:
+    def reserve(self, reservation: Reservation, *, transaction=None) -> bool:
         if not isinstance(reservation, Reservation):
             _fail("job ledger reserves only a Reservation")
         rowcount = self._execute(
@@ -300,10 +314,11 @@ class PostgresJobLedger(JobLedger):
             "ON CONFLICT DO NOTHING",
             (reservation.job_id, reservation.subject, reservation.handoff_sha256,
              reservation.reserved_at, reservation.reserved_at, reservation.reserved_at,
-             reservation.expires_at))
+             reservation.expires_at), transaction=transaction)
         return rowcount == 1
 
-    def commit_execution(self, reservation: Reservation, *, now: int) -> None:
+    def commit_execution(self, reservation: Reservation, *, now: int,
+                         transaction=None) -> None:
         if not isinstance(reservation, Reservation):
             _fail("job ledger commits only a Reservation")
         # Only the row for this handoff, and only from RESERVED: of two callers
@@ -311,17 +326,24 @@ class PostgresJobLedger(JobLedger):
         rowcount = self._execute(
             "UPDATE public.job_ledger SET state = 'EXECUTION_COMMITTED', updated_at = %s "
             "WHERE job_id = %s AND handoff_sha256 = %s AND state = 'RESERVED'",
-            (now, reservation.job_id, reservation.handoff_sha256))
+            (now, reservation.job_id, reservation.handoff_sha256),
+            transaction=transaction)
         if rowcount != 1:
             _fail("job reservation could not be committed to execution")
 
-    def _execute(self, query: str, parameters: tuple, *, fetch: bool = False):
+    def _execute(self, query: str, parameters: tuple, *, fetch: bool = False,
+                 transaction=None):
         try:
             with self._lock:
-                if self._connection.info.transaction_status not in (
-                        psycopg.pq.TransactionStatus.IDLE,
-                        psycopg.pq.TransactionStatus.UNKNOWN):
-                    _fail("job ledger cannot join an existing transaction")
+                if transaction is None:
+                    if self._connection.info.transaction_status not in (
+                            psycopg.pq.TransactionStatus.IDLE,
+                            psycopg.pq.TransactionStatus.UNKNOWN):
+                        _fail("job ledger cannot join an existing transaction")
+                elif (transaction is not self._connection
+                      or self._connection.info.transaction_status
+                      != psycopg.pq.TransactionStatus.INTRANS):
+                    _fail("job ledger needs its own active audit transaction")
                 cursor = self._connection.execute(query, parameters)
                 return cursor.fetchone() if fetch else cursor.rowcount
         except psycopg.Error:
@@ -332,8 +354,9 @@ class PostgresJobLedger(JobLedger):
 class PostgresAcceptanceLedger(AcceptanceLedger):
     """Gate B3: once across restarts/replicas, with the database's state trigger.
 
-    Use a dedicated autocommit connection: its short transaction must not
-    include another ledger's mutations or any worker execution.
+    Standalone calls use a short autocommit transaction. B6 callers may pass
+    the chain's exact active connection to include the signed result event;
+    neither path holds a transaction while a worker executes.
     """
 
     def __init__(self, connection) -> None:
@@ -345,39 +368,35 @@ class PostgresAcceptanceLedger(AcceptanceLedger):
         self._lock = connection_lock(connection)
 
     def reserve(self, *, job_id: str, handoff_wire: bytes, result_wire: bytes,
-                now: int) -> bool:
+                now: int, transaction=None) -> bool:
         digest = sha256(handoff_wire).hexdigest()
         try:
-            with self._lock:
-                # UNKNOWN belongs to a closed connection; let its first SQL
-                # operation fail through the sanitized driver-error path.
-                if self._connection.info.transaction_status not in (
-                        psycopg.pq.TransactionStatus.IDLE, psycopg.pq.TransactionStatus.UNKNOWN):
-                    _fail("acceptance ledger cannot join an existing transaction")
-                with self._connection.transaction():
-                    # Serialize replays on the job before inspecting acceptance;
-                    # otherwise a racing INSERT meets the BEFORE trigger first.
-                    self._connection.execute(
-                        "SELECT 1 FROM public.job_ledger "
-                        "WHERE job_id = %s AND handoff_sha256 = %s FOR UPDATE",
-                        (job_id, digest)).fetchone()
-                    existing = self._connection.execute(
-                        "SELECT 1 FROM public.acceptance_ledger WHERE handoff_sha256 = %s",
-                        (digest,)).fetchone()
-                    if existing is not None:
-                        return False
-                    # BEFORE INSERT requires EXECUTION_COMMITTED; AFTER INSERT
-                    # completes exactly this job. Failure rolls both back.
-                    self._connection.execute(
-                        "INSERT INTO public.acceptance_ledger "
-                        "(handoff_sha256, job_id, handoff_wire, result_sha256, result_wire, accepted_at) "
-                        "VALUES (%s, %s, %s, %s, %s, %s)",
-                        (digest, job_id, handoff_wire, sha256(result_wire).hexdigest(), result_wire, now))
-                    completed = self._connection.execute(
-                        "SELECT state, updated_at FROM public.job_ledger "
-                        "WHERE job_id = %s AND handoff_sha256 = %s", (job_id, digest)).fetchone()
-                    if completed != ("COMPLETED", now):
-                        _fail("acceptance did not complete the bound job")
+            with _store_transaction(self._connection, self._lock,
+                                    transaction=transaction,
+                                    unavailable="acceptance ledger is unavailable") as connection:
+                # Serialize replays on the job before inspecting acceptance;
+                # otherwise a racing INSERT meets the BEFORE trigger first.
+                connection.execute(
+                    "SELECT 1 FROM public.job_ledger "
+                    "WHERE job_id = %s AND handoff_sha256 = %s FOR UPDATE",
+                    (job_id, digest)).fetchone()
+                existing = connection.execute(
+                    "SELECT 1 FROM public.acceptance_ledger WHERE handoff_sha256 = %s",
+                    (digest,)).fetchone()
+                if existing is not None:
+                    return False
+                # BEFORE INSERT requires EXECUTION_COMMITTED; AFTER INSERT
+                # completes exactly this job. Failure rolls both back.
+                connection.execute(
+                    "INSERT INTO public.acceptance_ledger "
+                    "(handoff_sha256, job_id, handoff_wire, result_sha256, result_wire, accepted_at) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (digest, job_id, handoff_wire, sha256(result_wire).hexdigest(), result_wire, now))
+                completed = connection.execute(
+                    "SELECT state, updated_at FROM public.job_ledger "
+                    "WHERE job_id = %s AND handoff_sha256 = %s", (job_id, digest)).fetchone()
+                if completed != ("COMPLETED", now):
+                    _fail("acceptance did not complete the bound job")
             return True
         except psycopg.Error:
             raise ContractError("acceptance ledger is unavailable") from None
@@ -425,7 +444,7 @@ class PostgresAcceptanceLedger(AcceptanceLedger):
 def migrate(dsn: str) -> None:
     """Apply only a known missing suffix; never rewrite history or repair damage."""
     expected = migration_files()
-    with _connect(dsn) as connection:
+    with _connect(dsn, application_name="geniusnew-migrate") as connection:
         # Install the known suffix under the migration lock; DDL, grants and
         # history commit together.
         with connection.transaction():
@@ -460,17 +479,25 @@ def _store_connection(connection):
 
 
 @contextmanager
-def _store_transaction(connection, lock):
+def _store_transaction(connection, lock, *, transaction=None,
+                       unavailable="durable store is unavailable"):
     try:
         with lock:
-            if connection.info.transaction_status not in (
-                    psycopg.pq.TransactionStatus.IDLE,
-                    psycopg.pq.TransactionStatus.UNKNOWN):
-                _fail("durable store cannot join an existing transaction")
-            with connection.transaction():
+            if transaction is not None:
+                if (transaction is not connection
+                        or connection.info.transaction_status
+                        != psycopg.pq.TransactionStatus.INTRANS):
+                    _fail("durable store needs its own active audit transaction")
                 yield connection
+            else:
+                if connection.info.transaction_status not in (
+                        psycopg.pq.TransactionStatus.IDLE,
+                        psycopg.pq.TransactionStatus.UNKNOWN):
+                    _fail("durable store cannot join an existing transaction")
+                with connection.transaction():
+                    yield connection
     except psycopg.Error:
-        raise ContractError("durable store is unavailable") from None
+        raise ContractError(unavailable) from None
 
 
 _APPROVAL_COLUMNS = ("token_digest, scope, issued_at, expires_at, state, "
@@ -605,7 +632,7 @@ class PostgresPendingJobs(PendingJobs):
         for row in rows:
             self._waiting(row)
 
-    def add(self, job_id, waiting, *, now):
+    def add(self, job_id, waiting, *, now, transaction=None):
         if not isinstance(waiting, _Waiting):
             _fail("pending store accepts only a waiting signed handoff")
         handoff = validate_pending(waiting.wire, subject=waiting.subject, job_id=job_id,
@@ -613,11 +640,16 @@ class PostgresPendingJobs(PendingJobs):
         digest = sha256(waiting.wire).hexdigest()
         if waiting.handoff != handoff or waiting.trace_id != "trace-" + digest[:16]:
             _fail("pending waiting metadata does not match the signed wire")
-        with _store_transaction(self._connection, self._lock) as connection:
+        with _store_transaction(self._connection, self._lock,
+                                transaction=transaction) as connection:
             # Serializes admission against the global queue bound across replicas.
-            connection.execute("SELECT pg_advisory_xact_lock(513812742)")
-            self._expire(connection, now=now)
-            if connection.execute("SELECT count(*) FROM public.pending_jobs").fetchone()[0] >= _MAX_PENDING:
+            # Expiry is not swept here: changing an existing job to REFUSED
+            # without its audit event would violate the B6 atomicity boundary.
+            # Expired rows stay but hold no slot, so abandoned jobs cannot fill
+            # the bound for good.
+            connection.execute("SELECT pg_advisory_xact_lock(%s)", (_PENDING_LOCK,))
+            if connection.execute("SELECT count(*) FROM public.pending_jobs WHERE expires_at > %s",
+                                  (now,)).fetchone()[0] >= _MAX_PENDING:
                 _fail("too many jobs are waiting for approval")
             inserted = connection.execute(
                 "INSERT INTO public.job_ledger (job_id,subject,handoff_sha256,state,"
@@ -655,10 +687,11 @@ class PostgresPendingJobs(PendingJobs):
         # Wrong tokens cannot have changed durable pending state in the first place.
         return None
 
-    def refuse(self, job_id, subject, *, now):
+    def refuse(self, job_id, subject, *, now, transaction=None):
         if type(now) is not int or not 1 <= now <= _MAX_TIME:
             _fail("refusal time is invalid")
-        with _store_transaction(self._connection, self._lock) as connection:
+        with _store_transaction(self._connection, self._lock,
+                                transaction=transaction) as connection:
             row = connection.execute(
                 "SELECT state,subject,created_at FROM public.job_ledger "
                 "WHERE job_id=%s FOR UPDATE",
@@ -671,15 +704,6 @@ class PostgresPendingJobs(PendingJobs):
             connection.execute("UPDATE public.job_ledger SET state='REFUSED',updated_at=%s "
                                "WHERE job_id=%s", (now, job_id))
 
-    def _expire(self, connection, *, now):
-        rows = connection.execute(
-            "SELECT j.job_id FROM public.job_ledger j JOIN public.pending_jobs p "
-            "ON p.job_id=j.job_id WHERE j.state='PENDING_APPROVAL' AND p.expires_at<=%s "
-            "ORDER BY j.job_id FOR UPDATE OF j", (now,)).fetchall()
-        for (job_id,) in rows:
-            connection.execute("DELETE FROM public.pending_jobs WHERE job_id=%s", (job_id,))
-            connection.execute("UPDATE public.job_ledger SET state='REFUSED',updated_at=%s "
-                               "WHERE job_id=%s", (now, job_id))
 
 
 class PostgresApprovalStore(ApprovalStore):
@@ -699,11 +723,12 @@ class PostgresApprovalStore(ApprovalStore):
             (record.token_digest.hex(), canonical(record.scope.to_dict()), record.issued_at,
              record.expires_at, record.state, record.changed_at, record.previous_hash, record.record_hash))
 
-    def grant(self, scope, *, now, ttl_seconds):
+    def grant(self, scope, *, now, ttl_seconds, transaction=None):
         token, record = self._new_grant(scope, now=now, ttl_seconds=ttl_seconds)
         _approval_record((record.token_digest.hex(), canonical(scope.to_dict()), record.issued_at,
                           record.expires_at, record.state, record.changed_at, None, record.record_hash))
-        with _store_transaction(self._connection, self._lock) as connection:
+        with _store_transaction(self._connection, self._lock,
+                                transaction=transaction) as connection:
             job = connection.execute(
                 "SELECT j.state,j.subject,j.handoff_sha256,j.expires_at,"
                 "p.subject,CASE WHEN octet_length(p.wire) <= %s THEN p.wire ELSE NULL END,"
@@ -725,24 +750,36 @@ class PostgresApprovalStore(ApprovalStore):
             if connection.execute("SELECT 1 FROM public.approval_tokens WHERE token_digest=%s",
                                   (record.token_digest.hex(),)).fetchone():
                 _fail("approval token collision")
+            # The job row lock serializes approvers across service instances.
+            # A lost response may be replaced only after its raw token expires.
+            if connection.execute(
+                    "SELECT 1 FROM public.approval_tokens t "
+                    "JOIN public.approval_records r ON r.token_digest=t.token_digest "
+                    "AND r.record_hash=t.current_record_hash "
+                    "WHERE r.scope=%s AND r.state='GRANTED' AND r.expires_at>%s LIMIT 1",
+                    (canonical(scope.to_dict()), now)).fetchone():
+                _fail("pending job already has an active approval grant")
             self._insert(connection, record)
             connection.execute("INSERT INTO public.approval_tokens VALUES (%s,%s)",
                                (record.token_digest.hex(), record.record_hash))
         return ApprovalGrant(token, scope, record.issued_at, record.expires_at, record.record_hash)
 
-    def consume(self, token, scope, *, now, subject):
-        return self._change(token, scope, now=now, state="CONSUMED", subject=subject)
+    def consume(self, token, scope, *, now, subject, transaction=None):
+        return self._change(token, scope, now=now, state="CONSUMED", subject=subject,
+                            transaction=transaction)
 
-    def revoke(self, token, scope, *, now):
-        return self._change(token, scope, now=now, state="REVOKED")
+    def revoke(self, token, scope, *, now, transaction=None):
+        return self._change(token, scope, now=now, state="REVOKED",
+                            transaction=transaction)
 
-    def _change(self, token, scope, *, now, state, subject=None):
+    def _change(self, token, scope, *, now, state, subject=None, transaction=None):
         if type(token) is not bytes or len(token) < 32 or not isinstance(scope, ApprovalScope):
             _fail("approval token or scope is invalid")
         if type(now) is not int or not 1 <= now <= _MAX_TIME:
             _fail("approval time is invalid")
         digest = sha256(token).hexdigest()
-        with _store_transaction(self._connection, self._lock) as connection:
+        with _store_transaction(self._connection, self._lock,
+                                transaction=transaction) as connection:
             if state == "CONSUMED":
                 job = connection.execute(
                     "SELECT j.state,j.subject,j.handoff_sha256,j.expires_at,"

@@ -12,7 +12,7 @@ from geniusnew.isolation import IsolatedWorkerRunner
 from geniusnew.results import WorkerAuthority
 from geniusnew.wiring import build
 from geniusnew.workers import DeterministicSummarizer, WorkerRunner
-from tests.test_end_to_end import API_KEY, ROOT_SECRET, Fixture
+from tests.test_end_to_end import API_KEY, APPROVER_KEY, ROOT_SECRET, Fixture
 
 
 class CountingRunner(WorkerRunner):
@@ -102,7 +102,8 @@ class ControlledAnchorTest(Fixture, unittest.TestCase):
         return build(root_secret=ROOT_SECRET,
                      policy=policy or self.policy_for(
                          requires_approval=any(word in self._testMethodName for word in ('approval', 'consumption', 'wrong_token'))),
-                     api_keys={API_KEY: 'subject-demo'},
+                     api_keys={API_KEY: 'subject-demo', APPROVER_KEY: 'subject-approver'},
+                     approvers={'subject-approver': 'user-approver'},
                      workers=(DeterministicSummarizer(),),
                      clock=lambda: self.clock[0], anchor=self.test_anchor,
                      job_ids=lambda: self.next_id,
@@ -125,6 +126,21 @@ class ControlledAnchorTest(Fixture, unittest.TestCase):
                          'HANDOFF_ISSUED', 'HANDOFF_ADMITTED',
                          'EXECUTION_DISPATCHED', 'RESULT_ACCEPTED'])
 
+    def test_anchor_recovery_happens_before_any_new_audit_append(self):
+        self.test_anchor.fail_on = 'HANDOFF_ADMITTED'
+        self.assertEqual(self.post(), (409, {'error': 'REJECTED'}))
+        records = self.service.chain.records
+        self.assertEqual([record.event.action for record in records],
+                         ['HANDOFF_ISSUED', 'HANDOFF_ADMITTED'])
+
+        self.test_anchor.fail_on = 'HANDOFF_ADMITTED'
+        self.next_id = 'job-other'
+        self.assertEqual(self.post(), (409, {'error': 'REJECTED'}))
+        self.assertEqual(self.service.chain.records, records)
+        self.assertEqual(self.runner_type.calls, 0)
+
+        self.assertEqual(self.post()[0], 202)
+
     def test_post_execution_failure_refuses_and_same_job_id_does_not_run_twice(self):
         self.test_anchor.fail_on = 'RESULT_ACCEPTED'
         self.assertEqual(self.post(), (409, {'error': 'REJECTED'}))
@@ -143,7 +159,7 @@ class ControlledAnchorTest(Fixture, unittest.TestCase):
     def test_approval_is_anchored_through_final_response(self):
         self.assertEqual(self.post()[1]['status'], 'PENDING_APPROVAL')
         self._committed(['HANDOFF_ISSUED'])
-        token = self.service.approve('job-fixed')
+        token = self.service.approve('job-fixed', approver_subject='subject-approver')
         self._committed(['HANDOFF_ISSUED', 'APPROVAL_GRANTED'])
         self.assertEqual(self.service.entry.handle(method='POST',
             path='/jobs/job-fixed/approve',
@@ -158,13 +174,13 @@ class ControlledAnchorTest(Fixture, unittest.TestCase):
         self.assertEqual(self.post()[0], 202)
         self.test_anchor.fail_on = 'APPROVAL_GRANTED'
         with self.assertRaises(ContractError):
-            self.service.approve('job-fixed')
+            self.service.approve('job-fixed', approver_subject='subject-approver')
         self.assertEqual(self.runner_type.calls, 0)
         self.assertEqual(self.test_anchor.committed[0], 1)
 
     def test_failed_admission_after_consumption_never_reuses_pending_job(self):
         self.assertEqual(self.post()[0], 202)
-        token = self.service.approve('job-fixed')
+        token = self.service.approve('job-fixed', approver_subject='subject-approver')
         self.test_anchor.fail_on = 'HANDOFF_ADMITTED'
         arguments = dict(method='POST', path='/jobs/job-fixed/approve', body=b'{}',
                          headers={'Content-Type': 'application/json',
@@ -176,7 +192,7 @@ class ControlledAnchorTest(Fixture, unittest.TestCase):
 
     def test_wrong_token_refusal_is_anchored_then_correct_token_runs(self):
         self.assertEqual(self.post()[0], 202)
-        token = self.service.approve('job-fixed')
+        token = self.service.approve('job-fixed', approver_subject='subject-approver')
         arguments = dict(method='POST', path='/jobs/job-fixed/approve', body=b'{}',
                          headers={'Content-Type': 'application/json',
                                   'Authorization': 'Bearer ' + API_KEY.decode(),
