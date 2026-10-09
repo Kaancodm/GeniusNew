@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Folio — your shared workspace</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div id="auth" class="auth-shell">
+    <div class="auth-card">
+      <div class="brand"><span class="brand-mark">F</span><span>Folio</span></div>
+      <div class="auth-art"><div class="art-page"><span class="art-star">✳</span><span class="art-line long"></span><span class="art-line"></span><span class="art-line short"></span><span class="art-block"></span></div></div>
+      <h1>Make space for ideas.</h1>
+      <p class="subtle">Write together. Keep everything in one calm place.</p>
+      <div class="auth-tabs"><button id="login-tab" class="active" type="button">Log in</button><button id="signup-tab" type="button">Create account</button></div>
+      <form id="auth-form">
+        <label>Email address<input id="email" type="email" autocomplete="email" required maxlength="254" placeholder="you@example.com"></label>
+        <label>Password<input id="password" type="password" autocomplete="current-password" required minlength="8" maxlength="256" placeholder="At least 8 characters"></label>
+        <button id="auth-submit" class="primary full" type="submit">Log in <span>→</span></button>
+      </form>
+      <p id="auth-error" class="error" role="alert"></p>
+    </div>
+  </div>
+  <div id="workspace" class="workspace hidden">
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-top"><div class="brand"><span class="brand-mark">F</span><span>Folio</span></div><button id="sidebar-toggle" class="icon-button mobile-only" aria-label="Close sidebar">×</button></div>
+      <div class="account"><span id="avatar" class="avatar"></span><span class="account-copy"><strong id="account-name"></strong><small>Personal workspace</small></span><button id="logout" class="quiet" title="Log out" aria-label="Log out">↗</button></div>
+      <div class="sidebar-section"><span class="section-label">WORKSPACE</span><button id="new-page" class="new-page"><span>＋</span> New page</button></div>
+      <div class="sidebar-section pages-section"><div class="section-heading"><span class="section-label">YOUR PAGES</span><span id="page-count" class="count">0</span></div><nav id="page-list" aria-label="Your pages"></nav></div>
+      <div class="sidebar-bottom"><div class="sidebar-note"><span>✦</span><div><strong>Better together</strong><small>Share a page with your team and make ideas happen.</small></div></div><span class="sidebar-foot">A place for your best work.</span></div>
+    </aside>
+    <main class="main">
+      <header class="topbar"><button id="menu" class="icon-button mobile-only" aria-label="Open sidebar">☰</button><div class="breadcrumb"><span>Workspace</span><span class="chevron">›</span><strong id="breadcrumb-title">Home</strong></div><div class="top-actions"><span id="save-status" class="save-status"></span><button id="share-button" class="outline hidden">Share <span>↗</span></button></div></header>
+      <div id="empty-state" class="empty-state"><div class="empty-icon">✳</div><span class="eyebrow">YOUR CANVAS IS READY</span><h1>Good things start<br>with a blank page.</h1><p>Create a page to capture a thought, write a plan, or start something with your team.</p><button id="empty-new-page" class="primary">Create your first page <span>→</span></button></div>
+      <div id="editor-view" class="editor-view hidden"><div class="document"><div class="document-icon">✳</div><input id="page-title" class="page-title" aria-label="Page title" placeholder="Untitled" maxlength="160"><div class="meta"><span id="owner-label"></span><span class="meta-dot">·</span><span id="updated-label"></span></div><div id="toolbar" class="toolbar" aria-label="Formatting toolbar"><button data-command="bold" title="Bold"><b>B</b></button><button data-command="italic" title="Italic"><i>I</i></button><button data-command="underline" title="Underline"><u>U</u></button><span class="toolbar-divider"></span><button data-command="formatBlock" data-value="h2" title="Heading">H₂</button><button data-command="insertUnorderedList" title="Bulleted list">☷</button><button data-command="insertOrderedList" title="Numbered list">≡</button><button id="link-button" title="Link">⌁</button></div><div id="page-body" class="page-body" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Start writing something wonderful..."></div><div class="editor-footer"><span>Folio keeps your ideas close.</span><button id="save-button" class="primary">Save changes</button></div></div></div>
+    </main>
+  </div>
+  <div id="share-modal" class="modal-backdrop hidden"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="share-title"><div class="modal-head"><div><span class="eyebrow">WORK TOGETHER</span><h2 id="share-title">Share this page</h2></div><button id="close-share" class="icon-button" aria-label="Close">×</button></div><p class="subtle">Invite someone with a Folio account by email.</p><form id="share-form" class="share-form"><input id="share-email" type="email" required placeholder="teammate@example.com" aria-label="Teammate email"><select id="share-role" aria-label="Permission"><option value="editor">Can edit</option><option value="viewer">Can view</option></select><button class="primary" type="submit">Invite</button></form><p id="share-error" class="error" role="alert"></p><div class="people-heading">People with access</div><div id="share-list" class="share-list"></div></div></div>
+  <div id="toast" class="toast hidden" role="status"></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

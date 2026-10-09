@@ -61,6 +61,18 @@ Dokumentation steht.
 Eine Grenze aus dieser Liste zu schließen ist eine eigene, begründete Änderung mit Test,
 kein Nebeneffekt.
 
+## Lokale Dokument-App Folio
+
+`document_app/` ist ein Loopback-MVP und kein Teil des produktiven Portals. Nutzer und
+Seiten liegen in einer privaten SQLite-Datei; Passwörter werden mit `scrypt` gehasht.
+Der vorliegende Portal-Entwurf in `docs/DATABASE.md` sieht dagegen PostgreSQL und
+Argon2id vor. Folio darf deshalb nicht als Portal oder über ein öffentliches Netz
+bereitgestellt werden. Es fehlen insbesondere ein Login-Rate-Limit, Konto-Wiederherstellung
+und ein Betriebskonzept für Backups. Freigaben gelten nur für registrierte Konten;
+gleichzeitige Bearbeitungen werden per Versionsprüfung abgelehnt und erfordern erneutes
+Laden. Die Sicherheitsgrenzen für Anmeldung, CSRF, Seitenrechte und HTML-Bereinigung
+prüft `tests/test_document_app.py`.
+
 ## Meldung von Schwachstellen
 
 Keine sensitiven Schwachstellendetails, Tokens oder Exploit-Daten in öffentliche Issues schreiben. Sicherheitsfunde zunächst über einen privaten, geeigneten Kanal des Repository-Eigentümers melden.

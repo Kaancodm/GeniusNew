@@ -70,10 +70,13 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/anchor_process.py", "geniusnew/config.py",
            "geniusnew/__main__.py", "geniusnew/database.py",
            "geniusnew/audit_store.py", "tools/control_deck/actions.py",
-           "ops/server/genius-server")
+           "ops/server/genius-server", "document_app/app.py")
 
 # Guarded shell scripts and the one test module that runs each of them.
 GUARDED_SHELL = {"ops/server/genius-server": "test_server_tool.py"}
+# The standalone document app has no Core callers. Keep its mutants scoped
+# to its own integration tests after the unmutated full-suite baseline passes.
+GUARDED_PY = {"document_app/app.py": "test_document_app.py"}
 
 # `die "` as a command, not as the German article inside a message, a comment
 # or the definition `die() {`.
@@ -261,7 +264,8 @@ def check(paths: list[str]) -> int:
             original = target.read_text()
             target.write_text(_disable(original, refusal))
             survived = _suite_passes(workspace, failfast=True,
-                                     pattern=GUARDED_SHELL.get(refusal.path))
+                                     pattern=(GUARDED_SHELL.get(refusal.path)
+                                              or GUARDED_PY.get(refusal.path)))
             target.write_text(original)
 
             mark = "SURVIVED" if survived else "caught  "
