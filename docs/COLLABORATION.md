@@ -6,7 +6,7 @@ Ziel: So wenig Abstimmung wie möglich. Jede Sache hat **genau einen Verantwortl
 - **Wissen — Projektstand:** `docs/STATUS.md`, geführt von **Claude Code** (seit
   04.10.2026); NotebookLM gibt daraus Auskunft.
 - **Wissen — Regeln und Entscheidungen:** `docs/COLLABORATION.md` (dieses Dokument) und
-  `docs/DECISIONS.md` gehören **ausschließlich Claude Code**.
+  `docs/DECISIONS.md` samt `docs/decisions/` gehören **ausschließlich Claude Code**.
 - **Datenbank im Code:** **Kaan entscheidet** Ziele, Architektur und offene Fragen;
   **ChatGPT erstellt und pflegt `docs/DATABASE.md`** in seinem Auftrag (Schema,
   Migrationen, Persistenzmodell); **Claude Code** reviewt Entwurf und Code
@@ -18,7 +18,7 @@ Ziel: So wenig Abstimmung wie möglich. Jede Sache hat **genau einen Verantwortl
   Überschreibrecht gegenüber allen Werkzeugen.
 - **Entscheidungen:** Kaan. Kaan steht über allen, auch über Claude Code.
 
-**Seit 27.09.2026 (Kaan):** `docs/COLLABORATION.md` und `docs/DECISIONS.md` ändert nur
+**Seit 27.09.2026 (Kaan):** `docs/COLLABORATION.md` und `docs/DECISIONS.md` (samt `docs/decisions/`) ändert nur
 noch Claude Code; kein anderes Werkzeug, auch nicht ChatGPT im Auftrag. Für die
 Datenbank gilt die überarbeitete Fassung von Kaans Entscheidung vom selben Tag: Kaan
 entscheidet Ziele und offene Architekturfragen, schreibt `docs/DATABASE.md` aber nicht
@@ -45,7 +45,7 @@ ein Review abgegeben hat. **Keine Stapel-PRs:** Jeder PR basiert auf `main`. Beg
 | **GitHub Copilot Pro** | Vervollständigung im Editor; Review jedes PRs nach der Checkliste in `.github/copilot-instructions.md` | eigene PRs ohne Auftrag |
 | **Microsoft 365 Copilot** | Berichte, E-Mails, Folien aus dem OneDrive-Ordner `GeniusNew` | Inhalte erfinden, die dort nicht stehen |
 | **Kiro-CLI** | **unabhängige Zweitprüfung für Claudes eigenen Code**: prüft Claude-PRs, die Code oder Skripte ändern, nur lesend im Projektverzeichnis, auf Anforderung von Kaan; Ergebnis als PR-Kommentar im Format „Review GeniusNew“ (unten) | Dateien ändern, Befehle mit Schreibwirkung ausführen, ein Gemini-Pflichtreview oder `Claude DB Review` ersetzen |
-| **Claude Code** | **Ordnung, Struktur und Konfliktlöser zwischen den Plattformen, mit Überschreibrecht:** besitzt `docs/COLLABORATION.md`, `docs/DECISIONS.md` und `docs/STATUS.md` sowie die übrigen Regeln (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.gemini/*`, `docs/HANDOVER.md`); entscheidet Konflikte zwischen Werkzeugen verbindlich; **unabhängiger Security-Reviewer**: reviewt ChatGPTs `docs/DATABASE.md`-Entwurf und Codex' DB-Code-PRs sicherheitstechnisch, ebenso Server-/Deployment-/Netzwerk-Sicherheitsfragen; darf jede Datei korrigieren, auch die anderer Werkzeuge, wenn sie den Regeln oder dem Code widerspricht; **hilft, wenn Codex feststeckt** | Kaans Entscheidungen oder die Ausnahmen überstimmen; die eigene Arbeit selbst freigeben; `docs/DATABASE.md` selbst entwerfen oder Head der Datenbank sein; regulärer Kerncode-Implementierer sein; eigene PRs selbst mergen |
+| **Claude Code** | **Ordnung, Struktur und Konfliktlöser zwischen den Plattformen, mit Überschreibrecht:** besitzt `docs/COLLABORATION.md`, `docs/DECISIONS.md` samt `docs/decisions/` und `docs/STATUS.md` sowie die übrigen Regeln (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.gemini/*`, `docs/HANDOVER.md`); entscheidet Konflikte zwischen Werkzeugen verbindlich; **unabhängiger Security-Reviewer**: reviewt ChatGPTs `docs/DATABASE.md`-Entwurf und Codex' DB-Code-PRs sicherheitstechnisch, ebenso Server-/Deployment-/Netzwerk-Sicherheitsfragen; darf jede Datei korrigieren, auch die anderer Werkzeuge, wenn sie den Regeln oder dem Code widerspricht; **hilft, wenn Codex feststeckt** | Kaans Entscheidungen oder die Ausnahmen überstimmen; die eigene Arbeit selbst freigeben; `docs/DATABASE.md` selbst entwerfen oder Head der Datenbank sein; regulärer Kerncode-Implementierer sein; eigene PRs selbst mergen |
 
 ## Die Wissensdatenbank
 
@@ -66,9 +66,15 @@ Die Beschreibung autorisiert keinen tatsächlichen Upload; jeder Upload ist Kaan
 
 1. Mit dem vorhandenen, autorisierten GitHub-Zugang arbeiten; kein neuer Zugang.
 2. Einen exakten Commit auf `main` wählen (voller SHA) und **ausschließlich** diese sieben
-   Dateien aus ihm exportieren: `docs/STATUS.md`, `docs/DECISIONS.md`,
+   Quellen aus ihm exportieren: `docs/STATUS.md`, die Entscheidungen,
    `docs/DATABASE.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`,
-   `AGENTS.md`. Nie das vollständige Repository, `.git`, Secrets, Logs oder DB-Dateien.
+   `AGENTS.md`. Die Entscheidungen liegen einzeln in `docs/decisions/`; als Quelle
+   dient die Ausgabe von `python3 scripts/decisions_tool.py` (ein Dokument, als
+   `DECISIONS.md` hochladen). Das Werkzeug liest den Arbeitsbaum. Deshalb den
+   gewählten SHA sauber auschecken (`git checkout <SHA>`, `git status` ohne
+   Änderungen) und erst dann ausführen; so gehören Upload und SHA-256 zum
+   protokollierten Commit. Der SHA-256 im Protokoll gilt für diese Ausgabe.
+   Nie das vollständige Repository, `.git`, Secrets, Logs oder DB-Dateien.
 3. Vor der Übertragung jede Datei lesen. Bei sensiblem oder unklarem Inhalt stoppen und
    Kaan fragen. Jede Redaktion ausdrücklich im Paketprotokoll kennzeichnen.
 4. Pro Paket dokumentieren (im PR oder der Übergabe, nie mit Zugangsdaten):
@@ -91,13 +97,14 @@ Freigabelinks und Authentifizierungs-Proxys.
 **Wer fragt wen:** Jedes Werkzeug und Kaan fragen bei Wissensfragen zuerst NotebookLM,
 also „Was wurde zu X entschieden?“, „Warum ist Y so?“ oder „Was ist der nächste
 Schritt?“. Steht es dort nicht, ist es noch nicht entschieden. Dann geht die Frage an
-Kaan; Claude Code trägt die Antwort in `docs/DECISIONS.md` ein und spiegelt sie bei
+Kaan; Claude Code trägt die Antwort als Datei in `docs/decisions/` ein und spiegelt sie bei
 Bedarf in `docs/STATUS.md`.
 
 **Pflege nach Merges** (gesammelt, höchstens ein PR am Tag):
 1. **Claude Code** überträgt die Wissensblöcke gemergter PRs nach `docs/STATUS.md` und
-   neue Entscheidungen und Konfliktergebnisse nach `docs/DECISIONS.md`, auf einem Branch
-   `claude/wissen-<datum>`; ein solcher PR ändert nur diese beiden Dateien. Zahlen
+   neue Entscheidungen und Konfliktergebnisse als neue Dateien nach `docs/decisions/`
+   (Regeln: `docs/DECISIONS.md`), auf einem Branch `claude/wissen-<datum>`; ein solcher
+   PR ändert nur `docs/STATUS.md` und `docs/decisions/`. Zahlen
    (Tests, Angriffe der Demo, Module im Refusal-Guard) kommen nur aus einem Wissensblock
    oder einer Befehlsausgabe, nie geschätzt. Kaan mergt (siehe „Konflikte“ unten).
 2. Kaan aktualisiert danach die Quellen in NotebookLM. Widersprüche zwischen den
@@ -212,7 +219,7 @@ Sicherheitsreview.
 **Darf nicht ändern:** `geniusnew/` (Kerncode), Core-Tests, `scripts/refusals.py`,
 `scripts/demo.*`, `SECURITY.md` eigenständig, `requirements.txt`, sowie alle
 Governance- und Wissensdateien (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.gemini/*`,
-`.github/copilot-instructions.md`, `docs/COLLABORATION.md`, `docs/DECISIONS.md`,
+`.github/copilot-instructions.md`, `docs/COLLABORATION.md`, `docs/DECISIONS.md`, `docs/decisions/`,
 `docs/STATUS.md`, `docs/HANDOVER.md`). ChatGPT gibt außerdem nie den eigenen
 DB-Entwurf sicherheitstechnisch frei und mergt nie eigene PRs.
 
@@ -244,8 +251,8 @@ DB-Entwurf sicherheitstechnisch frei und mergt nie eigene PRs.
    Stufe Critical/High: ein Codex-Review oder ein Kiro- oder Gemini-Review im Format unten.
    Claude gibt eigenen Code nie selbst frei.
 5. Claude Code überträgt den Wissensblock in `docs/STATUS.md` und trägt Entscheidungen
-   und Konfliktergebnisse in `docs/DECISIONS.md` ein (gesammelt, siehe „Pflege nach
-   Merges“).
+   und Konfliktergebnisse als Datei in `docs/decisions/` ein (gesammelt, siehe „Pflege
+   nach Merges“).
 
 **Kommunikation läuft über den PR**, nicht über Kopieren zwischen Chats. Plan,
 Rückfragen an Gemini oder Claude, Reviews, Begründungen und der Wissensblock stehen im
@@ -313,7 +320,7 @@ Claude Code entscheidet anhand von Code, Tests, `AGENTS.md` und `docs/DECISIONS.
 begründet die Entscheidung im PR oder Issue. **Jede Entscheidung endet mit einem fertigen
 Prompt für jedes betroffene Werkzeug**, den Kaan nur noch kopiert: was zu tun ist, in
 welcher Datei, bis wann es als erledigt gilt. Die Entscheidung ist für alle Werkzeuge
-verbindlich; Claude Code trägt sie selbst in `docs/DECISIONS.md` ein. Wo eine Datei
+verbindlich; Claude Code trägt sie selbst in `docs/decisions/` ein. Wo eine Datei
 korrigiert werden muss, darf Claude Code sie selbst ändern, auch die von Gemini
 (Überschreibrecht). Nicht überschreiben darf Claude Code Kaans Entscheidungen und die
 Ausnahmen (neue Abhängigkeit, Grenze aus `SECURITY.md`, Tags, Kaans Architektur- und
