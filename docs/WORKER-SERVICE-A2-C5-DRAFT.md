@@ -132,6 +132,32 @@ eines Locks oder ein neu erzeugter Socket ist kein Leerlaufnachweis. Wie
 Unit-Invocation, Cgroup-Leere und Bereinigung auf dem Ziel-systemd ohne zusätzliche
 Core-Rechte zuverlässig gelesen werden, bleibt ein zwingendes Probe-Gate. Scheitert
 es, bleibt dieser Dienstentwurf HOLD; keine stillschweigende neue Privilegierung.
+Die Probe erzwingt auch `AccessDenied`, fehlende Dateien und unlesbare Invocation-,
+Cgroup- oder Cleanup-Zustände: jeweils Ablehnung vor dem nächsten Connect/Payload,
+niemals Interpretation eines Lesefehlers als leere Cgroup oder beendeter Job.
+
+## Keine Nutzdaten in Logs oder Speicherabbildern
+
+Die spätere Worker-Service-Unit muss `StandardOutput=null` und
+`StandardError=null` explizit setzen; kein geerbter Journal-, Datei- oder TTY-FD.
+Das IPC-Protokoll läuft ausschließlich über den von systemd angenommenen,
+explizit verwendeten Socket-FD, **nicht über stdout/stderr**. Auch Tracebacks und
+native Schreibversuche auf FD 1/2 dürfen keinen Payload im Host-Journal erzeugen.
+Neue Journal-/Log-Sockets und fremde Logdateien bleiben durch die unverändert
+geforderten nativen Socket- und Dateigrenzen unerreichbar. Diagnostik enthält nur
+feste Statuscodes aus einer geschlossenen Menge, keine Worker-Fehlertexte.
+
+`LimitCORE=0` (Soft- und Hardlimit) ist eine zusätzliche Schutzschicht, reicht
+allein aber bei einem Pipe-Core-Handler nicht aus; siehe
+[core(5)](https://man7.org/linux/man-pages/man5/core.5.html). Der vertrauenswürdige
+Bootstrap muss vor READY und vor jeder Payload `PR_SET_DUMPABLE=0` setzen und
+prüfen. Vor untrusted Code sperrt Seccomp das erneute Aktivieren sowie weitere
+UID-/GID-/Dateisystem-ID-Wechsel; Prozessstart und Exec bleiben bereits verboten.
+Fehlt eine Schicht, gibt es kein READY und keine Nutzdaten. Die Wirkungen auf
+`/proc`-Leserechte sind bei der Invocation-Zuordnung mitzuprüfen; siehe
+[PR_SET_DUMPABLE(2)](https://man7.org/linux/man-pages/man2/PR_SET_DUMPABLE.2const.html).
+Dies ist eine Anforderung an die spätere Sandbox, keine Änderung der globalen
+Core-Dump-Konfiguration oder bestehender Systemdienste in diesem PR.
 
 ## Autorität und IPC-Vertrag
 
@@ -154,7 +180,7 @@ bleibt die in [`SECURITY.md`](../SECURITY.md) dokumentierte Grenze.
 | Bootstrap ohne Nutzdaten | Nach Connect aktiviert der Core `SO_PASSCRED`, bevor er genau ein `HELLO` mit Version und frischer, zufälliger 256-Bit-Nonce als 64 Hexzeichen sendet. HELLO enthält weder Text, Job-/Nutzerkennung, Request-Digest noch textabhängige Metadaten. Die Worker-Instanz sendet vorher nichts und prüft zunächst die Core-Peer-UID. |
 | Worker-Identität vor Payload | Der vertrauenswürdige Bootstrap setzt feste Dienstlimits und die erforderlichen Sandbox-Schichten und antwortet genau einmal mit `READY`, Version und derselben Nonce. Der Core liest mit `recvmsg`, verlangt kernelgeprüfte `SCM_CREDENTIALS` der **konfigurierten numerischen Worker-UID** und bindet PID/GID sowie Unit-Invocation an diese Verbindung. Erst nach vollständiger Frame-, Nonce-, Credential- und Lifecycle-Prüfung darf er den Request senden. Kein Vertrauen allein in `SO_PEERCRED` des systemd-Listeners oder in behauptete IDs im JSON. READY ist keine kryptografische Sandbox-Attestierung; deren Wirksamkeit braucht reale Negativtests. |
 | Request | Erst nach verifiziertem READY genau ein versionierter, kanonischer JSON-Request mit der Handshake-Nonce, festem Worker-Typ `summarize`, einer Kopie des vorhandenen `text`-Payloads und engen Ressourcenlimits. Kein frei wählbarer Python-Modulpfad, `read_paths`, Kommando oder Dateipfad im Wire. Der Dienst leitet seine Allowlist aus dem installierten Code ab und verweigert fehlende, ungültige oder zu hohe Limits, statt sie still zu ersetzen. Engere Request-Limits werden vor `Worker.run` zusätzlich angewandt, niemals feste Dienstlimits gelockert. |
-| Antwort | Genau ein kanonischer RESULT-Frame mit Nonce, Request-Digest und entweder validierbarer Ausgabe oder einem Wert aus einer geschlossenen Fehlercode-Menge; danach EOF. Keine Exceptions, Logs, Pfade oder beliebigen Fehlertexte im Wire. Der Core vergleicht Nonce und Digest, prüft die unveränderten Sender-Credentials sowie Ausgabe und signiert erst nach vollständiger Protokollprüfung. |
+| Antwort | Genau ein kanonischer RESULT-Frame mit Nonce, Request-Digest und entweder validierbarer Ausgabe oder einem Wert aus einer geschlossenen Fehlercode-Menge. Danach schließt die Worker-Instanz den Socket; der Core wartet das dadurch entstehende serverseitige EOF innerhalb der Gesamtdeadline ab. Fehlendes EOF, Zusatzdaten oder Timeout verweigern ein signiertes Erfolgsergebnis. Keine Exceptions, Logs, Pfade oder beliebigen Fehlertexte im Wire. Der Core vergleicht Nonce und Digest, prüft unveränderte Sender-Credentials und Ausgabe und signiert erst nach vollständiger Protokollprüfung einschließlich EOF. Die Lifecycle-Lease bleibt unabhängig davon bis zum bestätigten Instanzende gehalten. |
 | Framing und Zustände | Exakt `HELLO → READY → REQUEST → RESULT → EOF`, also je zwei Frames pro Sender, nicht zwei Jobs. Jeder Frame hat eine Vier-Byte-Länge in Netzwerk-Byteorder; HELLO/READY höchstens je 256 Byte, REQUEST/RESULT höchstens je 32 KiB kanonische JSON-Bytes. Null, Überlänge, Trunkierung, Zusatzbytes, wiederholte oder vertauschte Frames, unbekannte Version/Felder und nichtkanonische Kodierung werden abgelehnt. Harte Phasen- und Gesamtdeadlines werden durch Fragmente nicht verlängert. |
 | Ancillary-Daten | Credential-Prüfung für alle empfangenen Worker-Daten einschließlich Länge, fragmentierter Frames und Ergebnis; keine Lese-Abkürzung über `recv`, die Ancillary-Daten verwirft. Fehlende, widersprüchliche, abgeschnittene (`MSG_CTRUNC`) oder gewechselte Credentials verweigern. Kein Descriptor-Passing: `SCM_RIGHTS` und unbekannte Control-Messages verweigern; bereits angelieferte FDs schließen, damit auch Ablehnungen kein FD-Leck erzeugen. |
 | Lebensdauer | Eine Verbindung, ein Job, eine Worker-Instanz. Nach Erfolg oder Fehler muss sie vollständig enden. Lease-Freigabe erst nach bestätigtem Ende und Bereinigung, nie schon bei RESULT/EOF. Zeitablauf, Crash, Signal, Identitätswechsel oder Protokollfehler lösen **keinen automatischen zweiten Dispatch** aus. |
@@ -167,8 +193,7 @@ vor HELLO gesetzt; so braucht der Bootstrap keinen vor Connect automatisch
 angelegten abstrakten Client-Socket. Dass READY nicht vor diesem Zeitpunkt
 ankommt und Credentials bei fragmentierten Streams vollständig prüfbar sind,
 ist ausdrücklich Gegenstand der Systemprobe. Ein kompromittierter Core bleibt eine
-eigene
-Vertrauensgrenze; eine andere Worker-UID allein macht ihn nicht unabhängig vom
+eigene Vertrauensgrenze; eine andere Worker-UID allein macht ihn nicht unabhängig vom
 Ergebnis-Signierer. Die Kernel- und systemd-Eigenschaften hinter diesem Vorschlag
 sind in [unix(7)](https://man7.org/linux/man-pages/man7/unix.7.html),
 [systemd.socket(5)](https://man7.org/linux/man-pages/man5/systemd.socket.5.html)
@@ -235,6 +260,7 @@ bewerten.
 | IPC hängt oder flutet Core | 32-KiB-Grenze, eine Verbindung je Job, kurze Deadlines, systemd-Verbindungs-/Prozessgrenzen | Unvollständige, überlange und endlose Frames werden begrenzt beendet; keine unbegrenzten Prozesse, FDs oder wartenden Jobs. |
 | Crash nach `EXECUTION_COMMITTED` | Dauerhaft verbrannte Job-ID, kein Retry, vorhandene Audit-/Anker-Prüfung | SIGKILL vor/nach Connect, Empfang und Antwort; Neustart führt keinen Job doppelt aus und akzeptiert kein Ergebnis doppelt. |
 | Überlappende oder verwaiste Jobinstanzen | Hostweite Core-only Lease, exklusives UID-Betriebsprofil, bestätigtes Cgroup-Ende und Bereinigung | Zwei unabhängige Core-Prozesse und zwei konkurrierende Threads desselben Cores senden gleichzeitig; nur einer erwirbt den Slot. Worker schließt früh den Socket und lebt weiter, Kind hängt, Core stirbt oder startet neu: niemals zweite Worker-Instanz oder zweiter Payload vor bestätigtem Ende. Unbekannter Lifecycle-/Cleanup-Zustand verweigert. |
+| Worker-Payload gelangt in Host-Logs oder Core-Dumps | Explizit null-gerichtete stdout/stderr, kein anderer Log-FD, gesperrte Dump-Reaktivierung vor Payload | Untrusted Python und native Syscalls schreiben Kanarien nach FD 1/2, drucken Tracebacks, versuchen Dump-Reaktivierung/ID-Wechsel und crashen danach. Auf dem disposable Host mit Pipe-Core-Handler dürfen Journal und Dumps keine Kanarie enthalten; korrekter IPC bleibt funktionsfähig. Fehlende Bootstrap-Sperren verweigern READY, entfernte Ablehnungen machen die Negativsuite rot. |
 | Folgejob liest Reste seines Vorgängers | Dienstmanagerbestätigte Bereinigung vor Lease-Freigabe, keine Payload-Logs/Core-Dumps | Zwei aufeinanderfolgende Jobs mit verschiedenen Kanarien; zweiter Job kann den ersten weder über `/proc`, Speicher, private Jobpfade, Logs noch Core-Dumps lesen. Native Signal-/Ptrace-/`process_vm_readv`-Versuche gegen fremde Prozesse bleiben negative Abnahmefälle. |
 
 Der Lifecycle-Vertrag bleibt ein **Abnahmerisiko**: Die feste Worker-UID darf nur diesem
