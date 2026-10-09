@@ -1,0 +1,27 @@
+[Unit]
+Description=GeniusNew core
+After=network.target geniusnew-anchor.service
+Requires=geniusnew-anchor.service
+
+[Service]
+Type=simple
+User=geniusnew
+Group=geniusnew
+SupplementaryGroups=geniusnew-audit geniusnew-db
+WorkingDirectory=/opt/geniusnew
+ExecStart=/opt/geniusnew/.venv/bin/python -m geniusnew serve --config /etc/geniusnew/geniusnew.toml
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+LimitCORE=0
+TasksMax=512
+MemoryMax=2G
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

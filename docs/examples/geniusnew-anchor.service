@@ -1,0 +1,27 @@
+[Unit]
+Description=GeniusNew independent audit anchor
+After=network.target
+
+[Service]
+Type=simple
+User=geniusnew-anchor
+Group=geniusnew-audit
+WorkingDirectory=/opt/geniusnew
+RuntimeDirectory=geniusnew-anchor
+RuntimeDirectoryMode=0750
+ExecStart=/opt/geniusnew/.venv/bin/python -m geniusnew.anchor_process serve --socket /run/geniusnew-anchor/anchor.sock --state /var/lib/geniusnew-anchor/anchor.state --key /var/lib/geniusnew-anchor/anchor.key --audit-public-key AUDIT_PUBLIC_KEY_HEX
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/geniusnew-anchor
+PrivateTmp=yes
+LimitCORE=0
+TasksMax=64
+MemoryMax=512M
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target
