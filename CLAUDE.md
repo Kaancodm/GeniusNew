@@ -1,5 +1,14 @@
 # GeniusNew — Claude Code
 
+## Autonomer Dev-Workflow (Kaan, 08.10.2026)
+
+Für Entwicklungswerkzeuge und Routinefreigaben gilt vorrangig [docs/DEV-AUTOMATION.md](docs/DEV-AUTOMATION.md).
+Der Entwicklungsauftrag erlaubt reversible Arbeit bis zum geprüften Draft-PR ohne
+wiederholte GO-Fragen. Eine Rollenbezeichnung erzeugt keine zusätzliche Wartefreigabe.
+Gezielte Freigaben gelten für Produktion, Zugänge, Secrets, main und irreversible Aktionen.
+Die tatsächlichen Runtime-Verträge und fachlichen CI-/Review-Gates gelten weiter.
+
+
 @AGENTS.md
 @docs/COLLABORATION.md
 

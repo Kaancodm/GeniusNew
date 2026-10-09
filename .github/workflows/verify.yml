@@ -31,10 +31,12 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.11'
-      - name: Install PostgreSQL client library
-        run: sudo apt-get update && sudo apt-get install -y libpq5
+      - name: Install PostgreSQL client library and tmux
+        run: sudo apt-get update && sudo apt-get install -y libpq5 tmux
       - name: Install the pinned dependencies
         run: python -m pip install --require-hashes -r requirements.txt
+      - name: Run development launcher tests
+        run: python -W error::ResourceWarning -m unittest discover -s tests -p test_dev_workflow.py -v
       - name: Run contract tests
         run: python -W error::ResourceWarning -m unittest discover -s tests -v
       - name: Run demo after tests
@@ -88,8 +90,8 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.11'
-      - name: Install PostgreSQL client library
-        run: sudo apt-get update && sudo apt-get install -y libpq5
+      - name: Install PostgreSQL client library and tmux
+        run: sudo apt-get update && sudo apt-get install -y libpq5 tmux
       - name: Install the pinned dependencies
         run: python -m pip install --require-hashes -r requirements.txt
       - name: Every refusal must have a test that notices its removal

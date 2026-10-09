@@ -56,11 +56,13 @@ Projekts; niemand sonst schreibt sie.
 
 **Quellen in NotebookLM** (Notebook „GeniusNew“): `docs/STATUS.md`,
 `docs/DECISIONS.md`, `docs/DATABASE.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`,
-`docs/COLLABORATION.md`, `AGENTS.md`. Das Repository ist aktuell (GitHub-Stand 07.10.2026) **privat**: Raw-Links auf
-`raw.githubusercontent.com` liefern ohne Anmeldung HTTP 404 und sind **kein** Verfahren.
-Der Weg sind ausdrücklich ausgewählte Datei-Uploads (nächster Abschnitt).
+`docs/COLLABORATION.md`, `AGENTS.md`. Das Repository ist laut GitHub-Metadaten am
+08.10.2026 **öffentlich** (`private: false`, `visibility: public`). Die ältere Angabe
+„privat“ ist überholt. Für NotebookLM bleibt der festgelegte Weg ausdrücklich
+ausgewählte, geprüfte Datei-Uploads (nächster Abschnitt); die öffentliche Sichtbarkeit
+autorisiert keinen Upload und keine Änderung der Repository-Sichtbarkeit.
 
-### NotebookLM-Quellenpaket (Verfahren für das private Repository)
+### NotebookLM-Quellenpaket (geprüfte Datei-Auswahl)
 
 Die Beschreibung autorisiert keinen tatsächlichen Upload; jeder Upload ist Kaans Handlung.
 
@@ -231,12 +233,13 @@ DB-Entwurf sicherheitstechnisch frei und mergt nie eigene PRs.
    (Ausnahmen, Design-Vorprüfung), oder wenn Kaan es anfordert: Der Umsetzer fragt es im
    PR an, Kaan (oder ChatGPT in seinem Auftrag) startet es über die Antigravity-CLI oder
    die Abacus-CLI und stellt das Ergebnis als PR-Kommentar ein.
-4. **Codex mergt eigene PRs selbst**, sobald die CI grün ist (`contracts`), der
-   Wissensblock ausgefüllt ist und kein blockierender Review-Befund offen ist.
+4. **Codex mergt eigene PRs selbst**, sobald Kaans ausdrückliches GO für den Merge
+   nach `main` vorliegt, die CI grün ist (`contracts`), der Wissensblock ausgefüllt
+   ist und kein blockierender Review-Befund offen ist.
    Blockierend sind Gemini-Befunde der Stufe **Critical** oder **High** und
-   Copilot-Befunde zu den Punkten der Checkliste. Kaans ausdrückliches OK braucht es
-   nur für die Ausnahmen: eine neue Abhängigkeit, eine geänderte Grenze aus
-   `SECURITY.md` (offen gehaltener Test umgekehrt) und Tags. Bei diesen Ausnahmen muss
+   Copilot-Befunde zu den Punkten der Checkliste. Zusätzlich zu diesem Merge-GO
+   braucht es Kaans ausdrückliches OK für die Ausnahmen: eine neue Abhängigkeit,
+   eine geänderte Grenze aus `SECURITY.md` (offen gehaltener Test umgekehrt) und Tags. Bei diesen Ausnahmen muss
    vorher ein Gemini-Sicherheits-Review im PR stehen. **DB-Code-PRs** brauchen
    zusätzlich `Claude DB Review: APPROVED` am exakten Head-SHA (siehe oben). **PRs von
    ChatGPT und Claude mergt Kaan**, keines der beiden mergt selbst. **Claude-PRs, die Code

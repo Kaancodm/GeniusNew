@@ -1,5 +1,19 @@
 # AGENTS.md — Arbeitsanweisungen für KI-Assistenten
 
+## Autonomer Dev-Workflow (Kaan, 08.10.2026)
+
+Für Entwicklungswerkzeuge ergänzt [docs/DEV-AUTOMATION.md](docs/DEV-AUTOMATION.md)
+die Arbeitsbefugnis. Die harten Regeln dieses Dokuments sowie verpflichtende CI-,
+Security- und DB-Reviews werden dadurch weder ersetzt noch abgeschwächt.
+Der Entwicklungsauftrag erlaubt reversible Arbeit bis zum geprüften Draft-PR ohne
+wiederholte GO-Fragen. Eine Rollenbezeichnung erzeugt keine zusätzliche Wartefreigabe.
+Gezielte Freigaben gelten für Produktion, Zugänge, Secrets, main und irreversible Aktionen.
+Die tatsächlichen Runtime-Verträge und fachlichen CI-/Review-Gates gelten weiter.
+Implementierer und Freigeber bleiben getrennt: Kein Werkzeug gibt seine eigene
+Arbeit frei. Ein Werkzeugwechsel bei Kontingentmangel ersetzt weder ein unabhängiges
+Review noch ein verpflichtendes Security- oder DB-Review.
+
+
 Gilt für jeden Assistenten, der in diesem Repository arbeitet: Claude Code, ChatGPT /
 Codex, GitHub Copilot, Gemini, Kiro. **Wer was macht, steht in `docs/COLLABORATION.md`:**
 Codex setzt Kerncode um und mergt, Gemini Pro prüft (Antigravity- oder Abacus-CLI),
@@ -85,8 +99,8 @@ bestanden melden.
 - Klein schneiden: ein Thema pro PR, als Draft. Ein PR, der älter als etwa zwei Tage
   wird, ist zu groß. **Keine Stapel-PRs:** Jeder PR basiert auf `main`.
 - Vor dem Push: Tests, Demo und Refusal-Guard für die geänderten Module lokal grün.
-- Mergen: Codex mergt eigene PRs selbst, sobald `contracts` grün ist und kein
-  blockierender Review-Befund offen ist. Ausnahmen mit Kaans ausdrücklichem OK: neue
+- Mergen: Jeder Merge nach `main` braucht Kaans ausdrückliches GO sowie grüne
+  `contracts` und keine blockierenden Review-Befunde. Zusätzlich brauchen Kaans OK: neue
   Abhängigkeit, eine Grenze aus `SECURITY.md` wird geändert, Tags.
   **DB-Code-PRs** (Codex) brauchen zusätzlich `Claude DB Review: APPROVED` am exakten
   Head-SHA; `docs/DATABASE.md` erstellt ChatGPT im Auftrag von Kaan, Claude reviewt den
