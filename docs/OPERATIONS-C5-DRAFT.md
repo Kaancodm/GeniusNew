@@ -229,9 +229,10 @@ Die Runtime erhält keine Monitoring-, Serverdatei- oder Administrationsrolle.
 Core-Tabellen und werden nicht ad hoc angelegt.
 
 Die [Rollen-Defaults](https://www.postgresql.org/docs/17/sql-alterrole.html)
-setzen zusätzlich `statement_timeout=10s`, `lock_timeout=5s` und
-`search_path=pg_catalog,public`, passend zu `_connect`. Entwurfswert
-`idle_in_transaction_session_timeout=60s` begrenzt hängende Transaktionen;
+setzen zusätzlich `statement_timeout=10s`, `lock_timeout=5s`,
+`search_path=pg_catalog,public` und `idle_in_transaction_session_timeout=60s`.
+`_connect` setzt diese Werte seit #137 auch verbindlich für die Runtime-Verbindung.
+Der Timeout von 60 Sekunden begrenzt inaktive offene Transaktionen;
 Start-/Kettenprüfung müssen unter diesem Wert in der Probe bestehen.
 Keinen positiven `idle_session_timeout` für die langlebige Core-Verbindung
 aktivieren. Rollen-Defaults sind kein Schutz gegen absichtliches `SET`;
