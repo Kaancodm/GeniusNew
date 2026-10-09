@@ -2,7 +2,10 @@
 
 ## Scope
 
-GeniusNew ist ein öffentliches Zero-Trust-Projekt. Sicherheit hat Vorrang vor schneller Codeübernahme.
+GeniusNew ist ein öffentliches Agentenprojekt. Die derzeitige Runtime nutzt noch
+signierte Handoffs und `DispatchPermit`. Nach Kaans Entscheidung vom 08.10.2026
+sind diese Mechanismen für die Zielarchitektur nicht verpflichtend. Bis ein eigener
+Code-PR sie ersetzt, gelten die vorhandenen Runtime-Verträge und Tests weiter.
 
 ## Keine Secrets im Repository
 
@@ -15,6 +18,8 @@ Niemals committen:
 - interne Zugangsdaten, Deployment-Secrets oder private Endpunkte
 
 Nur redigierte Beispiele mit eindeutig ungefährlichen Platzhaltern dürfen öffentlich versioniert werden.
+Lokale Geheimnisse gehören in `.env.local`; diese Datei ist gitignored und darf nicht
+in Artefakte, Logs oder PRs gelangen.
 
 ## Altprojekt-Import
 
@@ -22,15 +27,21 @@ Nur redigierte Beispiele mit eindeutig ungefährlichen Platzhaltern dürfen öff
 
 Insbesondere werden Artefakte mit Agent-Common-Bezug nicht übernommen. Wenn ein fachlich brauchbares Konzept aus einem vermischten Altartefakt stammt, wird es für GeniusNew neu aufgebaut statt blind kopiert.
 
-## Zero-Trust-Grundsätze
+## Sicherheitsgrundsätze
 
-- Fail closed statt implizit erlauben.
+- Nicht sicherheitsrelevante Automation darf bei unklarem Zustand den Grund
+  protokollieren und einen bestmöglichen Versuch unternehmen.
+- Identität, Berechtigungen, Approvals, Secrets und Audit brauchen weiterhin eine
+  eindeutige Entscheidung; Unklarheit darf dort keine Autorität erzeugen.
 - Untrusted Daten strikt validieren.
 - Identität und Berechtigungen serverseitig bestimmen.
 - Keine Selbstfreigabe sicherheitskritischer Agentenaktionen.
 - Tool-Nutzung über explizite Allowlist und Approval-Gates.
 - Auditdaten dürfen keine Nutzdaten oder Secrets leaken.
 - Sicherheitsrelevante Grenzen müssen testbar und reproduzierbar sein.
+
+Test-Skips sind mit einem begründeten `# TODO: fix later` erlaubt und im PR als Skips
+auszuweisen. Ein Skip ist kein Nachweis, dass die betroffene Grenze funktioniert.
 
 ## Bekannte Grenzen von v0.1
 

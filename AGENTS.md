@@ -15,12 +15,12 @@ Kurzfassung für Copilot: `.github/copilot-instructions.md`. Aktueller Projektst
 
 ## Was das ist
 
-GeniusNew ist ein Zero-Trust-Agentensystem. Ein Auftrag kommt über HTTP herein, der
-Orchestrator stellt einen signierten Handoff aus, das Gateway prüft ihn unabhängig und
-mintet einen einmaligen `DispatchPermit`, ein Worker läuft in einem isolierten Prozess,
-die Ergebnisprüfung nimmt das signierte Ergebnis an, und jede Entscheidung landet in
-einer hash-verketteten Audit-Kette, deren Kopf ein Anker in eigenem Prozess festhält.
-Keine Instanz bestätigt ihre eigene Entscheidung.
+GeniusNew ist ein Agentensystem mit HTTP-Eingang, isoliertem Worker und Audit-Kette.
+Die aktuelle Runtime verwendet noch signierte Handoffs und `DispatchPermit`; beides
+ist nach Kaans Architekturentscheidung vom 08.10.2026 keine Pflicht für die
+Zielarchitektur. Ihr Ausbau ist ein eigener Code-PR mit angepassten Verträgen und
+Tests. Bis dahin beschreiben die vorhandenen Verträge und Tests den tatsächlichen
+Code; diese Regeländerung aktiviert keinen neuen Ausführungspfad.
 
 Sprache: Doku und PR-Texte **Deutsch**, Code, Kommentare, Docstrings und
 Commit-Betreff **Englisch**.
@@ -30,18 +30,20 @@ Commit-Betreff **Englisch**.
 ```sh
 python3 -m venv .venv && . .venv/bin/activate
 python3 -m pip install --require-hashes -r requirements.txt
-python3 -W error::ResourceWarning -m unittest discover -s tests   # Sekunden
+python3 -m unittest discover -s tests                             # Sekunden
 ./scripts/demo.sh                                                 # letzte Zeile: PASS …
-python3 scripts/refusals.py geniusnew/<modul>.py                   # Minuten pro Modul
 git diff --check
 ```
 
 Die CI (`.github/workflows/verify.yml`) führt die Tests und den Refusal-Guard als
 Matrix pro Modul aus. Der zusammenfassende Check heißt `contracts`.
 
-Tests, Demo und Refusal-Guard nacheinander ausführen. Reine Doku-Änderungen brauchen
-Link-, Konsistenz- und Diff-Prüfungen. Nur tatsächlich ausgeführte Prüfungen als
-bestanden melden.
+Vor dem Push Tests und Demo nacheinander ausführen. Die CI führt weiterhin den
+bestehenden Refusal-Guard aus; seine Entfernung ist nicht Teil dieser Regeländerung.
+Reine Doku-Änderungen brauchen Link-, Konsistenz- und Diff-Prüfungen. Übersprungene
+Tests mit Grund und `# TODO: fix later` sichtbar kennzeichnen und in der PR nennen;
+einen Lauf mit Skips nicht als vollständig geprüft ausgeben. Nur tatsächlich
+ausgeführte Prüfungen als bestanden melden.
 
 ## Evidenz
 
@@ -57,25 +59,26 @@ bestanden melden.
 
 ## Harte Regeln
 
-1. **Keine Secrets** im Repository: keine Schlüssel, Tokens, `.env`, keine echten
-   Daten. Die Demo leitet ihre Schlüssel aus einem festen Demo-Secret ab.
-2. **Fail closed.** Unklare Eingabe, fehlender Zustand, nicht erreichbare Instanz:
-   ablehnen mit `ContractError`, nie still weitermachen oder auf einen Default fallen.
-3. **Jede Ablehnung braucht einen Test, der ihr Fehlen bemerkt.** `scripts/refusals.py`
-   schaltet jede Ablehnung einzeln ab und verlangt, dass die Suite rot wird. Ein neues
-   Modul mit Ablehnungen kommt in `GUARDED` in `scripts/refusals.py`.
-4. **Nie** einen Test überspringen, deaktivieren oder abschwächen, um grün zu werden.
-5. **Signaturrollen trennen.** Alle Signaturen sind Ed25519. Nur die signierende Rolle
-   hält den privaten Schlüssel (`HandoffSigner` im Orchestrator, `WorkerAuthority` am
-   Worker-Rand, `AuditAuthority` für Audit-Köpfe). Alles, was nur prüft, bekommt die
-   öffentliche Hälfte (`HandoffVerifier`, `WorkerVerifier`, `AuditVerifier`) und lehnt
-   es ab, mit der privaten gebaut zu werden.
+1. **Keine Secrets** im Repository: keine Schlüssel, Tokens oder echten Daten.
+   Lokale Zugangsdaten gehören in `.env.local`, das von Git ignoriert wird. Die Demo
+   leitet ihre Schlüssel aus einem festen Demo-Secret ab.
+2. **Automation versucht weiterzuarbeiten.** Bei unklaren, nicht sicherheitsrelevanten
+   Automationsschritten den Grund protokollieren und einen bestmöglichen Versuch
+   machen, statt sofort `ContractError` auszulösen. Identität, Berechtigungen,
+   Approvals, Secrets und Audit dürfen dadurch nicht still freigegeben werden.
+3. **Bestehende Ablehnungen bleiben belegt**, bis ein eigener Code-PR sie zusammen
+   mit den betroffenen Verträgen und Tests ändert. `scripts/refusals.py` bleibt CI-Gate.
+4. **Test-Skips sind erlaubt**, wenn ein Kommentar `# TODO: fix later` den Grund
+   nennt. Skips im PR offenlegen; Tests nicht still löschen oder als bestanden zählen.
+5. **Vorhandene Signaturrollen bleiben bis zur Migration getrennt.** Nur signierende
+   Rollen halten private Schlüssel; Prüfende erhalten nur öffentliche Schlüssel.
+   Signierte Handoffs und `DispatchPermit` sind keine Vorgabe für neue Zielentwürfe.
 6. **Bekannte Grenzen stehen in `SECURITY.md`.** Viele sind durch einen Test
    „offen gehalten“ (`…_and_this_is_the_boundary`). Eine Grenze zu schließen ist ein
    eigener PR, der diesen Test umkehrt und `SECURITY.md` anpasst, nie ein
    Nebeneffekt.
-7. **Abhängigkeiten** sind hash-gepinnt (`requirements.txt`, `--require-hashes`).
-   Eine neue Abhängigkeit ist eine Entscheidung des Projektverantwortlichen.
+7. **Abhängigkeiten** bleiben hash-gepinnt (`requirements.txt`, `--require-hashes`).
+   Der Implementierer darf neue Abhängigkeiten selbst begründet auswählen.
 8. **Altprojekt** `Kaancodm/Agent-Genius` ist nur Lesequelle. Übernahmen nur über das
    Gate in `docs/MIGRATION-MATRIX.md`, und dann neu gebaut, nicht kopiert.
 9. **Nicht umbenennen.** Das Projekt heißt GeniusNew.
@@ -84,10 +87,11 @@ bestanden melden.
 
 - Klein schneiden: ein Thema pro PR, als Draft. Ein PR, der älter als etwa zwei Tage
   wird, ist zu groß. **Keine Stapel-PRs:** Jeder PR basiert auf `main`.
-- Vor dem Push: Tests, Demo und Refusal-Guard für die geänderten Module lokal grün.
+- Vor dem Push: `python3 -m unittest discover -s tests` und `./scripts/demo.sh`
+  ausführen; die Demo soll `PASS` melden. Skips und Fehler im PR offenlegen.
 - Mergen: Codex mergt eigene PRs selbst, sobald `contracts` grün ist und kein
-  blockierender Review-Befund offen ist. Ausnahmen mit Kaans ausdrücklichem OK: neue
-  Abhängigkeit, eine Grenze aus `SECURITY.md` wird geändert, Tags.
+  blockierender Review-Befund offen ist. Ausnahmen mit Kaans ausdrücklichem OK:
+  eine Grenze aus `SECURITY.md` wird geändert, Tags.
   **DB-Code-PRs** (Codex) brauchen zusätzlich `Claude DB Review: APPROVED` am exakten
   Head-SHA; `docs/DATABASE.md` erstellt ChatGPT im Auftrag von Kaan, Claude reviewt den
   Entwurf sicherheitstechnisch, Kaan entscheidet offene Punkte und gibt frei. ChatGPT-

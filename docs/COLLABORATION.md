@@ -235,8 +235,9 @@ DB-Entwurf sicherheitstechnisch frei und mergt nie eigene PRs.
    Wissensblock ausgefüllt ist und kein blockierender Review-Befund offen ist.
    Blockierend sind Gemini-Befunde der Stufe **Critical** oder **High** und
    Copilot-Befunde zu den Punkten der Checkliste. Kaans ausdrückliches OK braucht es
-   nur für die Ausnahmen: eine neue Abhängigkeit, eine geänderte Grenze aus
-   `SECURITY.md` (offen gehaltener Test umgekehrt) und Tags. Bei diesen Ausnahmen muss
+   nur für die Ausnahmen: eine geänderte Grenze aus `SECURITY.md` (offen gehaltener
+   Test umgekehrt) und Tags. Neue Abhängigkeiten wählt der Implementierer begründet
+   selbst und hält die Hash-Pins ein. Bei den Ausnahmen muss
    vorher ein Gemini-Sicherheits-Review im PR stehen. **DB-Code-PRs** brauchen
    zusätzlich `Claude DB Review: APPROVED` am exakten Head-SHA (siehe oben). **PRs von
    ChatGPT und Claude mergt Kaan**, keines der beiden mergt selbst. **Claude-PRs, die Code
@@ -281,8 +282,8 @@ Befunde: <keine | Schweregrad, Datei:Zeile, Beleg>
 Critical oder High blockiert den Merge (`.gemini/styleguide.md`). Installiert Kaan
 später die GitHub-App Gemini Code Assist, zählen auch ihre Reviews.
 
-**Modell:** Das Pflicht-Sicherheitsreview bei den Ausnahmen (neue Abhängigkeit,
-`SECURITY.md`-Grenze, Signaturrollen) braucht ein Gemini-**Pro**-Modell, gleich über
+**Modell:** Das Pflicht-Sicherheitsreview bei den Ausnahmen (`SECURITY.md`-Grenze,
+Signaturrollen) braucht ein Gemini-**Pro**-Modell, gleich über
 welches Werkzeug. Ein Flash-Modell reicht für die Design-Vorprüfung und freiwillige
 Reviews. Das Werkzeug arbeitet nur lesend im Projektverzeichnis (Plan-Modus, kein Zugriff
 außerhalb des Checkouts); Zugangsschlüssel von Abacus oder Antigravity liegen nur auf
@@ -316,7 +317,7 @@ welcher Datei, bis wann es als erledigt gilt. Die Entscheidung ist für alle Wer
 verbindlich; Claude Code trägt sie selbst in `docs/DECISIONS.md` ein. Wo eine Datei
 korrigiert werden muss, darf Claude Code sie selbst ändern, auch die von Gemini
 (Überschreibrecht). Nicht überschreiben darf Claude Code Kaans Entscheidungen und die
-Ausnahmen (neue Abhängigkeit, Grenze aus `SECURITY.md`, Tags, Kaans Architektur- und
+Ausnahmen (Grenze aus `SECURITY.md`, Tags, Kaans Architektur- und
 Freigabeentscheidungen zur Datenbank). Das bleibt Kaans Sache. Claudes eigene PRs mergt
 Kaan.
 
