@@ -18,10 +18,13 @@ def load(directory=DIR):
     """Read direct *.md children of directory, newest first (date, then sequence number).
 
     Return a list of dictionaries with title, date, source, decision, and reason
-    fields. Ordering uses the filename date and the numeric sequence; the date must match the date field.
+    fields. Ordering uses the filename date and the numeric sequence; the date
+    must match the record's DD.MM.YYYY date, or 0000-00-00 for an undated record
+    whose date field is an em dash (—).
 
-    Raise ValueError for an empty directory, an unexpected filename, a filename
-    date that differs from the record date, or a malformed decision layout.
+    Raise ValueError if no direct *.md children exist, or for an unexpected
+    filename, an invalid record date, a filename date that differs from the
+    record date, or a malformed decision layout.
     File read errors (OSError) and UTF-8 decoding errors (UnicodeDecodeError)
     propagate to the caller.
     """
