@@ -3,6 +3,7 @@ Description=GeniusNew local development AI
 After=network-online.target
 
 [Service]
+# Pins version 0.40.1; adjust the path to the verified installed binary location.
 ExecStart=%h/.local/share/genius-workflow/ollama/0.40.1/bin/ollama serve
 Environment=OLLAMA_HOST=127.0.0.1:11434
 Environment=OLLAMA_MODELS=%h/.local/share/genius-workflow/models

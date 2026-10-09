@@ -233,12 +233,13 @@ DB-Entwurf sicherheitstechnisch frei und mergt nie eigene PRs.
    (Ausnahmen, Design-Vorprüfung), oder wenn Kaan es anfordert: Der Umsetzer fragt es im
    PR an, Kaan (oder ChatGPT in seinem Auftrag) startet es über die Antigravity-CLI oder
    die Abacus-CLI und stellt das Ergebnis als PR-Kommentar ein.
-4. **Codex mergt eigene PRs selbst**, sobald die CI grün ist (`contracts`), der
-   Wissensblock ausgefüllt ist und kein blockierender Review-Befund offen ist.
+4. **Codex mergt eigene PRs selbst**, sobald Kaans ausdrückliches GO für den Merge
+   nach `main` vorliegt, die CI grün ist (`contracts`), der Wissensblock ausgefüllt
+   ist und kein blockierender Review-Befund offen ist.
    Blockierend sind Gemini-Befunde der Stufe **Critical** oder **High** und
-   Copilot-Befunde zu den Punkten der Checkliste. Kaans ausdrückliches OK braucht es
-   nur für die Ausnahmen: eine neue Abhängigkeit, eine geänderte Grenze aus
-   `SECURITY.md` (offen gehaltener Test umgekehrt) und Tags. Bei diesen Ausnahmen muss
+   Copilot-Befunde zu den Punkten der Checkliste. Zusätzlich zu diesem Merge-GO
+   braucht es Kaans ausdrückliches OK für die Ausnahmen: eine neue Abhängigkeit,
+   eine geänderte Grenze aus `SECURITY.md` (offen gehaltener Test umgekehrt) und Tags. Bei diesen Ausnahmen muss
    vorher ein Gemini-Sicherheits-Review im PR stehen. **DB-Code-PRs** brauchen
    zusätzlich `Claude DB Review: APPROVED` am exakten Head-SHA (siehe oben). **PRs von
    ChatGPT und Claude mergt Kaan**, keines der beiden mergt selbst. **Claude-PRs, die Code
