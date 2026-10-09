@@ -17,7 +17,21 @@ class ControlDeckTest(unittest.TestCase):
     def test_beta_gate_count_is_fixed(self):
         self.assertEqual(len(checks.BETA_GATES), 21)
         self.assertEqual(checks.BETA_GATES[0][0], "A1")
-        self.assertEqual(checks.BETA_GATES[-1][0], "E3")
+        self.assertEqual(checks.BETA_GATES[-1][0], "E2")
+
+    def test_fresh_host_probe_precedes_the_portal(self):
+        order = [gate for gate, _, _ in checks.BETA_GATES]
+        self.assertLess(order.index("C5"), order.index("E3"))
+        for gate in ("D1", "D2", "D3"):
+            self.assertLess(order.index("E3"), order.index(gate))
+        gates = [{"id": gate, "name": name,
+                  "status": "red" if gate in ("E3", "D1", "D2", "D3", "E2") else "green",
+                  "detail": "evidence pending"}
+                 for gate, name, _ in checks.BETA_GATES]
+        tools = {name: {"status": "green"} for name in ("codex", "claude", "gemini", "gh")}
+        with patch.object(checks, "_run", return_value=(0, "abc123")):
+            state = checks.project_resume(gates, tools, checks.DEFAULT_REPO)
+        self.assertTrue(state["focus"].startswith("E3"))
 
     def test_commands_are_fixed_copy_only_commands(self):
         self.assertTrue(checks.COMMANDS)
@@ -53,6 +67,14 @@ class ControlDeckTest(unittest.TestCase):
     def test_unimplemented_gate_is_red(self):
         self.assertEqual(checks.gate_status(checks.DEFAULT_REPO, None), "red")
 
+    @patch("tools.control_deck.checks._run", return_value=(0, ""))
+    def test_merged_gate_proof_is_checked_against_origin_main(self, run):
+        proof = next(ref for gate, _, ref in checks.BETA_GATES if gate == "B2")
+        self.assertEqual(checks.gate_status(checks.DEFAULT_REPO, proof), "green")
+        self.assertEqual(run.call_args_list[-1].args[0],
+                         ["git", "merge-base", "--is-ancestor", proof,
+                          "refs/remotes/origin/main"])
+
     def test_action_allowlist_is_fixed(self):
         self.assertEqual(
             set(actions.allowed_actions()),
@@ -63,9 +85,10 @@ class ControlDeckTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "allowlisted"):
             actions.run_action("rm_everything")
 
-    @patch("tools.control_deck.checks.repo_status", return_value={"head": "abc123"})
-    def test_project_resume_starts_at_gate_zero_when_logins_are_missing(self, _repo):
-        gates = [{"id": gate, "name": name, "status": "yellow" if ref else "red"}
+    @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
+    def test_project_resume_starts_at_gate_zero_when_logins_are_missing(self, _run):
+        gates = [{"id": gate, "name": name, "status": "yellow" if ref else "red",
+                  "detail": "review pending"}
                  for gate, name, ref in checks.BETA_GATES]
         tools = {
             "claude": {"status": "green", "detail": "logged in"},
@@ -77,7 +100,29 @@ class ControlDeckTest(unittest.TestCase):
         self.assertIn("Gate 0", state["focus"])
         self.assertEqual(state["main_head"], "abc123")
         self.assertEqual(state["resume"][0]["value"], "codex login")
-        self.assertTrue(any(step["value"].endswith("/pull/57") for step in state["resume"]))
+        self.assertTrue(any(step["title"].startswith("A1 ") for step in state["resume"]))
+
+    @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
+    @patch("tools.control_deck.checks.tool_status", return_value={"status": "green"})
+    def test_merged_code_keeps_missing_review_and_operational_evidence_open(self, _tools, _run):
+        snapshot = checks.snapshot(checks.DEFAULT_REPO)
+        gates = {gate["id"]: gate for gate in snapshot["gates"]}
+        for gate in ("B4", "B5", "A2", "C2"):
+            self.assertEqual(gates[gate]["status"], "yellow")
+            self.assertIn("HOLD", gates[gate]["detail"])
+        for gate in ("C3", "E1"):
+            self.assertEqual(gates[gate]["status"], "green")
+        self.assertEqual(gates["C5"]["status"], "red")
+        for gate in ("B4", "B5"):
+            self.assertIn("erforderlicher Claude-DB-Review am PR-Head nicht nachgewiesen", gates[gate]["detail"])
+            self.assertIn("Nachprüfung auf main 7f81e24 dokumentiert", gates[gate]["detail"])
+            self.assertNotIn("vorhanden", gates[gate]["detail"])
+        state = snapshot["project"]
+        self.assertGreater(state["merged_gates"],
+                           sum(gate["status"] == "green" for gate in gates.values()))
+        self.assertEqual(state["focus"], "B4 – Pending Jobs + Approvals")
+        self.assertTrue(state["resume"][0]["value"].endswith("/pull/94"))
+        self.assertFalse(any(step["title"].startswith("B1 ") for step in state["resume"]))
 
 
     def test_mail_snapshot_missing_is_offline(self):
