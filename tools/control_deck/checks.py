@@ -339,7 +339,7 @@ def agent_hub(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
         {"id": "abacus", "name": "Abacus.AI", "status": "yellow",
          "detail": "ChatLLM im Browser · Anmeldung wird dort geprüft",
          "url": "https://apps.abacus.ai/chatllm/", "url_label": "Abacus.AI öffnen",
-         "note": "Vorläufiger Ersatz für Grok Build · kein Server-CLI-, Repo- oder Secret-Zugriff."},
+         "note": "Browser-Zugang · API-Reviews separat in TERM: python3 -m tools.abacus_review --help. Kein automatischer Repo- oder Secret-Zugriff."},
     ]
     installed = tool_status("hermes")
     running = agent_session("hermes")

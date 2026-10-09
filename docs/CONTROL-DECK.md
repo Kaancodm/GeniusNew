@@ -80,6 +80,8 @@ unterschiedliche Zustände; eine offene Terminal-Sitzung beweist keinen Modellzu
 - Abacus.AI: vorläufiger Ersatz für Grok Build. Das Control Deck öffnet ausschließlich
   ChatLLM im Browser; es gibt keinen lokalen Abacus-Start, keinen Repo-Zugriff und keine
   Secret-Weitergabe aus dem Control Deck.
+  Ein separater [Terminaladapter für API-Reviews](ABACUS-REVIEW.md) nimmt ausdrücklich
+  vorbereiteten Text entgegen; er wird nicht vom Dashboard gestartet.
 - Grok Build bleibt pausiert, bis sein unterstützter Zugriffs- und Sandbox-Umfang neu
   geprüft und als eigenes Gate freigegeben ist.
 - Hermes-Status liest nur Programmpfad und tmux-Zustand; der Paket-Launcher wird
