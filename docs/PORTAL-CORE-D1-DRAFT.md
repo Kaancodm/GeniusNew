@@ -43,16 +43,26 @@ das Portal insgesamt.
 **HOLD D3:** Der konkrete Nachweis, dass mehrere Aliasse derselben natürlichen
 Person gehören, sowie Aufnahme, Änderung, Sperrung und Wiederherstellung ihrer
 Core-Bindungen sind noch nicht freigegeben. Nutzer-Aussage und Core-Registry
-brauchen dafür einen eigenen versionierten Vertrag. Das unten geschlossene
-D1-Envelope enthält **keine** Nutzer-Aussage und darf nicht still um `user_id` ergänzt
-werden. D1 begründet bis dahin keine nutzergetrennten Jobs oder Freigaben. C3 bleibt
-unverändert.
+brauchen dafür einen eigenen versionierten Vertrag. Der Nutzerbezug braucht eine
+neue Envelope-Version oder einen gesonderten signierten Nutzerkanal mit eigener
+Core-Prüfung; er darf nicht still in das unten geschlossene D1-Envelope eingefügt
+werden. Dieses enthält **keine** Nutzer-Aussage. D1 begründet bis dahin keine
+nutzergetrennten Jobs oder Freigaben. C3 bleibt
+unverändert. Bis dieser D3-Vertrag freigegeben und Core-seitig durchgesetzt ist,
+darf die D1-Route **keinen Job annehmen oder erzeugen**. Der gemeinsame
+Service-Principal darf weder als `user_id` eines Handoffs noch als Auftraggeber
+eines approval-pflichtigen Jobs eingesetzt werden. Eine Beschränkung auf
+einzelne Tiers ersetzt die eindeutige Personenbindung nicht. So kann kein
+Portal-Auftrag über einen anderen direkten Approver-Key derselben Person die
+bestehende C3-Selbstfreigabeprüfung umgehen.
 
 ## Bytegenaues Signaturprofil
 
 Das Envelope enthält **genau** elf Felder; `signature` gehört nicht dazu. Konfigurierte
-Bezeichner sind ASCII-Strings nach `^[A-Za-z0-9._-]{1,64}$`, ohne
-Unicode-Normalisierung.
+Bezeichner sind ASCII-Strings mit 1–64 Zeichen ausschließlich aus
+`[A-Za-z0-9._-]`, ohne Unicode-Normalisierung. Validatoren müssen den **gesamten**
+String prüfen (`fullmatch`, nicht ein Match mit `$`, das vor einem abschließenden
+Zeilenumbruch enden kann); ein Bezeichner mit `\n` ist REFUSE.
 
 | Feld | JSON-Typ und Wert |
 | --- | --- |
@@ -83,7 +93,20 @@ Das Label ist `b"geniusnew/portal-core/request/ed25519/d1\x00"`; `||` ist direkt
 Verkettung ohne Länge, Zeilenumbruch oder weiteres Trennzeichen. Ed25519
 signiert diese Bytes. Die 64 Signatur-Bytes werden als **128 lowercase Hex-Zeichen**
 dargestellt. Signatur und Transport-Trennzeichen sind weder Teil von `envelope_bytes`
-noch der signierten Bytes.
+noch der signierten Bytes. Die Ed25519-Prüfung ist strikt: öffentlicher Schlüssel
+und Signaturpunkt `R` sind jeweils kanonisch kodierte 32-Byte-Kurvenpunkte
+der Ed25519-Primordnungs-Untergruppe und dürfen nicht der Identitätspunkt sein.
+Nicht kanonische Kodierungen, Punkte mit Torsionsanteil und Punkte kleiner
+Ordnung werden verweigert. Der Signaturskalar `S` muss kleiner
+als die Ed25519-Gruppenordnung
+`L = 2^252 + 27742317777372353535851937790883648493` sein. Die Verifikation
+prüft die nicht kofaktormultiplizierte Gleichung
+`[S]B = R + [H(R || A || M)]A` für die oben definierten Signierbytes `M`.
+Dabei sind `A` die 32 öffentlichen Schlüsselbytes, `R` die ersten 32
+Signaturbytes, `S` die letzten 32 Bytes als Little-Endian-Integer, `B` der
+Ed25519-Basispunkt und `H` SHA-512 mit Reduktion modulo `L`;
+eine nur nach Multiplikation mit dem Kofaktor gültige Signatur ist REFUSE.
+Auch konfigurierte öffentliche Schlüssel werden vor Verwendung so geprüft.
 
 `envelope_bytes` sind höchstens 4096 Bytes lang. Der Body ist höchstens 16384 Bytes lang
 und enthält genau `{"text":<nichtleerer JSON-String>}`. Für Body und Envelope gilt:
@@ -132,6 +155,12 @@ eindeutig. Negative Vektoren: `b'{"text":"\ud801"}'` (isolierter Surrogate),
 `b'{"text":"hello","tier":"admin"}'` (Zusatzfeld) und `b'{"text":"a","text":"b"}'`
 (doppelter Schlüssel) sind **REFUSE**. Dasselbe gilt für alternative Envelope-Escapes,
 doppelte oder zusätzliche Envelope-Felder.
+Die spätere Signatur-Abnahme muss außerdem `S >= L`, nicht kanonische
+Kodierungen von `A` oder `R` (insbesondere `y >= 2^255 - 19` und gesetztes
+Vorzeichenbit bei `x = 0`), Punkte außerhalb der Primordnungs-Untergruppe
+einschließlich kleiner Ordnung sowie eine nur kofaktorisiert
+gültige Signatur als **REFUSE** prüfen; `signing_sha256` ersetzt diese
+Ed25519-Negativvektoren nicht.
 
 ## HTTP- und Proxy-Grenze
 
@@ -214,6 +243,11 @@ expires_at - issued_at <= 60
 issued_at - 5 <= now < expires_at
 ```
 
+`now` ist bei jeder Prüfung die ganzzahlige Unix-Sekunde der Core-UTC-Uhr
+(`floor` des tatsächlichen Sekundenwerts); Gleitkomma-Rundung darf die
+Akzeptanzgrenzen nicht verschieben. Die gesonderte Pflicht zum unabhängigen
+Uhr-Rollback-Nachweis bleibt bestehen.
+
 Kaan hat am 05.10.2026 [im PR #120](https://github.com/Kaancodm/GeniusNew/pull/120#issuecomment-5999610879)
 **JA** zu diesem Fünf-Sekunden-Profil entschieden. Die fünf
 Sekunden gelten ausschließlich vor `issued_at`; nach `expires_at` gibt es keine
@@ -243,16 +277,31 @@ Reihenfolge eines D1-Requests:
    belasten. Auch ungültige und nicht signierte Versuche verbrauchen dieses Budget;
    Erschöpfung ist REFUSE. Kapazität und Rate müssen für alle aktiven Core-Instanzen
    vor Code als Last-Gate festgelegt und geprüft sein. Dieses Vorab-Budget ersetzt
-   weder den Dienst- noch den späteren Nutzer-Token-Bucket.
+   weder den Dienst- noch den Nutzer-Token-Bucket. Das Portal begrenzt zusätzlich
+   die Zahl der Signierversuche pro geprüfter Portal-Nutzerreferenz **über alle
+   Sessions hinweg** und insgesamt für das Portal, bevor es einen D1-Request
+   signiert. Die Budgets gelten instanzübergreifend und über Neustarts; auch
+   verweigerte und fehlgeschlagene Signierversuche verbrauchen sie. Unbekannter
+   oder nicht erreichbarer Budgetzustand ist REFUSE. Konkrete Kapazitäten,
+   Raten und der Nachweis sind Teil des Last-Gates. Browserwerte begründen
+   dabei keine Core-Autorität.
+   Die D1-Route darf nur
+   über einen vor dem Budget wirksamen, geschützten Ingress für das vorgesehene
+   Portal-Backend erreichbar sein. Die konkrete Netz-/Dienstzugangskontrolle und
+   ihr Nachweis sind ein Betriebsgate; ein öffentlich erreichbarer anonymer
+   D1-Eingang könnte das gemeinsame Vorab-Budget erschöpfen und Portal-Aufträge
+   aussperren.
 1. HTTP-Framing, Header, Route, Größen, vollständigen Body und kanonische JSON-Form
    prüfen; `method`/`path` mit der tatsächlich empfangenen Route und
    `body_sha256` mit den Body-Bytes vergleichen; keine Job-/Audit-Mutation.
 2. Erste Zeitprüfung mit der Core-Uhr.
 3. Den konfigurierten Ed25519-Schlüssel wählen und Signatur prüfen.
-4. Service-Identität, später zusätzlich Core-Nutzerbindung, Rate Limits, Token-Buckets,
-   Quoten, `max_in_flight` und Policy-Grants am bestehenden Eingang prüfen; die
-   Kapazitätsgrenze vor der Reservation erwerben. Kein Aufruf von `_dispatch()` unter
-   Umgehung dieser Gates.
+4. Service-Identität **und vor jeder Jobannahme zwingend die freigegebene
+   Core-Nutzerbindung aus D3**, Rate Limits, Token-Buckets, Quoten,
+   `max_in_flight` und Policy-Grants am bestehenden Eingang prüfen; die
+   Kapazitätsgrenze vor der Reservation erwerben. Ohne eindeutige D3-Bindung
+   enden die Schritte hier mit REFUSE; Schritte 5–8 sind dann gesperrt. Kein
+   Aufruf von `_dispatch()` unter Umgehung dieser Gates.
 5. Unmittelbar vor der Replay-Reservation Zeit erneut prüfen, dann den Schlüssel
    `(domain, issuer, nonce)` in der gemeinsamen autoritativen
    Core-PostgreSQL-Tabelle einzufügen versuchen.
@@ -283,11 +332,17 @@ unbekanntem COMMIT-Ausgang oder Verbindungsabbruch während COMMIT:
 kein Job, kein Erfolg, kein automatischer Retry desselben Requests.
 
 Die Replay-Transaktion begrenzt `lock_timeout`, `statement_timeout` und
-`idle_in_transaction_session_timeout` jeweils auf höchstens die beim Start
-verbleibende Request-Gültigkeit und zusätzlich auf einen konfigurierten
-Maximalwert von höchstens 60 Sekunden. Ein unabhängiges Gesamtzeitlimit
+`idle_in_transaction_session_timeout` jeweils auf höchstens die unmittelbar
+vor dem Replay-INSERT gemessene verbleibende Request-Gültigkeit und zusätzlich
+auf einen konfigurierten Maximalwert zwischen 1 ms und 60 Sekunden.
+Ein unabhängiges Gesamtzeitlimit
 begrenzt die Transaktion einschließlich mehrerer Statements; Timeout oder
-unklarer Wartezustand sind REFUSE ohne automatischen Retry. Damit darf ein
+unklarer Wartezustand sind REFUSE ohne automatischen Retry. Die für PostgreSQL
+gesetzten Millisekundenwerte werden aus der tatsächlichen, nicht auf `now`
+abgerundeten Restgültigkeit nach unten gerundet. Ist der kleinste Wert aus
+Restgültigkeit und konfiguriertem Maximum kleiner als 1 ms oder fehlt das
+Maximum, ist der Request REFUSE; ein Timeoutwert `0` darf nie an PostgreSQL gehen, weil
+er dort die Begrenzung deaktiviert. Damit darf ein
 hängender DB-/Lock-Versuch `max_in_flight` nicht unbegrenzt halten. Der D1-Last-
 und Betriebsnachweis muss außerdem D1 vor Erschöpfung des gemeinsamen Core-
 Speichers sperren, damit Job-Ledger und Audit nicht durch Replay-Wachstum
@@ -329,7 +384,7 @@ grüne `contracts`.
 an die von Core vergebene Personen-ID; (2) unabhängiger, restart- und instanzfester
 Zeit-Rollback-Nachweis; (3) unabhängiger Replay-Restore-/Rollback-Nachweis mit
 freigegebenem DB-Design und Betriebsprofil; (4) Nachweis der Header-Ablehnung am
-ersten Proxy-Hop; (5) festgelegtes und geprüftes Vorab-Lastbudget samt
+ersten Proxy-Hop; (5) festgelegte und geprüfte Core- und Portal-Lastbudgets samt
 Replay-Speicherschwelle; (6) erneuter
 unabhängiger Review am neuen Head; (7) Kaans Klärung, ob die D1-spezifische
 Startprüfung von PK, Schemaform und Rechten trotz des Beschlusses gegen einen allgemeinen
@@ -340,3 +395,6 @@ Nutzerquote erschöpfen oder die bestehenden Last-Gates umgehen. (9) Ein
 Audit-/Recovery-Vertrag für authentifizierte Replay-Ablehnung, Ablauf nach
 bestätigtem Nonce-COMMIT und Crash zwischen COMMIT und Job-Erzeugung, ohne die
 vorgeschriebene Commit-Reihenfolge oder bestehende Audit-Gates zu verletzen.
+(10) Nachweis eines vor dem Vorab-Budget wirksamen geschützten Ingress, der
+anonyme öffentliche Last auf die D1-Route ausschließt, und der instanz- und
+neustartfesten Portal-Budgets pro Nutzerreferenz und insgesamt vor dem Signieren.
