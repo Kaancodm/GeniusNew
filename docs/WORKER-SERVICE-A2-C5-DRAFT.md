@@ -29,7 +29,7 @@ Crash-Recovery-Reihenfolge bleibt erhalten. Für die erste Abnahme ist nur der b
 konfigurierte `DeterministicSummarizer` vorgesehen; weitere Worker-Typen sind ein
 eigener Vertrag.
 
-## Entwurfsentscheidung: ein Dienstprozess je Verbindung
+## Vorschlag: ein Dienstprozess je Verbindung
 
 ```text
 HTTP → Core (geniusnew-core UID; Policy, Gateway, Ledger, WorkerAuthority)
@@ -83,7 +83,7 @@ keine zusätzliche kryptografische Trennung zwischen Core und Ergebnis-Signierer
 der Core hält heute bereits `WorkerAuthority`, und ein gemeinsames Root-Secret
 bleibt die in [`SECURITY.md`](../SECURITY.md) dokumentierte Grenze.
 
-| Schritt | Verbindlicher Vertrag für die spätere Implementierung |
+| Schritt | Vorgeschlagener Vertrag für die spätere Implementierung |
 | --- | --- |
 | Verbindungsaufbau | Core prüft absoluten Socket-Pfad, Eigentümer/Modus und die erwartete Dienstkonfiguration. Fehler, fehlender Socket, unbekannte UID oder unklarer Zustand: `ContractError`, kein lokaler Worker-Fallback. |
 | Core-Identität | Die Worker-Instanz prüft auf der angenommenen AF_UNIX-Verbindung die vom Kernel gelieferten Peer-Credentials gegen die **konfigurierte numerische Core-UID**. Die Gruppenzugehörigkeit öffnet nur den Socket; sie ersetzt nicht die UID-Prüfung. |
@@ -150,7 +150,7 @@ systemd gelten für diese Prozessgrenze als Trusted Computing Base; ein
 kompromittierter Core ist wegen des gemeinsamen Root-Secrets gesondert zu
 bewerten.
 
-| Risiko | Geplante Grenze | Reproduzierbarer Nachweis vor Implementierungsfreigabe |
+| Risiko | Geplante Grenze | Reproduzierbarer Nachweis für die spätere Abnahme |
 | --- | --- | --- |
 | Worker liest Secret, DSN oder Ankerzustand | Andere UID, private Datei-/Socketrechte, Landlock-Allowlist, kein Secret im IPC | Job versucht Lesen jedes Kanarienpfads per Python und rohem Syscall; Ausgabe und Logs enthalten keinen Kanarienwert. UID und Dateirechte am Testhost messen. |
 | Fremder Prozess ersetzt Socket oder gibt sich als Core aus | Root-kontrollierter Pfad, Socketgruppe nur für Core, Peer-UID-Prüfung | Fremd-UID und Worker-UID können weder verbinden noch gültigen Request einspeisen; Symlink/Mode-/Owner-Manipulation führt vor Dispatch zu `ContractError`. |
