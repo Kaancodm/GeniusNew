@@ -1,10 +1,10 @@
 # A2/C5: Getrennter Worker-Dienst und Betriebsvertrag
 
-**Status: ENTWURF / HOLD.** Basis ist `main`
-`62b6d1966da5e30fe71f230629a48dea369ae62c` vom 08.10.2026. Dieses Dokument
-aktiviert keinen Dienst und erteilt keine Freigabe für Code, Installation oder
-Änderungen an Sicherheitskonfigurationen. Der Entwurf benötigt Kaans
-Architekturentscheidung und die Design-Vorprüfung für eine neue Prozessgrenze nach
+**Status: ENTWURF / DESIGN-VORPRÜFUNG AUSSTEHEND.** Basis ist `main`
+`62b6d1966da5e30fe71f230629a48dea369ae62c` vom 08.10.2026. Kaan hat
+die Implementierung und lokale Tests inzwischen beauftragt. Dieses Dokument
+aktiviert keinen Dienst; vor Runtime-Code verlangt die neue Prozessgrenze die
+Design-Vorprüfung durch Gemini nach
 [`docs/COLLABORATION.md`](COLLABORATION.md). Er ergänzt den bestehenden
 [C5-Betriebsentwurf in PR #117](https://github.com/Kaancodm/GeniusNew/pull/117),
 ohne dessen Dateien zu übernehmen oder zu ersetzen.
@@ -36,7 +36,7 @@ HTTP → Core (geniusnew-core UID; Policy, Gateway, Ledger, WorkerAuthority)
               │ genau eine lokale AF_UNIX-Stream-Verbindung je Dispatch
               ▼
        systemd-Socket (root:geniusnew-worker-ipc, 0660)
-              │ Accept=yes: eine Dienstinstanz je Verbindung
+              │ Accept=yes, MaxConnections=1: höchstens eine aktive Instanz
               ▼
        Worker-Instanz (geniusnew-worker UID; keine Secrets/DB-Rechte)
               │ Landlock + Seccomp + Ressourcenlimits vor Worker-Code
@@ -47,6 +47,15 @@ HTTP → Core (geniusnew-core UID; Policy, Gateway, Ledger, WorkerAuthority)
 Die Socket-Unit nimmt Verbindungen auf einem **Dateisystempfad unter `/run/`** an;
 abstrakte Unix-Sockets und TCP sind für diese Grenze ausgeschlossen. `Accept=yes`
 startet pro Verbindung eine neue, nach genau einem Request endende Dienstinstanz.
+`MaxConnections=1` begrenzt die Anzahl gleichzeitig aktiver Instanzen mit derselben
+Worker-UID auf **eine**; die Service-Unit beendet mit `KillMode=control-group` alle
+zur Instanz gehörenden Prozesse. Ein zweiter Dispatch bekommt innerhalb seiner
+Deadline entweder die nächste freie Instanz oder eine Ablehnung, niemals eine
+parallele Ausführung oder einen lokalen Fallback. Beide Einstellungen und die
+Laufzeitwirkung müssen im isolierten systemd-Test nachgewiesen werden; die
+Konfiguration selbst ist nicht Teil dieses PRs. Die Semantik dieser Vorgaben
+steht in [systemd.socket(5)](https://man7.org/linux/man-pages/man5/systemd.socket.5.html)
+und [systemd.kill(5)](https://man7.org/linux/man-pages/man5/systemd.kill.5.html).
 Die Service-Unit setzt `User=geniusnew-worker`, eine eigene primäre Gruppe, keine
 ergänzenden Gruppen und keine Linux-Capabilities. Der Core erhält insbesondere
 **weder Root noch `CAP_SETUID`/`CAP_SETGID`**. Er verbindet sich als
@@ -159,23 +168,26 @@ bewerten.
 | Worker sendet Daten über UDP oder Unix-Sockets | Kein Netzwerk-FD außer angenommener IPC-Verbindung; explizite systemd- und Kernel-Grenze für neue Sockets | Native `socket`, `connect` und `sendto` für AF_INET/AF_INET6 und fremde AF_UNIX-Ziele unter dem Mindestkernel testen. Python-Audit-Hook allein und Landlock ABI 4 zählen nicht als Nachweis. |
 | IPC hängt oder flutet Core | 32-KiB-Grenze, eine Verbindung je Job, kurze Deadlines, systemd-Verbindungs-/Prozessgrenzen | Unvollständige, überlange und endlose Frames werden begrenzt beendet; keine unbegrenzten Prozesse, FDs oder wartenden Jobs. |
 | Crash nach `EXECUTION_COMMITTED` | Dauerhaft verbrannte Job-ID, kein Retry, vorhandene Audit-/Anker-Prüfung | SIGKILL vor/nach Connect, Empfang und Antwort; Neustart führt keinen Job doppelt aus und akzeptiert kein Ergebnis doppelt. |
-| Worker greift über gleiche UID auf eine andere Jobinstanz zu | Neue Instanz je Verbindung, keine langlebige Payload im Worker-Dienst, Sandbox vor Worker-Code | Zwei verschiedene Jobs mit Kanarien: zweiter Job kann ersten weder aus Speicher, `/proc`, temporären Dateien noch Logs lesen. Signal-/Ptrace-/`process_vm_readv`-Versuche fail closed prüfen; ABI 4 allein ist dafür kein Nachweis. |
+| Worker greift über gleiche UID auf eine andere Jobinstanz zu | `MaxConnections=1`, `KillMode=control-group`, eigene Instanz je Job; keine zweite aktive Worker-UID-Instanz | Zwei gleichzeitige Dispatches mit getrennten Kanarien und ein absichtlich hängender Worker: maximal eine Instanz läuft; nach Timeout/Crash ist ihre Cgroup leer, bevor der nächste Job beginnt. Der zweite Job kann den ersten weder aus `/proc`, Dateien noch Logs lesen. |
 
-Die letzte Zeile ist ein **Design-Risiko**: Ein pro Verbindung gestarteter Dienst
-hat zwar keine Payload-Historie, aber gleichzeitig laufende Instanzen teilen die
-Worker-UID. Der spätere Umsetzungsentwurf muss entweder nachweislich Signale,
-Ptrace, `process_vm_readv` und fremde Prozessdateien kernelseitig sperren oder
-pro Job getrennte OS-Identitäten verwenden. Bis ein Test diese Grenze belegt,
-bleibt parallele Ausführung beziehungsweise die neue Dienstarchitektur HOLD.
-Landlock ABI 4 allein sperrt weder alle IPC-Wege noch alle nativen
-Prozesszugriffe; siehe [Linux-Kernel-Dokumentation zu Landlock](https://docs.kernel.org/userspace-api/landlock.html).
+Die letzte Zeile ist ein **Abnahmerisiko**: Die feste Worker-UID darf nur diesem
+Dienst gehören, und systemd muss nachweislich die Cgroup einer beendeten Instanz
+vollständig leeren, bevor der nächste Job startet. Schlägt das auf dem Zielhost
+fehl, ist die Dienstarchitektur HOLD; `MaxConnections=1` allein beweist keine
+Isolation von einem verwaisten Prozess. Parallele Worker-Ausführung bleibt aus
+dem A2/C5-Auftrag ausgeklammert und braucht pro Job getrennte OS-Identitäten
+oder nachweislich kernelseitig gesperrte Signale, Ptrace,
+`process_vm_readv` und fremde Prozessdateien. Landlock ABI 4 allein sperrt
+weder alle IPC-Wege noch alle nativen Prozesszugriffe; siehe
+[Linux-Kernel-Dokumentation zu Landlock](https://docs.kernel.org/userspace-api/landlock.html).
 
 ## Geplanter Dateischnitt und Abnahme
 
 **In diesem Entwurfs-PR geändert:** nur dieses Dokument. Keine Runtime-, Test-,
 CI-, Unit-, Secret-, Rechte- oder `SECURITY.md`-Datei wird verändert.
 
-**Erst nach neuem GO in einem getrennten Implementierungs-PR zu prüfen:**
+**Nach Gemini-Design-Vorprüfung und Kaans Entscheidung zum seriellen
+Betriebsmodell umzusetzen:**
 
 | Datei/Ort | Geplanter Änderungszweck |
 | --- | --- |
@@ -187,13 +199,16 @@ CI-, Unit-, Secret-, Rechte- oder `SECURITY.md`-Datei wird verändert.
 | C5-Dokumentation/Unit-Vorlagen in Abstimmung mit #117 | Getrennte Nutzer und Rechte, Socket-Aktivierung, Backup/Restore, Rotation, E3-Protokoll; keine Übernahme fremder Änderungen ohne Abstimmung. |
 | `SECURITY.md` | Nur in einem eigens freigegebenen Grenz-PR mit umgekehrten Boundary-Tests aktualisieren. |
 
-Abnahme erfordert zuerst die Design-Vorprüfung der Prozessgrenze und Kaans
-Entscheidungen zu parallelen Worker-Instanzen, tatsächlichen systemd-Credentials
-und dem künftigen Betriebsprofil. Danach: gezielte Negativtests, vollständige
+Abnahme erfordert zuerst die Gemini-Design-Vorprüfung der Prozessgrenze und Kaans
+Entscheidung über die vorgeschlagene serielle Ausführung, tatsächliche
+systemd-Credentials und das künftige Betriebsprofil. Danach: gezielte
+Negativtests, vollständige
 Unittests mit echtem PostgreSQL, Demo, Persistenz-/Restore-Demo und
 Refusal-Guard **nacheinander** auf demselben Head, `contracts` grün, unabhängiger
 Security-Review und C5/E3-Nachweis auf einem sauberen Linux-Testhost. Kein Mock
 einer UID oder eines Peer-Credentials zählt als OS-Isolationsnachweis.
 
-**HOLD:** Bis zu einem neuen ausdrücklichen GO keine Implementierung, Installation,
-Änderung von Sicherheitskonfigurationen, kein Main-Merge und kein Deployment.
+**HOLD:** Das Implementierungs-GO ersetzt die vorgeschaltete Gemini-Prüfung und
+Kaans Architekturentscheidung nicht. Bis dahin kein Runtime-Code. Installation,
+Änderung von Sicherheitskonfigurationen, Main-Merge und Deployment bleiben
+unfreigegeben.
