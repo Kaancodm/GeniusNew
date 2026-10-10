@@ -25,7 +25,9 @@ Die Regel ist bewusst einfach:
 5. Agentenwechsel und Fallbacks bei Kontingent- oder Toolblockern, sofern bestehende
    fachliche Reviews und Gates erhalten bleiben.
 6. Secret-Konfiguration auf Vorhandensein, Dateirechte und korrekte Einbindung prüfen,
-   ohne Secret-Werte auszugeben.
+   ohne Secret-Werte auszugeben. Kurzlebige Schlüssel für isolierte Dev-/Test-/Staging-
+   Tests dürfen erzeugt werden; sie werden weder produktiv genutzt noch im Repository
+   oder in Logs gespeichert.
 7. Interne Netze: Loopback, Container-Netze, lokale Ports und nicht öffentliche
    Testdienste.
 8. Dev/Test-Datenbanken: Schema-, Migrations-, Restore- und Manipulationstests mit
@@ -44,7 +46,8 @@ Vor der Ausführung ist Kaans ausdrückliche Freigabe erforderlich für:
 - Merge oder Direktänderung an `main`.
 - Produktionsdeployment, öffentlicher Release oder Release-Tag.
 - Neue oder geänderte öffentliche Netzwerkfreigaben, Firewall- oder SSH-Zugangsregeln.
-- Erzeugen, Rotieren, Ersetzen oder Offenlegen von Secrets/Schlüsseln.
+- Erzeugen, Rotieren oder Ersetzen dauerhafter oder produktiv genutzter
+  Secrets/Schlüssel sowie das Offenlegen von Secrets/Schlüsseln.
 - Änderungen an echten produktiven Daten oder produktiven Datenbankrechten.
 - Irreversible oder destruktive Aktionen wie Force-Push, Löschen wichtiger Branches,
   endgültiges Löschen von Daten oder nicht sicher rückgängig machbare Migrationen.
