@@ -7,6 +7,10 @@ geschlossen gedacht: als Quelle für NotebookLM, Microsoft 365 Copilot oder jede
 Assistenten, der das Repository nicht selbst lesen kann. Verbindlich bleiben der Code,
 `SECURITY.md` und `docs/ROADMAP-V02.md`. Bei Widerspruch gilt das Repository.
 
+**Regelhinweis (10.10.2026):** Die unten beschriebenen Merge-Rechte sind durch Kaans
+Ausführungs-Gates vom 06.10.2026 abgelöst (`docs/EXECUTION-GATES.md`). Jeder Merge nach
+`main` braucht Kaans ausdrückliches GO; fachliche CI- und Review-Gates bleiben bestehen.
+
 **Sichtbarkeit und Quellenweg (07.10.2026):** Das Repository ist aktuell **privat**
 (GitHub-Stand; keine Aussage zur Dauer, Kaan klärt die Regeln); Raw-Links auf `main` liefern HTTP 404. NotebookLM bekommt Quellen
 nur über von Kaan hochgeladene, geprüfte Dateien aus einem exakten Commit
@@ -136,7 +140,7 @@ Jobs, Annahmen und Policy).
 ## Zusammenarbeit der Werkzeuge
 
 Ab 27.09.2026 gilt `docs/COLLABORATION.md` in aktualisierter Fassung. **Codex setzt
-Kerncode um und mergt.** **Seit 04.10.2026 pflegt Claude Code `docs/STATUS.md`**
+Kerncode um und mergt nach Kaans GO.** **Seit 04.10.2026 pflegt Claude Code `docs/STATUS.md`**
 (dieses Dokument); Gemini prüft über die Antigravity- oder Abacus-CLI (`docs/COLLABORATION.md`). **Kaan entscheidet
 Ziele und offene Fragen zur Datenbank; ChatGPT erstellt `docs/DATABASE.md` in seinem
 Auftrag.** **ChatGPT** übernimmt außerdem neue Werkzeuge, Server-Pflege und
@@ -159,5 +163,6 @@ Plattformen mit Überschreibrecht und hilft, wenn Codex feststeckt.
 Übergaben zwischen den Werkzeugen laufen über die zwei Prompts in `docs/HANDOVER.md`.
 
 Regel für alle: Jede Änderung läuft über einen PR mit grüner CI. Codex mergt eigene
-Kerncode-PRs selbst; ChatGPT- und Claude-eigene PRs mergt Kaan; neue Abhängigkeiten,
-geänderte `SECURITY.md`-Grenzen und Tags brauchen Kaans OK.
+Kerncode-PRs erst nach Kaans ausdrücklichem GO; ChatGPT- und Claude-eigene PRs mergt
+Kaan. Neue Abhängigkeiten, geänderte `SECURITY.md`-Grenzen und Tags brauchen
+zusätzliche fachliche Freigaben und Reviews.
