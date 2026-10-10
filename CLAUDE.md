@@ -2,6 +2,7 @@
 
 @AGENTS.md
 @docs/COLLABORATION.md
+@docs/EXECUTION-GATES.md
 
 Vor sicherheitsrelevanter Arbeit zusätzlich lesen:
 @SECURITY.md

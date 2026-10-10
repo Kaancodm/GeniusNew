@@ -1,6 +1,6 @@
 # Copilot-Anweisungen für GeniusNew
 
-Vollständige Regeln: `AGENTS.md`. Rollen und Merge-Regeln: `docs/COLLABORATION.md`.
+Vollständige Regeln: `AGENTS.md`. Rollen: `docs/COLLABORATION.md`. Ausführungs- und Merge-Gates: `docs/EXECUTION-GATES.md`.
 Projektstand: `docs/STATUS.md`. Verbindlich sind der tatsächliche Code, `SECURITY.md`,
 Tests und CI am angegebenen Commit; Pläne und Quellenexporte können veraltet sein.
 Nicht überprüfbare Angaben als `UNKNOWN` kennzeichnen.
@@ -9,7 +9,7 @@ Nicht überprüfbare Angaben als `UNKNOWN` kennzeichnen.
 
 Vervollständigung im Editor und Review jedes PRs nach der Checkliste unten. Eigene
 Umsetzung nur mit einem Auftrag (Issue-Formular „Begrenzte Aufgabe“), auf einem eigenen
-Branch und als Draft-PR. Umsetzer und Merger für Kerncode ist Codex; ChatGPT übernimmt
+Branch und als Draft-PR. Codex setzt Kerncode um und mergt erst nach Kaans GO; ChatGPT übernimmt
 neue Werkzeuge, Server, Infrastruktur und erstellt die Datenbank-Dokumentation
 (`docs/DATABASE.md`) im Auftrag von Kaan; Kaan entscheidet Ziele, Architektur und die
 Freigabe; Claude Code besitzt `docs/COLLABORATION.md` und `docs/DECISIONS.md`,
@@ -76,6 +76,7 @@ brauchen eine unabhängige Prüfung des aktuellen Heads.
 4. Werden eine Grenze aus `SECURITY.md` und ihr offen haltender Test gemeinsam angepasst?
 5. Gelangen Nutzdaten oder Secrets in Audit, Logs oder Fehlermeldungen?
 
-Befunde zu diesen fünf Punkten blockieren den Merge. Release, Deployment, Zugriffs- und
-Schutzänderungen, Produktionsinfrastruktur, das Löschen von Daten oder Branches und das
+Befunde zu diesen fünf Punkten blockieren den Merge. Öffentliche Releases,
+Produktionsdeployments, öffentliche Netzwerk-, Firewall- oder SSH-Zugangsregeln,
+endgültiges Löschen produktiver Daten oder wichtiger Branches und das Erzeugen oder
 Rotieren von Zugangsdaten brauchen Kaans ausdrückliches OK.
