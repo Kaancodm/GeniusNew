@@ -71,7 +71,7 @@ LINGER_MIN_MS = 1500
 NOT_IDLE_REASONS = frozenset({
     "a worker process is still alive", "a worker instance has not ended",
     "cleanup of an earlier job is pending"})
-SECRET_TARGETS = ("root_secret", "db_dsn", "secrets_dir")
+SECRET_TARGETS = ("root_secret", "db_dsn", "payload_file", "secrets_dir")
 ANCHOR_TARGETS = ("anchor_state", "anchor_dir")
 BOUNDARY_TARGETS = ("lease", "worker_socket", "core_environ")
 
@@ -266,10 +266,12 @@ def judge_identity(identity: Mapping[str, Any] | None, uids: Mapping[str, int],
     if (set(resuid) != {worker_uid} or set(resgid) != {worker_gid}
             or set(groups) & foreign_gids or not set(groups) <= {worker_gid}):
         return FAIL
-    if identity.get("cap_effective_zero") is False or identity.get("cap_permitted_zero") is False:
+    if (identity.get("cap_effective_zero") is False or identity.get("cap_permitted_zero") is False
+            or identity.get("no_new_privs") is False):
         return FAIL
     if (identity.get("cap_effective_zero") is not True
             or identity.get("cap_permitted_zero") is not True
+            or identity.get("no_new_privs") is not True
             or identity.get("dumpable") != 0):
         return HOLD
     return PASS
@@ -300,6 +302,8 @@ def judge_concurrency(max_instances: int | None, errors: int, samples: int) -> s
         return FAIL
     if max_instances is None or errors or samples < 10:
         return HOLD
+    if max_instances < 1:
+        return HOLD  # never saw a live instance: the monitor is not looking at the right place
     return PASS
 
 
@@ -382,10 +386,9 @@ def commit_state(git: str | None) -> dict[str, Any]:
     base = [git, "-c", f"safe.directory={REPO}", "-C", str(REPO)]
     head = _run(base + ["rev-parse", "HEAD"])
     sha = head.stdout.strip() if head and head.returncode == 0 else ""
-    tracked = _run(base + ["status", "--porcelain", "--untracked-files=no"])
-    probe = _run(base + ["status", "--porcelain", "--", "tools/a2c5_probe"])
-    clean = bool(tracked and tracked.returncode == 0 and not tracked.stdout.strip()
-                 and probe and probe.returncode == 0 and not probe.stdout.strip())
+    # Untracked files count too: one at the root could shadow a module the probe imports.
+    status = _run(base + ["status", "--porcelain", "--untracked-files=all"])
+    clean = bool(status and status.returncode == 0 and not status.stdout.strip())
     if len(sha) != 40 or any(char not in "0123456789abcdef" for char in sha):
         return {"sha": "unknown", "clean": False}
     return {"sha": sha, "clean": clean}
@@ -604,6 +607,8 @@ class Lab:
         self._write(self.base / "anchor" / "state.json", canonical({"head": head}) + b"\n",
                     anchor, self.gids["anchor"], 0o600)
         self._write(self.base / "lease", b"", 0, self.gids["core"], 0o640)
+        self._write(self.base / "secrets" / "payload", self.payload.encode(),
+                    core, self.gids["core"], 0o600)
         self._write(self.base / "public.txt", b"public control\n", 0, 0, 0o644)
 
         config = {
@@ -615,10 +620,11 @@ class Lab:
             "sockets": {name: str(self.base / "sock" / f"{name}.sock") for name in SCENARIOS},
             "systemctl": self.tools["systemctl"],
             "deadlines": DEADLINES,
-            "payload": self.payload,
+            "payload_file": str(self.base / "secrets" / "payload"),
             "targets": {
                 "root_secret": {"path": str(self.base / "secrets" / "root-secret"), "kind": "file"},
                 "db_dsn": {"path": str(self.base / "secrets" / "db-dsn"), "kind": "file"},
+                "payload_file": {"path": str(self.base / "secrets" / "payload"), "kind": "file"},
                 "secrets_dir": {"path": str(self.base / "secrets"), "kind": "dir"},
                 "anchor_state": {"path": str(self.base / "anchor" / "state.json"), "kind": "file"},
                 "anchor_dir": {"path": str(self.base / "anchor"), "kind": "dir"},
@@ -1002,6 +1008,7 @@ class Lab:
             self.base / "secrets": (self.uids["core"], 0o700, True),
             self.base / "secrets" / "root-secret": (self.uids["core"], 0o600, False),
             self.base / "secrets" / "db-dsn": (self.uids["core"], 0o600, False),
+            self.base / "secrets" / "payload": (self.uids["core"], 0o600, False),
             self.base / "anchor": (self.uids["anchor"], 0o700, True),
             self.base / "anchor" / "state.json": (self.uids["anchor"], 0o600, False),
             self.base / "lease": (0, 0o640, False),

@@ -508,12 +508,16 @@ class JudgementTest(unittest.TestCase):
         uids = {"core": 901, "worker": 902, "anchor": 903, "foreign": 904}
         gids = {**uids, "ipc": 905}
         identity = {"resuid": [902] * 3, "resgid": [902] * 3, "groups": [902],
-                    "cap_effective_zero": True, "cap_permitted_zero": True, "dumpable": 0}
+                    "cap_effective_zero": True, "cap_permitted_zero": True,
+                    "no_new_privs": True, "dumpable": 0}
         self.assertEqual(driver.judge_identity(identity, uids, gids), PASS)
         self.assertEqual(driver.judge_identity({**identity, "groups": [902, 905]}, uids, gids), FAIL)
         self.assertEqual(driver.judge_identity({**identity, "resuid": [902, 901, 902]},
                                                uids, gids), FAIL)
         self.assertEqual(driver.judge_identity({**identity, "dumpable": 1}, uids, gids), HOLD)
+        self.assertEqual(driver.judge_identity({**identity, "no_new_privs": False}, uids, gids), FAIL)
+        without = {key: value for key, value in identity.items() if key != "no_new_privs"}
+        self.assertEqual(driver.judge_identity(without, uids, gids), HOLD)
         self.assertEqual(driver.judge_identity(None, uids, gids), HOLD)
 
         flat = {"a:python": DENIED, "a:libc": DENIED}
@@ -534,6 +538,7 @@ class JudgementTest(unittest.TestCase):
         self.assertEqual(driver.judge_concurrency(2, 0, 100), FAIL)
         self.assertEqual(driver.judge_concurrency(1, 3, 100), HOLD)
         self.assertEqual(driver.judge_concurrency(0, 0, 2), HOLD)
+        self.assertEqual(driver.judge_concurrency(0, 0, 100), HOLD)
 
         good = {"disposable": True, "euid": 0, "systemd_init": True, "cgroup2": True,
                 "system_bus": True, "tools": {"systemctl": "/usr/bin/systemctl"},

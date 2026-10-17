@@ -170,6 +170,13 @@ def _open_fds() -> int:
     return len(os.listdir("/proc/self/fd"))
 
 
+def _payload(config: dict[str, Any]) -> str:
+    # The shared config is readable by every worker UID; the payload lives in a
+    # core-only file so a refused identity cannot hold it before the handshake.
+    with open(config["payload_file"], encoding="ascii") as handle:
+        return handle.read()
+
+
 def _bind(config: dict[str, Any], stream: CredentialStream) -> dict[str, str]:
     sender = stream.sender
     assert sender is not None
@@ -245,7 +252,7 @@ def _exchange(config: dict[str, Any], scenario: str, late_passcred: bool,
                     "reason": errno.errorcode.get(exc.errno or 0, "unknown errno")}
         out.update(ready_chunks=stream.chunks, sender_is_main_pid=True, unit=bound["unit"])
 
-        frame = encode_frame(request(nonce, config["payload"]), BODY_MAX)
+        frame = encode_frame(request(nonce, _payload(config)), BODY_MAX)
         sock.sendall(frame)
         out["payload_bytes_sent"] = len(frame)
         notify("payload_sent")

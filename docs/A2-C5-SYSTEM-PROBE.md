@@ -24,7 +24,7 @@ verwaltete Job-Verzeichnis das Ende bestätigen.
 | 1. Kernel-Credentials vor Nutzdaten, auch fragmentiert | `C1.fragmented_ready`, `C1.wrong_uid_service`, `C1.sender_switch`, `C1.early_ready`, `C1.unattributed_early_data`, `C1.descriptor_passing`, `C1.foreign_client` | READY in ≥ 3 Stücken, jedes mit Worker-UID/-GID desselben Prozesses, Absender = `MainPID` der Unit; jede Fehlidentität (fremde UID, zweiter Prozess mitten im Frame, READY vor HELLO, Daten vor `SO_PASSCRED`, `SCM_RIGHTS`) wird vor dem ersten Nutzdatenbyte abgelehnt, **beide Seiten** zählen 0 Nutzdatenbytes; ein fremder Client ohne Socket-Gruppe bekommt `EACCES`, mit Gruppe keine Antwort |
 | 2. Serielle Belegung, zweiter Dispatch verweigert | `C2.two_core_processes`, `C2.two_threads_one_core`, `C2.second_connection_without_lease`, `C2.max_concurrency` | Von zwei gleichzeitigen Dispatches (zwei Core-Prozesse; zwei Threads mit je eigener Dateibeschreibung) läuft genau einer, der andere scheitert an der Lease **vor** dem Connect (`NAccepted` +1); eine zweite Verbindung ohne Lease bekommt keine Antwort; der Root-Monitor sieht über den ganzen Lauf höchstens eine belebte Instanz |
 | 3. Bestätigtes Ende und Bereinigung | `C3.end_after_success`, `C3.end_after_hang`, `C3.end_after_crash`, `C3.early_close_then_linger`, `C3.core_restart_reconciliation`, `C3.unreadable_state_refuses` | Nach Erfolg, Hänger (SIGTERM ignoriert, Kind in neuer Session), Absturz (`abort` mit zurückgelassenem Kind), Weiterleben nach RESULT und SIGKILL des Cores mitten im Job: Ende erst bestätigt, wenn Unit beendet, Cgroup leer/entfernt und Job-Verzeichnis entfernt sind; danach kein Prozess der Worker-UID mehr; der neu gestartete Core verweigert, solange die alte Instanz lebt, und verbindet sich nicht; unlesbarer Cleanup-, Cgroup- oder systemd-Zustand führt zur Ablehnung vor dem Connect |
-| 4. Kein Zugriff auf Test-Secrets und Anker-Testzustand | `C4.worker_identity`, `C4.test_secrets`, `C4.anchor_test_state`, `C4.core_only_paths` | Worker hat nur seine UID/GID, keine fremden Gruppen, keine Capabilities, ist nicht dumpbar; Lesen von Root-Secret-, DSN- und Anker-Kanarien, Secret- und Anker-Verzeichnis, Lease, `/proc/<core>/environ` und Connect auf den Worker-Socket scheitern mit `EACCES`/`EPERM`, über Python **und** direkt über libc; Positivkontrollen: Core liest sein Secret, Worker liest eine öffentliche Kontrolldatei, alle Ziele liegen mit erwartetem Eigentümer und Modus vor |
+| 4. Kein Zugriff auf Test-Secrets und Anker-Testzustand | `C4.worker_identity`, `C4.test_secrets`, `C4.anchor_test_state`, `C4.core_only_paths` | Worker hat nur seine UID/GID, keine fremden Gruppen, keine Capabilities, ist nicht dumpbar; Lesen von Root-Secret-, DSN-, Nutzdaten- und Anker-Kanarien, Secret- und Anker-Verzeichnis, Lease, `/proc/<core>/environ` und Connect auf den Worker-Socket scheitern mit `EACCES`/`EPERM`, über Python **und** direkt über libc; Positivkontrollen: Core liest sein Secret, Worker liest eine öffentliche Kontrolldatei, alle Ziele liegen mit erwartetem Eigentümer und Modus vor |
 
 `P.*` (Vorbedingungen) und `X.cleanup` (alles wieder entfernt) gehören zu jedem
 Bericht.
@@ -60,7 +60,7 @@ Ein isolierter Linux-Host oder eine Wegwerf-VM **ohne** produktive Dienste,
 Schlüssel oder Daten: systemd als PID 1, reines cgroup v2 unter `/sys/fs/cgroup`,
 D-Bus-Systembus, `useradd`/`userdel`/`groupadd`/`groupdel`, `git`, Python ≥ 3.11 unter
 einem nur für `root` schreibbaren Pfad, ein sauberer Git-Checkout des zu prüfenden
-Commits. Netzwerk wird nicht gebraucht; die Probe nutzt nur Unix-Sockets unter `/run`.
+Commits (auch ohne unversionierte Dateien). Netzwerk wird nicht gebraucht; die Probe nutzt nur Unix-Sockets unter `/run`.
 
 ## Ausführen
 
@@ -80,7 +80,7 @@ Für die Dauer eines Laufs, mit zufälliger Lauf-ID `<id>`:
 - vier Systemnutzer `gnp<id>c|w|a|f` (Core, Worker, Anker, Fremd) mit eigener
   Gruppe, ohne Home und Login, und eine Socket-Gruppe `gnp<id>ipc`;
 - `/run/gnprobe<id>/` mit Code-Kopie (root, 0644), Konfiguration ohne Secrets,
-  zufälligen Kanarien als Test-Secrets (Core 0600 in 0700) und Anker-Testzustand
+  zufälligen Kanarien als Test-Secrets und den Test-Nutzdaten (Core 0600 in 0700; der Worker erhält Nutzdaten nur über die geprüfte Verbindung) und Anker-Testzustand
   (Anker 0600 in 0700), Lease (root:Core 0640), Socket-Verzeichnis (root:ipc 0750);
 - je Szenario eine `.socket`- und eine `@.service`-Unit unter `/run/systemd/system`
   (flüchtig), eine Slice `gnprobe<id>w.slice` und transiente Core-Units über
