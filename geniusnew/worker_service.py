@@ -46,6 +46,8 @@ _SCM_PIDFD = 4
 _UCREDS = struct.Struct("3i")
 _FD = struct.Struct("i")
 _HEADER = struct.Struct("!I")
+_HOST_REFERENCE = "/run/geniusnew-worker/ipc/host-state.json"
+_HOST_NAMESPACES = ("mnt", "pid", "user", "cgroup")
 _CONTROL_BYTES = (socket.CMSG_SPACE(_UCREDS.size)
                   + socket.CMSG_SPACE(_FD.size * 8)
                   + socket.CMSG_SPACE(_FD.size))
@@ -571,17 +573,99 @@ class WorkerLifecycle:
             _fail("Core can gain privileges")
 
     @staticmethod
-    def _check_host_namespaces() -> None:
-        # A private mount namespace could bind another lease inode at the same
-        # path; a private PID/user namespace could hide prior Worker processes.
-        for name in ("mnt", "pid", "user"):
+    def _check_id_maps() -> None:
+        # Without this gate, root ownership inside an unprivileged user
+        # namespace would not establish the provenance of the reference file.
+        for name in ("uid_map", "gid_map"):
             try:
-                own = os.stat(f"/proc/self/ns/{name}")
-                manager = os.stat(f"/proc/1/ns/{name}")
-            except OSError as exc:
-                raise ContractError("Core namespace state cannot be read") from exc
-            if (own.st_dev, own.st_ino) != (manager.st_dev, manager.st_ino):
-                _fail("Core cannot prove a shared host lease and PID view")
+                values = Path(f"/proc/self/{name}").read_text(encoding="ascii").split()
+            except (OSError, UnicodeError) as exc:
+                raise ContractError("Core ID mapping cannot be read") from exc
+            if values != ["0", "0", "4294967295"]:
+                _fail("Core does not have the initial ID mapping")
+
+    @staticmethod
+    def _namespace_ids(pid: str) -> dict[str, list[int]]:
+        namespaces = {}
+        try:
+            for name in _HOST_NAMESPACES:
+                descriptor = os.open(f"/proc/{pid}/ns/{name}", os.O_RDONLY | os.O_CLOEXEC)
+                try:
+                    info = os.fstat(descriptor)
+                    namespaces[name] = [info.st_dev, info.st_ino]
+                finally:
+                    os.close(descriptor)
+        except OSError as exc:
+            raise ContractError("Core namespace state cannot be read") from exc
+        return namespaces
+
+    def _host_paths(self) -> dict[str, str]:
+        return {"root": "/", "proc": "/proc", "cgroup": "/sys/fs/cgroup",
+                "runtime": self.profile.runtime_root, "lease": self.profile.lease_path}
+
+    def _host_snapshot(self, *, pid: str = "self", lease_fd: int | None = None) -> bytes:
+        namespaces = self._namespace_ids(pid)
+        try:
+            boot = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+            paths = {}
+            for name, path in self._host_paths().items():
+                info = (os.fstat(lease_fd) if name == "lease" and lease_fd is not None
+                        else os.stat(path))
+                paths[name] = [info.st_dev, info.st_ino]
+        except (OSError, UnicodeError) as exc:
+            raise ContractError("Core host paths or boot identity cannot be read") from exc
+        if re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", boot) is None:
+            _fail("Core boot identity is invalid")
+        return canonical({"version": 1, "boot_id": boot,
+                          "namespaces": namespaces, "paths": paths})
+
+    def host_reference(self) -> bytes:
+        """Produce boot evidence during trusted host provisioning, never dispatch.
+
+        Root and the host boot path are already trusted for the lease, units and
+        installed code. A container's root is not an independent host witness.
+        The operator must run this from the actual host before starting Core.
+        """
+        if os.getuid() != 0 or os.geteuid() != 0:
+            _fail("host reference must be provisioned by host root")
+        self._check_id_maps()
+        if self._namespace_ids("self") != self._namespace_ids("1"):
+            _fail("host provisioning does not share the manager namespaces")
+        try:
+            own, manager = os.stat("/"), os.stat("/proc/1/root")
+        except OSError as exc:
+            raise ContractError("host provisioning root cannot be inspected") from exc
+        if (own.st_dev, own.st_ino) != (manager.st_dev, manager.st_ino):
+            _fail("host provisioning does not share the manager root")
+        self._check_node(self.profile.lease_path, kind="file",
+                         gid=self.profile.socket_gid, mode=0o660)
+        self._check_runtime_root()
+        self._check_installation()
+        return self._host_snapshot(pid="1")
+
+    def _check_host_namespaces(self, *, lease_fd: int | None = None) -> None:
+        # Nonroot Core cannot dereference /proc/1/ns across the UID boundary.
+        # A boot-bound root reference preserves the comparison without granting
+        # ptrace capabilities. Path inodes also detect chroot and split leases.
+        self._check_id_maps()
+        info = self._check_node(_HOST_REFERENCE, kind="file",
+                                gid=self.profile.socket_gid, mode=0o440)
+        try:
+            descriptor = os.open(_HOST_REFERENCE, os.O_RDONLY | os.O_NOFOLLOW
+                                 | os.O_NONBLOCK | os.O_CLOEXEC)
+            try:
+                opened = os.fstat(descriptor)
+                if (info.st_dev, info.st_ino) != (opened.st_dev, opened.st_ino):
+                    _fail("Core host reference inode changed during open")
+                raw = os.read(descriptor, 4097)
+            finally:
+                os.close(descriptor)
+        except OSError as exc:
+            raise ContractError("Core host reference cannot be read") from exc
+        # Comparing canonical bytes also rejects extra keys, non-integer inode
+        # values, duplicate JSON members, trailing bytes and partial writes.
+        if raw != self._host_snapshot(lease_fd=lease_fd):
+            _fail("Core host reference does not match its boot, namespaces and paths")
         try:
             mountinfo = Path("/proc/self/mountinfo").read_text(encoding="ascii")
         except OSError as exc:
@@ -642,6 +726,7 @@ class WorkerLifecycle:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
                 raise ContractError("worker service slot is occupied") from exc
+            self._check_host_namespaces(lease_fd=descriptor)
         except BaseException:
             os.close(descriptor)
             raise

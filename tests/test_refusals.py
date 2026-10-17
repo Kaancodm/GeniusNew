@@ -53,6 +53,17 @@ class RefusalScannerTest(unittest.TestCase):
             self.assertIs(type(caught.exception), expected)
             self.assertEqual(str(caught.exception), "fixed message")
 
+    def test_each_seccomp_kill_rule_is_removed_independently(self):
+        source = '_FILTER_ARCHES = {"x86_64": {"kill": (105, 113, 114)}}\n'
+        found = self.find(source)
+        self.assertEqual([item.condition for item in found], ["105", "113", "114"])
+        for refusal in found:
+            namespace = {}
+            exec(refusals._disable(source, refusal), namespace)
+            self.assertEqual(namespace["_FILTER_ARCHES"]["x86_64"]["kill"],
+                             tuple(value for value in (105, 113, 114)
+                                   if value != int(refusal.condition)))
+
     def test_all_except_wrappers_are_discovered_and_mutated_one_at_a_time(self):
         source = textwrap.dedent('''\
             try:

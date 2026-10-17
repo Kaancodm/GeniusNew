@@ -106,6 +106,30 @@ Die zusätzlich benötigte Lease-Datei gehört erst in einen freigegebenen Betri
 `flock` ist eine kooperative Sperre zwischen vertrauenswürdigen Core-Instanzen,
 keine eigenständige Worker-Sandbox; siehe [flock(2)](https://man7.org/linux/man-pages/man2/flock.2.html).
 
+**Host-Sicht ohne zusätzliche Core-Rechte:** Ein direkter Vergleich mit
+`/proc/1/ns/*` scheitert für den unprivilegierten Core an der Linux-Ptrace-Prüfung.
+Der Implementierungsvertrag verwendet deshalb einen bootgebundenen,
+root-kontrollierten Beleg unter `/run/geniusnew-worker/ipc/host-state.json`
+(`root:SOCKET_GID`, `0440`). Der bereits vertrauenswürdige Host-Bootpfad erstellt
+ihn vor dem Core-Start aus dem echten Host-Zustand. `WorkerLifecycle.host_reference()`
+prüft dafür Root, die volle UID-/GID-Abbildung, gleiche Mount-/PID-/User-/Cgroup-
+Namespaces und gleichen Prozess-Root wie PID 1 sowie die installierten Pfade.
+Die Methode liefert kanonische Bytes; sie installiert nichts und wird nicht
+im Dispatch aufgerufen. Der Core vergleicht seine eigenen Namespace-Handles,
+Boot-ID und Pfad-Inodes (Root, Procfs, Cgroup-Root, Runtime-Root und Lease) mit
+dem Beleg; nach Lock-Erwerb vergleicht er auch den geöffneten Lease-FD. Die
+Procfs-Sicht muss weiterhin vollständig sein. Jeder fehlende, unlesbare,
+veraltete oder abweichende Beleg verweigert vor Connect und Nutzdaten.
+
+Die Referenz beweist Gleichheit mit dem durch Root bereitgestellten Zustand;
+ihre Herkunft aus dem tatsächlichen Host muss der freigegebene Installations-
+und Bootpfad gewährleisten. Container-Root ist kein Hostnachweis. Es entsteht
+kein neuer dauerhaft privilegierter Dienst und der Core erhält keine neue
+Capability. Die Core-Unit darf auch keine indirekt eingerichteten privaten
+Namespaces verwenden. Provisionierung und Neuaufbau nach Reboot stehen in
+[`ops/worker/README.md`](../ops/worker/README.md) und bleiben Teil der echten
+Systemabnahme; bis dahin **HOLD**.
+
 Nach Erwerb der Lease und **vor Connect** muss der Core über nur lesbare,
 vertrauenswürdige systemd-/Cgroup-Zustände ausschließen, dass eine frühere
 Worker-Instanz noch lebt oder ihre Bereinigung aussteht. Nach dem Handshake wird

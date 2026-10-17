@@ -29,6 +29,9 @@ and the test module that runs the script must fail. Standalone tools likewise
 use their dedicated test module per mutant. The unmutated baseline still runs
 the complete suite.
 
+Each numeric entry in the sandbox's `_FILTER_ARCHES` kill table is also a
+refusal: remove it independently and require the raw-syscall tests to notice.
+
 This is deliberately not general-purpose mutation testing. Flipping arbitrary
 operators produces mutants that change nothing observable, and the survivors are
 then argued about rather than fixed. Here every mutant has one meaning — this
@@ -178,6 +181,24 @@ def _find_shell_refusals(path: Path) -> list[Refusal]:
     return found
 
 
+def _seccomp_kill_rules(tree: ast.AST):
+    for assignment in ast.walk(tree):
+        if not (isinstance(assignment, ast.Assign)
+                and any(isinstance(target, ast.Name) and target.id == "_FILTER_ARCHES"
+                        for target in assignment.targets)
+                and isinstance(assignment.value, ast.Dict)):
+            continue
+        for architecture in assignment.value.values:
+            if not isinstance(architecture, ast.Dict):
+                continue
+            for key, rules in zip(architecture.keys, architecture.values):
+                if (isinstance(key, ast.Constant) and key.value == "kill"
+                        and isinstance(rules, ast.Tuple)):
+                    for entry in rules.elts:
+                        if isinstance(entry, ast.Constant) and type(entry.value) is int:
+                            yield rules, entry
+
+
 def find_refusals(path: Path) -> list[Refusal]:
     if path.suffix != ".py":
         return _find_shell_refusals(path)
@@ -185,6 +206,11 @@ def find_refusals(path: Path) -> list[Refusal]:
     tree = ast.parse(source)
     lines = source.splitlines()
     found: list[Refusal] = []
+    for _, entry in _seccomp_kill_rules(tree):
+        found.append(Refusal(
+            path=str(path.relative_to(ROOT)), line=entry.lineno,
+            condition=str(entry.value), message=f"seccomp forbids syscall {entry.value}",
+            kind="seccomp_kill"))
     for node in ast.walk(tree):
         if isinstance(node, ast.ExceptHandler):
             for statement in _gateway_wrappers(node):
@@ -234,6 +260,12 @@ def _disable(source: str, refusal: Refusal) -> str:
         lines[refusal.line - 1] = _SHELL_DIE.sub(r":\1", target)
         return "".join(lines)
     tree = ast.parse(source)
+    if refusal.kind == "seccomp_kill":
+        for rules, entry in _seccomp_kill_rules(tree):
+            if entry.lineno == refusal.line and str(entry.value) == refusal.condition:
+                remaining = ast.Tuple(elts=[item for item in rules.elts if item is not entry],
+                                      ctx=ast.Load())
+                return _replace_node(source, rules, ast.unparse(remaining))
     for node in ast.walk(tree):
         if refusal.kind == "gateway_metadata" and isinstance(node, ast.ExceptHandler):
             for statement in _gateway_wrappers(node):

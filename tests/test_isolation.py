@@ -446,6 +446,7 @@ class IsolationChildContractTest(unittest.TestCase):
 _SYSCALLS = {
     "x86_64": {"getpid": 39, "clone": 56, "fork": 57, "vfork": 58, "execve": 59,
                "execveat": 322, "clone3": 435, "setuid": 105, "setgid": 106,
+               "setreuid": 113, "setregid": 114,
                "setgroups": 116, "setresuid": 117, "setresgid": 119,
                "setfsuid": 122, "setfsgid": 123, "capset": 126, "prctl": 157},
 }
@@ -538,7 +539,7 @@ class ProcessFilterTest(unittest.TestCase):
                 self.assertEqual(self.probe("native", self.syscalls[name]), -signal.SIGSYS)
 
     def test_identity_changes_and_dump_reactivation_are_killed(self):
-        for name in ("setuid", "setgid", "setgroups", "setresuid", "setresgid",
+        for name in ("setuid", "setgid", "setreuid", "setregid", "setgroups", "setresuid", "setresgid",
                      "setfsuid", "setfsgid", "capset"):
             with self.subTest(syscall=name):
                 self.assertEqual(self.probe("native", self.syscalls[name], 0), -signal.SIGSYS)

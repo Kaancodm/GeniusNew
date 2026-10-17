@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
@@ -803,24 +804,165 @@ class LifecycleRefusalTest(unittest.TestCase):
                     with self.assertRaises(ContractError):
                         self.lifecycle._check_core_identity()
 
-    def test_core_must_share_manager_mount_pid_and_user_namespaces(self):
-        shared = Mock(st_dev=1, st_ino=2)
-        with patch("geniusnew.worker_service.os.stat", return_value=shared):
-            self.lifecycle._check_host_namespaces()
-        def split_mount(path):
-            return Mock(st_dev=1, st_ino=3) if path == "/proc/self/ns/mnt" else shared
-        with patch("geniusnew.worker_service.os.stat", side_effect=split_mount):
-            with self.assertRaisesRegex(ContractError, "shared host lease and PID view"):
+    @contextmanager
+    def host_reference(self, raw=None):
+        expected = canonical({"version": 1, "boot_id": "a" * 36,
+                              "namespaces": {name: [4, 123] for name in
+                                             ("mnt", "pid", "user", "cgroup")},
+                              "paths": {"root": [1, 2], "lease": [1, 3]}})
+        with tempfile.TemporaryFile() as reference:
+            reference.write(expected if raw is None else raw)
+            reference.seek(0)
+            info = os.fstat(reference.fileno())
+            with patch.object(self.lifecycle, "_check_id_maps"), \
+                    patch.object(self.lifecycle, "_host_snapshot", return_value=expected), \
+                    patch.object(self.lifecycle, "_check_node", return_value=info) as node, \
+                    patch("geniusnew.worker_service.os.open",
+                          side_effect=lambda *args: os.dup(reference.fileno())):
+                yield expected, node
+
+    def test_core_reads_a_host_reference_without_cross_uid_namespace_access(self):
+        with self.host_reference() as (_, node):
+            with patch("geniusnew.worker_service.os.stat",
+                       side_effect=PermissionError("no cross-UID namespace access")):
                 self.lifecycle._check_host_namespaces()
-        with patch("geniusnew.worker_service.os.stat", return_value=shared), patch.object(
-                Path, "read_text", return_value=""):
-            with self.assertRaisesRegex(ContractError, "complete procfs process view"):
+            node.assert_called_once_with("/run/geniusnew-worker/ipc/host-state.json",
+                                         kind="file", gid=self.profile.socket_gid,
+                                         mode=0o440)
+
+    def test_reference_must_match_boot_namespaces_and_path_inodes(self):
+        with self.host_reference() as (raw, _):
+            expected = json.loads(raw)
+        changes = [{}, {**expected, "boot_id": "old"},
+                   {**expected, "extra": True}]
+        for name in expected["namespaces"]:
+            changes.append({**expected, "namespaces": {
+                **expected["namespaces"], name: [4, 456]}})
+        for name in expected["paths"]:
+            changes.append({**expected, "paths": {**expected["paths"], name: [8, 9]}})
+        for raw in [b"", b"not-json", b"x" * 4097,
+                    *(canonical(value) for value in changes)]:
+            with self.subTest(raw=raw[:80]), self.host_reference(raw):
+                with self.assertRaisesRegex(ContractError, "host reference does not match"):
+                    self.lifecycle._check_host_namespaces()
+
+    def test_reference_inode_swap_is_refused(self):
+        with self.host_reference() as (_, node):
+            node.return_value = Mock(st_dev=-1, st_ino=-1)
+            with self.assertRaisesRegex(ContractError, "host reference inode changed"):
                 self.lifecycle._check_host_namespaces()
-        hidden = "25 30 0:23 / /proc rw,hidepid=2 shared:11 - proc proc rw\n"
-        with patch("geniusnew.worker_service.os.stat", return_value=shared), patch.object(
-                Path, "read_text", return_value=hidden):
-            with self.assertRaisesRegex(ContractError, "hides worker processes"):
+
+    def test_procfs_must_still_show_all_worker_processes(self):
+        for content, reason in (
+                ("", "complete procfs process view"),
+                ("25 30 0:23 / /proc rw,hidepid=2 - proc proc rw\n", "hides worker processes")):
+            with self.subTest(reason=reason), self.host_reference(), patch.object(
+                    Path, "read_text", return_value=content):
+                with self.assertRaisesRegex(ContractError, reason):
+                    self.lifecycle._check_host_namespaces()
+
+    def test_initial_uid_and_gid_maps_are_required(self):
+        initial = "         0          0 4294967295\n"
+        with patch.object(Path, "read_text", return_value=initial):
+            self.lifecycle._check_id_maps()
+        for contents in (("0 1000 1\n", initial), (initial, "0 1000 1\n")):
+            with self.subTest(contents=contents), patch.object(
+                    Path, "read_text", side_effect=contents):
+                with self.assertRaisesRegex(ContractError, "initial ID mapping"):
+                    self.lifecycle._check_id_maps()
+
+    def test_unprivileged_snapshot_uses_readable_own_namespaces(self):
+        with patch.object(self.lifecycle, "_host_paths", return_value={"root": "/"}):
+            snapshot = json.loads(self.lifecycle._host_snapshot())
+        self.assertEqual(set(snapshot["namespaces"]), {"mnt", "pid", "user", "cgroup"})
+        for identity in snapshot["namespaces"].values():
+            self.assertEqual(len(identity), 2)
+            self.assertTrue(all(type(value) is int and value > 0 for value in identity))
+
+    def test_snapshot_binds_all_five_host_paths(self):
+        paths = {"/": [1, 10], "/proc": [2, 20], "/sys/fs/cgroup": [3, 30],
+                 "/run/geniusnew-worker/jobs": [4, 40],
+                 "/run/geniusnew-worker/ipc/lease": [4, 50]}
+        def metadata(path):
+            device, inode = paths[path]
+            return SimpleNamespace(st_dev=device, st_ino=inode)
+        with patch("geniusnew.worker_service.os.stat", side_effect=metadata):
+            snapshot = json.loads(self.lifecycle._host_snapshot())
+        self.assertEqual(snapshot["paths"], {
+            "root": [1, 10], "proc": [2, 20], "cgroup": [3, 30],
+            "runtime": [4, 40], "lease": [4, 50]})
+
+    def test_host_reference_requires_privileged_host_provisioning(self):
+        with patch("os.getuid", return_value=1000), patch("os.geteuid", return_value=1000):
+            with self.assertRaisesRegex(ContractError, "host root"):
+                self.lifecycle.host_reference()
+
+    def test_reference_provisioning_requires_manager_namespaces_and_root(self):
+        own = SimpleNamespace(st_dev=1, st_ino=2)
+        with patch("os.getuid", return_value=0), patch("os.geteuid", return_value=0), \
+                patch.object(self.lifecycle, "_check_id_maps"), \
+                patch.object(self.lifecycle, "_check_node"), \
+                patch.object(self.lifecycle, "_check_runtime_root"), \
+                patch.object(self.lifecycle, "_check_installation"), \
+                patch.object(self.lifecycle, "_namespace_ids", return_value={"mnt": [4, 1]}) as ids, \
+                patch.object(self.lifecycle, "_host_snapshot", return_value=b"reference") as snapshot, \
+                patch("geniusnew.worker_service.os.stat", return_value=own) as metadata:
+            self.assertEqual(self.lifecycle.host_reference(), b"reference")
+            snapshot.assert_called_once_with(pid="1")
+            ids.side_effect = [{"mnt": [4, 1]}, {"mnt": [4, 2]}]
+            with self.assertRaisesRegex(ContractError, "manager namespaces"):
+                self.lifecycle.host_reference()
+            ids.side_effect = None
+            metadata.side_effect = [own, SimpleNamespace(st_dev=1, st_ino=3)]
+            with self.assertRaisesRegex(ContractError, "manager root"):
+                self.lifecycle.host_reference()
+
+    def test_host_snapshot_rejects_unknown_boot_identity(self):
+        with patch.object(self.lifecycle, "_namespace_ids", return_value={}), \
+                patch.object(self.lifecycle, "_host_paths", return_value={}), \
+                patch.object(Path, "read_text", return_value="unknown"):
+            with self.assertRaisesRegex(ContractError, "boot identity is invalid"):
+                self.lifecycle._host_snapshot()
+
+    def test_unreadable_host_evidence_is_not_an_empty_reference(self):
+        with patch.object(Path, "read_text", side_effect=PermissionError):
+            with self.assertRaisesRegex(ContractError, "ID mapping cannot be read"):
+                self.lifecycle._check_id_maps()
+        with patch("geniusnew.worker_service.os.open", side_effect=PermissionError):
+            with self.assertRaisesRegex(ContractError, "namespace state cannot be read"):
+                self.lifecycle._namespace_ids("self")
+        with self.host_reference(), patch("geniusnew.worker_service.os.read",
+                                          side_effect=PermissionError):
+            with self.assertRaisesRegex(ContractError, "host reference cannot be read"):
                 self.lifecycle._check_host_namespaces()
+
+    def test_host_snapshot_binds_the_open_lease_descriptor(self):
+        with tempfile.TemporaryFile() as lease, patch.object(
+                self.lifecycle, "_host_paths", return_value={"lease": "/nonexistent"}):
+            snapshot = json.loads(self.lifecycle._host_snapshot(lease_fd=lease.fileno()))
+            info = os.fstat(lease.fileno())
+            self.assertEqual(snapshot["paths"]["lease"], [info.st_dev, info.st_ino])
+
+    def test_unconfirmed_lease_reference_closes_the_new_descriptor(self):
+        descriptor = os.open(os.devnull, os.O_RDONLY)
+        try:
+            info = os.fstat(descriptor)
+            with patch.object(self.lifecycle, "_check_node"), \
+                    patch("geniusnew.worker_service.os.open", return_value=descriptor), \
+                    patch("geniusnew.worker_service.os.lstat", return_value=info), \
+                    patch("geniusnew.worker_service.fcntl.flock"), \
+                    patch.object(self.lifecycle, "_check_host_namespaces",
+                                 side_effect=ContractError("wrong lease")) as reference:
+                with self.assertRaisesRegex(ContractError, "wrong lease"):
+                    self.lifecycle.acquire()
+                reference.assert_called_once_with(lease_fd=descriptor)
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+        finally:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 
     def test_socket_unit_effective_profile_refuses_wrong_listener(self):
         properties = {"ActiveState": "active", "Accept": "yes",
