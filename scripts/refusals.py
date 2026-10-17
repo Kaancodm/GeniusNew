@@ -25,9 +25,9 @@ structured evidence while tests still pass because ContractError was raised.
 
 Shell scripts in the guarded list refuse with `die "..."`. Each such line is
 rewritten to `: "..."` — the message is still evaluated, but nothing stops —
-and the test module that runs the script must fail. Only that module runs per
-mutant (GUARDED_SHELL): the whole suite per line would take an hour, and no
-other module executes the script.
+and the test module that runs the script must fail. Standalone tools likewise
+use their dedicated test module per mutant. The unmutated baseline still runs
+the complete suite.
 
 This is deliberately not general-purpose mutation testing. Flipping arbitrary
 operators produces mutants that change nothing observable, and the survivors are
@@ -71,10 +71,12 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/anchor_process.py", "geniusnew/config.py",
            "geniusnew/__main__.py", "geniusnew/database.py",
            "geniusnew/audit_store.py", "tools/control_deck/actions.py",
+           "tools/ipad_llm.py",
            "ops/server/genius-server")
 
 # Guarded shell scripts and the one test module that runs each of them.
 GUARDED_SHELL = {"ops/server/genius-server": "test_server_tool.py"}
+GUARDED_TOOL_TESTS = {"tools/ipad_llm.py": "test_ipad_llm.py"}
 
 # Mutants run the tests that exercise each boundary. The unmutated baseline
 # still runs all tests; every selected test file must pass for a mutation to
@@ -94,6 +96,14 @@ GUARDED_PYTHON = {
     "geniusnew/config.py": ("test_config.py", "test_approver_config.py"),
     "geniusnew/__main__.py": ("test_persistent_audit_wiring.py", "test_serve.py"),
 }
+
+
+def _focused_tests(path: str) -> tuple[str, ...] | None:
+    focused = GUARDED_PYTHON.get(path)
+    if focused is not None:
+        return focused
+    standalone = GUARDED_SHELL.get(path) or GUARDED_TOOL_TESTS.get(path)
+    return (standalone,) if standalone else None
 
 # `die "` as a command, not as the German article inside a message, a comment
 # or the definition `die() {`.
@@ -280,8 +290,7 @@ def check(paths: list[str]) -> int:
             return 1
 
         focused_patterns = sorted({pattern for path in paths
-                                   for pattern in GUARDED_PYTHON.get(path, ())
-                                   or ((GUARDED_SHELL[path],) if path in GUARDED_SHELL else ())})
+                                   for pattern in _focused_tests(path) or ()})
         for pattern in focused_patterns:
             if not _suite_passes(workspace, show_failure=True, patterns=(pattern,)):
                 print(f"focused baseline {pattern} does not pass — fix that first",
@@ -297,10 +306,8 @@ def check(paths: list[str]) -> int:
             # not locate the refusal" after ten minutes of work.
             original = target.read_text()
             target.write_text(_disable(original, refusal))
-            focused = GUARDED_PYTHON.get(refusal.path)
-            shell_test = GUARDED_SHELL.get(refusal.path)
             survived = _suite_passes(workspace, failfast=True,
-                                     patterns=focused or ((shell_test,) if shell_test else None))
+                                     patterns=_focused_tests(refusal.path))
             target.write_text(original)
 
             mark = "SURVIVED" if survived else "caught  "
