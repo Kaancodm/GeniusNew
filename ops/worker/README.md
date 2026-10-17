@@ -4,8 +4,35 @@ Die beiden `.in`-Dateien beschreiben den getrennten Worker-Dienst. Sie sind im
 Repository weder installiert noch aktiviert. `@CORE_UID@`, `@WORKER_UID@`,
 `@WORKER_GID@` und `@SOCKET_GID@` müssen durch feste numerische Identitäten
 ersetzt werden. `@PYTHON@` ist der absolute, root-kontrollierte Interpreterpfad
-des Core; derselbe Interpreter und eine root-kontrollierte GeniusNew-Installation
-sind Voraussetzung für den Bootstrap.
+des Core; `@BOOTSTRAP@` ist der absolute Pfad zur installierten Datei
+`geniusnew/worker_bootstrap.py`. Core und Worker verwenden denselben **lexikalischen**
+Interpreterpfad; ein anderer Venv-Alias auf dasselbe Binary ist nicht zulässig.
+
+## Vertrauenswürdige Python-Installation
+
+Der Worker startet mit `-I -S @BOOTSTRAP@`. Der feste Bootstrap setzt ausschließlich
+sein Paket-Elternverzeichnis, die Standardbibliothek und das native Bibliotheks-
+verzeichnis als Importpfade. Er verarbeitet weder `.pth` noch `sitecustomize`.
+GeniusNew und die hash-gepinnten Abhängigkeiten müssen daher in dasselbe dedizierte
+`site-packages` einer **frisch erstellten, root-kontrollierten Laufzeit** installiert
+werden. Entwicklungs-Venvs und deren Startup-Hooks dürfen nicht übernommen werden.
+Die Runtime enthält keine Secrets, Konfiguration oder Ankerdateien.
+
+Der Core startet mit `-I`. Vor seinem allerersten Start und vor dem Python-Aufruf
+zur Erzeugung der Hostreferenz muss der Host-Installer bereits Interpreter, Venv-
+Konfiguration, Standardbibliothek, native Bibliotheken und Paketbaum einschließlich
+Symlink-Zielen und aller Elternverzeichnisse gegen fremde Schreibrechte absichern.
+Eine Python-Prüfung nach dem Import kann den eigenen Interpreterstart nicht
+nachträglich vertrauenswürdig machen. Root und der Host-Installer bleiben TCB.
+
+Vor Connect prüft der Core diese vollständigen Laufzeitbäume erneut, einschließlich
+aller Dateitypen, jeder Zwischenstation einer Symlink-Kette, `pyvenv.cfg`,
+der bestehenden Importpfade und der Eltern fehlender
+ZIP-Suchpfade. `._pth`-Overrides sind nicht erlaubt. Die Landlock-Allowlist verwendet
+weiterhin nur das GeniusNew-Paket, das konkrete Cryptography-Paket und die Python-
+Laufzeit; das Elternverzeichnis eines Quellpakets wird nicht zusätzlich lesbar.
+Der echte Diensttest muss den Bootstrap und den festen Summarizer mit dieser
+Installation ausführen.
 
 Der Core prüft vor dem Listener und erneut vor jedem Job die geladenen Unit-
 Dateien ohne Drop-ins, den installierten Code, den Socket unter
@@ -32,7 +59,7 @@ Methode verlangt Host-Root, die volle UID-/GID-Abbildung, dieselben vier
 Namespaces und denselben Prozess-Root wie PID 1 sowie geprüfte Lease-, Runtime-
 und Installationspfade. Sie erzeugt selbst keine Datei. Nach Einrichtung der
 Lease und des Runtime-Verzeichnisses führt der freigegebene Host-Bootpfad mit
-dem root-kontrollierten Interpreter und der installierten Version beispielsweise
+dem root-kontrollierten Interpreter, `-I` und der installierten Version beispielsweise
 folgenden Python-Code aus; die Platzhalter entsprechen denen der Unit-Vorlagen:
 
 ```python
@@ -79,8 +106,8 @@ keine eigenen Namespaces erzeugen. Dieser zusätzliche Betriebsvertrag muss in
 Claudes echter UID-/systemd-Probe nachgewiesen werden; die Unit- und Mock-Tests
 geben ihn nicht für den Betrieb frei.
 
-Eine Installation und Aktivierung sind Produktionsänderungen und brauchen Kaans
-gesondertes GO nach `docs/EXECUTION-GATES.md`. Bis Claudes echte UID-/systemd-
+Eine Installation und Aktivierung brauchen Kaans ausdrückliches GO gemäß
+`AGENTS.md`. Kaan hat dieses GO für PR #140 am 17.10.2026 erteilt. Bis Claudes echte UID-/systemd-
 Probe alle Gates besteht und Gemini den exakten Implementierungs-Head geprüft
 hat, bleibt die Betriebsabnahme **HOLD**. Die Python-Tests und Unit-Vorlagen
 ersetzen diesen Systemnachweis nicht.

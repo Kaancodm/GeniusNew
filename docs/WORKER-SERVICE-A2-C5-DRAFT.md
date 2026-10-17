@@ -1,10 +1,11 @@
 # A2/C5: Getrennter Worker-Dienst und Betriebsvertrag
 
-**Status: IMPLEMENTIERUNG IN DRAFT-PR #140; SYSTEMABNAHME HOLD.** Dieser Entwurf
+**Status: IMPLEMENTIERUNG IN PR #140; SYSTEMABNAHME HOLD.** Dieser Entwurf
 basierte ursprünglich auf `main` `62b6d1966da5e30fe71f230629a48dea369ae62c`
 vom 08.10.2026. Nach der Design-Freigabe vom 09.10.2026 hat Kaan am 17.10.2026
 die reversible Implementierung des getrennten Worker-Pfads in PR #140 beauftragt.
-Die Unit-Vorlagen werden hier nicht installiert oder aktiviert. Der Serverpfad
+Kaan hat anschließend Merge, Installation und Aktivierung ausdrücklich beauftragt;
+diese Freigabe ersetzt keine erfolgreiche Systemabnahme. Der Serverpfad
 bleibt bis zur unabhängigen Gemini-Prüfung und einer bestandenen echten
 UID-/systemd-Probe ohne Betriebsabnahme. Der Entwurf ergänzt den bestehenden
 [C5-Betriebsentwurf in PR #117](https://github.com/Kaancodm/GeniusNew/pull/117),
@@ -259,9 +260,9 @@ auditierter Ablauf; dieser Entwurf erzeugt oder rotiert keine Schlüssel.
 | `geniusnew-anchor` | Eigener Zustandsordner und vorhandener Anker-Socket gemäß C2. | Worker-Socket-Gruppe, Core-DB-Rolle und Worker-Dateien. |
 | `root`/systemd | Anlage der statischen Nutzer, eng begrenzten Gruppe und Socket-/Service-Units erst nach separatem Betriebs-GO. | Laufende Job-Entscheidungen oder Kenntnis der Anwendungs-Payloads im normalen Betrieb. |
 
-Die konkrete Nutzer-/Gruppenanlage und Unit-Dateien wären Änderungen an der
-Sicherheitskonfiguration. Sie sind **nicht** Teil der aktuellen Freigabe. Eine
-spätere Installation muss zusätzlich belegen, dass `geniusnew-worker` weder
+Die konkrete Nutzer-/Gruppenanlage und Unit-Dateien ändern die
+Sicherheitskonfiguration. Kaans ergänzendes Betriebs-GO vom 17.10.2026 autorisiert
+diese Arbeiten; eine Installation muss zusätzlich belegen, dass `geniusnew-worker` weder
 `peer`-Zugang als Core noch Leserechte auf Core- oder Anker-Dateien erlangt.
 
 ## Bedrohungsmodell und negative Nachweise
@@ -307,20 +308,38 @@ produktive Rechte oder installierte Dienste.
 
 | Datei/Ort | Umgesetzter Zweck |
 | --- | --- |
-| `geniusnew/worker_service.py`, `geniusnew/wiring.py`, `geniusnew/config.py` | Fester Service-Runner im `serve`-Pfad, UID-/systemd-/Cgroup-Prüfung, Lease, versioniertes IPC mit Kernel-Credentials und Nonce; kein lokaler Fallback. |
+| `geniusnew/worker_service.py`, `geniusnew/worker_bootstrap.py`, `geniusnew/wiring.py`, `geniusnew/config.py` | Fester Service-Runner im `serve`-Pfad, UID-/systemd-/Cgroup-Prüfung, Lease, versioniertes IPC mit Kernel-Credentials und Nonce; kein lokaler Fallback. |
 | `geniusnew/isolation.py`, `geniusnew/workers.py` | Bestehende Landlock-/Seccomp-/Ressourcenbegrenzung im Dienst, Fehler der vertrauenswürdigen Grenze ohne signierbares Worker-Ergebnis. |
 | `tests/test_worker_service.py`, vorhandene Kern- und Servertests, `scripts/refusals.py` | Negativfälle für Profil, Transport, Antworten und Lifecycle sowie Mutation jeder neuen Ablehnung. |
 | `ops/worker/` | Nicht installierte Socket- und Dienstvorlagen mit getrennten numerischen UIDs und festen Rechten. |
 
-**HOLD:** Claudes jüngste statische Probe vom 17.10.2026 hat
-`full_systemd_probe_executed=false`; die letzte echte systemd-Probe blieb HOLD.
-Die Vorlage und `systemctl show` belegen die konfigurierte Syscall-Sperre, aber
-erst eine echte Probe belegt ihre Kernelwirkung, zwei verschiedene UIDs,
-Credential- und Invocation-Bindung, Crash-/Neustart-Reconciliation und die
-vollständige Bereinigung auf dem Zielhost. Ein Mock ersetzt diesen Nachweis
-nicht. Die Dienstinstallation, Rechteänderung, Produktion, Release und der
-Merge nach `main` brauchen Kaans gesondertes GO. Gemini prüft den exakten
-Implementierungs-Head unabhängig.
+**HOLD:** [Claudes neue Probe in PR #144](https://github.com/Kaancodm/GeniusNew/pull/144)
+am Head `e86eed73c8e4a6c1de5dbd4d89a4d3f99bf34a74` meldet zweimal 30/30 PASS
+in einem verschachtelten systemd-Labor. Die Rohberichte samt SHA-256 fehlen im
+PR zum Zeitpunkt der Integration; diese Angabe ist daher ein gemeldetes Ergebnis,
+kein hier unabhängig verifizierter Abnahmenachweis. Der Zielhost ist weiterhin
+UNKNOWN. Die Probe verwendet eigene synthetische Core-/Worker-Programme. Sie
+führt weder den tatsächlichen GeniusNew-Dienst noch dessen Hostreferenz,
+PIDFD-Bindung, Landlock/Seccomp oder festen `-I -S`-Bootstrap aus.
+
+Für die Betriebsabnahme fehlen deshalb weiterhin die Rohberichte und ein Lauf
+am finalen Implementierungs-Head mit echten unterschiedlichen UIDs, geladenen
+Produktionsvorlagen, geprüftem Python-Installationsbaum und bootgebundener
+Hostreferenz. Dieser Lauf muss Credential-/Invocation-/PIDFD-Bindung, Sandbox,
+Crash-/Neustart-Reconciliation und vollständige Bereinigung auf dem Zielhost
+belegen. Ein Mock oder der synthetische Laborlauf ersetzt ihn nicht.
+Kaans gesondertes GO für Merge, Installation und Aktivierung liegt vor.
+Die Betriebsabnahme bleibt vom echten Nachweis abhängig. Kaan hat für diesen PR
+Gemini 4 Argon als Ersatz für Gemini Pro und Copilot autorisiert; das unabhängige
+Review muss den exakten Implementierungs-Head nennen.
+
+Der Dienst verwendet einen festen absoluten Bootstrap mit `python -I -S`;
+Startup-Hooks aus `.pth` und `sitecustomize` werden nicht ausgeführt. Der Core
+prüft die vollständigen root-kontrollierten Python-Laufzeitbäume vor Connect.
+Der Host-Installer muss deren Vertrauenswürdigkeit schon vor dem ersten Core-
+oder Root-Python-Start herstellen. Einzelheiten und Platzhalter stehen in
+[`ops/worker/README.md`](../ops/worker/README.md). Die Landlock-Leserechte auf
+Paket und Python-Laufzeit werden dadurch nicht auf Quellpaket-Nachbarn erweitert.
 
 Der Job-Wall-Timer im Dienst ist ein Python-Signal und kann von untrusted
 Worker-Code manipuliert werden. Der Core verweigert eine Antwort nach der

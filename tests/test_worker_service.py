@@ -8,6 +8,7 @@ import json
 import socket
 import stat
 import struct
+import subprocess
 import sys
 import tempfile
 import threading
@@ -20,6 +21,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 from geniusnew.contracts import ContractError, canonical
 from geniusnew.worker_service import (
+    _BOOTSTRAP,
     FrameIdentity,
     WorkerLifecycle,
     WorkerServiceProfile,
@@ -398,13 +400,14 @@ class WorkerBootstrapTest(unittest.TestCase):
             self.assertFalse(handle.closed)
 
     def test_worker_requires_all_identity_fields_and_zero_capabilities(self):
-        uid, gid = os.geteuid(), os.getegid()
+        uid, gid = 20002, 20002
         status = (f"Uid:\t{uid}\t{uid}\t{uid}\t{uid}\n"
                   f"Gid:\t{gid}\t{gid}\t{gid}\t{gid}\n"
                   "NoNewPrivs:\t1\nCapInh:\t0\nCapPrm:\t0\nCapEff:\t0\n"
                   "CapBnd:\t0\nCapAmb:\t0\n")
-        with patch("os.getgroups", return_value=[]), patch.object(
-                Path, "read_text", return_value=status):
+        with patch("os.geteuid", return_value=uid), patch("os.getegid", return_value=gid), \
+                patch("os.getgroups", return_value=[]), patch.object(
+                    Path, "read_text", return_value=status):
             _assert_worker_identity(uid, gid)
             for changed in (status.replace("CapAmb:\t0", "CapAmb:\t1"),
                             status.replace(f"Gid:\t{gid}", f"Gid:\t{gid + 1}", 1),
@@ -416,6 +419,12 @@ class WorkerBootstrapTest(unittest.TestCase):
             with patch("os.geteuid", return_value=uid + 1):
                 with self.assertRaisesRegex(ContractError, "unexpected OS identity"):
                     _assert_worker_identity(uid, gid)
+
+    def test_worker_root_identity_is_never_accepted(self):
+        with patch("os.geteuid", return_value=0), patch("os.getegid", return_value=0), \
+                patch("os.getgroups", return_value=[]):
+            with self.assertRaisesRegex(ContractError, "unexpected OS identity"):
+                _assert_worker_identity(0, 0)
 
     def test_stdout_and_stderr_must_be_null_devices(self):
         real_fstat = os.fstat
@@ -492,9 +501,15 @@ class WorkerBootstrapTest(unittest.TestCase):
 
 
 class ProfileTest(unittest.TestCase):
+    def test_profile_fixture_does_not_inherit_root_ids(self):
+        with patch("os.geteuid", return_value=0), patch("os.getegid", return_value=0):
+            profile = self.profile()
+        self.assertGreater(profile.core_uid, 0)
+        self.assertGreater(profile.socket_gid, 0)
+
     def profile(self, **changed):
-        fields = {"core_uid": os.geteuid(), "worker_uid": os.geteuid() + 1,
-                  "worker_gid": os.getegid() + 1, "socket_gid": os.getegid(),
+        fields = {"core_uid": 20001, "worker_uid": 20002,
+                  "worker_gid": 20002, "socket_gid": 20003,
                   "socket_path": "/run/geniusnew/worker.sock",
                   "lease_path": "/run/geniusnew/worker.lease"}
         fields.update(changed)
@@ -502,11 +517,11 @@ class ProfileTest(unittest.TestCase):
 
     def test_core_and_worker_must_have_distinct_fixed_uids(self):
         with self.assertRaisesRegex(ContractError, "different UIDs"):
-            self.profile(worker_uid=os.geteuid())
+            self.profile(worker_uid=self.profile().core_uid)
 
     def test_worker_cannot_belong_to_socket_group(self):
         with self.assertRaisesRegex(ContractError, "Core-only socket group"):
-            self.profile(worker_gid=os.getegid())
+            self.profile(worker_gid=self.profile().socket_gid)
 
     def test_profile_rejects_bad_ids_paths_and_deadlines(self):
         for changed, reason in (
@@ -527,17 +542,16 @@ class ProfileTest(unittest.TestCase):
                 ("/run/geniusnew/worker.sock", "/tmp/worker.lease")):
             with self.subTest(socket_path=socket_path, lease_path=lease_path):
                 with self.assertRaises(ContractError):
-                    WorkerServiceProfile(core_uid=os.geteuid(), worker_uid=os.geteuid() + 1,
-                                         worker_gid=os.getegid() + 1,
-                                         socket_gid=os.getegid(),
+                    WorkerServiceProfile(core_uid=20001, worker_uid=20002,
+                                         worker_gid=20002, socket_gid=20003,
                                          socket_path=socket_path, lease_path=lease_path)
 
 
 class LifecycleRefusalTest(unittest.TestCase):
     def setUp(self):
         self.profile = WorkerServiceProfile(
-            core_uid=os.geteuid(), worker_uid=os.geteuid() + 1,
-            worker_gid=os.getegid() + 1, socket_gid=os.getegid(),
+            core_uid=20001, worker_uid=20002,
+            worker_gid=20002, socket_gid=20003,
             socket_path="/run/geniusnew-worker/ipc/worker.sock",
             lease_path="/run/geniusnew-worker/ipc/lease")
         self.lifecycle = WorkerLifecycle(self.profile)
@@ -608,6 +622,196 @@ class LifecycleRefusalTest(unittest.TestCase):
             path.write_text("# test\n")
             with self.assertRaisesRegex(ContractError, "not root controlled"):
                 self.lifecycle._root_controlled(path, regular=True)
+
+    def test_installed_paths_check_every_intermediate_symlink_target(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("safe", "user", "fixed"):
+                (root / name).mkdir()
+            (root / "safe/link").symlink_to("../user/relay")
+            (root / "user/relay").symlink_to("../fixed")
+            executable = root / "fixed/python"
+            executable.write_bytes(b"interpreter")
+            entry = root / "safe/link/python"
+            real_lstat = Path.lstat
+            for unsafe in (None, root / "user", root / "user/relay"):
+                def metadata(path):
+                    info = real_lstat(path)
+                    # Only ownership is synthetic; links and paths are real.
+                    owner = 1000 if path == unsafe else 0
+                    mode = info.st_mode if stat.S_ISLNK(info.st_mode) else (
+                        stat.S_IFMT(info.st_mode) | 0o755)
+                    return SimpleNamespace(st_uid=owner, st_mode=mode)
+                with self.subTest(unsafe=unsafe), patch.object(
+                        Path, "lstat", autospec=True, side_effect=metadata):
+                    if unsafe is None:
+                        self.lifecycle._root_controlled(entry, regular=True)
+                        with self.assertRaisesRegex(ContractError, "not root controlled"):
+                            self.lifecycle._root_controlled(entry.parent / "..", regular=True)
+                    else:
+                        with self.assertRaisesRegex(ContractError, "not root controlled"):
+                            self.lifecycle._root_controlled(entry, regular=True)
+
+    def test_installed_paths_bound_symlink_traversal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "end").write_bytes(b"interpreter")
+            for index in range(41):
+                (root / str(index)).symlink_to(str(index + 1) if index < 40 else "end")
+            real_lstat = Path.lstat
+            def metadata(path):
+                info = real_lstat(path)
+                mode = (info.st_mode if stat.S_ISLNK(info.st_mode)
+                        else stat.S_IFMT(info.st_mode) | 0o755)
+                return SimpleNamespace(st_uid=0, st_mode=mode)
+            with patch.object(Path, "lstat", autospec=True, side_effect=metadata):
+                self.lifecycle._root_controlled(root / "1", regular=True)
+                with self.assertRaisesRegex(ContractError, "too many symlinks"):
+                    self.lifecycle._root_controlled(root / "0", regular=True)
+
+    def test_installation_checks_the_python_runtime_before_worker_start(self):
+        with patch.object(self.lifecycle, "_root_controlled"), patch.object(
+                self.lifecycle, "_check_python_runtime",
+                side_effect=ContractError("unsafe Python runtime")):
+            with self.assertRaisesRegex(ContractError, "unsafe Python runtime"):
+                self.lifecycle._check_installation()
+
+    def test_runtime_tree_checks_all_files_including_symlink_targets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory, "runtime")
+            target = Path(directory, "extensions")
+            root.mkdir()
+            target.mkdir()
+            (root / "linked").symlink_to(target, target_is_directory=True)
+            for name in ("sitecustomize.py", "startup.pth", "native.so", "python.zip"):
+                unsafe = target / name
+                unsafe.write_bytes(b"canary")
+                def inspect(path, *, regular):
+                    if path.resolve() == unsafe:
+                        raise ContractError("unsafe runtime leaf")
+                with self.subTest(name=name), patch.object(
+                        self.lifecycle, "_root_controlled", side_effect=inspect):
+                    with self.assertRaisesRegex(ContractError, "unsafe runtime leaf"):
+                        self.lifecycle._check_runtime_tree(root)
+                unsafe.unlink()
+
+    def test_python_runtime_requires_isolated_core_startup(self):
+        with patch("geniusnew.worker_service.sys.flags", SimpleNamespace(isolated=0)):
+            with self.assertRaisesRegex(ContractError, "isolated Python"):
+                self.lifecycle._check_python_runtime()
+
+    @contextmanager
+    def python_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix, base = root / "venv", root / "base"
+            app, stdlib, native = prefix / "site-packages", base / "stdlib", base / "dynload"
+            for path in (prefix / "bin", base / "lib", app, stdlib, native):
+                path.mkdir(parents=True, exist_ok=True)
+            executable = prefix / "bin/python"
+            executable.write_bytes(b"interpreter")
+            with patch.object(self.lifecycle, "_root_controlled") as inspect, \
+                    patch("geniusnew.worker_service.sys.flags", SimpleNamespace(isolated=1)), \
+                    patch("geniusnew.worker_service.sys.executable", str(executable)), \
+                    patch("geniusnew.worker_service.sys._base_executable", str(executable)), \
+                    patch("geniusnew.worker_service.sys.prefix", str(prefix)), \
+                    patch("geniusnew.worker_service.sys.exec_prefix", str(prefix)), \
+                    patch("geniusnew.worker_service.sys.base_prefix", str(base)), \
+                    patch("geniusnew.worker_service.sys.base_exec_prefix", str(base)), \
+                    patch("geniusnew.worker_service.sys.path", [str(base / "python.zip")]), \
+                    patch("geniusnew.worker_service.sysconfig.get_config_var",
+                          return_value=str(base / "lib")), \
+                    patch("geniusnew.worker_service._python_runtime_paths",
+                          return_value=tuple(map(str, (app, stdlib, native)))):
+                yield root, inspect
+
+    def test_python_runtime_checks_venv_configuration_and_missing_zip_parent(self):
+        with self.python_runtime() as (root, inspect):
+            configuration = root / "venv/pyvenv.cfg"
+            configuration.write_text("home = /fixed/base\n")
+            self.lifecycle._check_python_runtime()
+            inspect.assert_any_call(configuration, regular=True)
+            inspect.assert_any_call(root / "base", regular=False)
+            def unsafe(path, *, regular):
+                if path == configuration:
+                    raise ContractError("unsafe venv configuration")
+            inspect.side_effect = unsafe
+            with self.assertRaisesRegex(ContractError, "unsafe venv configuration"):
+                self.lifecycle._check_python_runtime()
+
+    def test_python_runtime_refuses_path_overrides_and_relative_paths(self):
+        with self.python_runtime() as (root, _):
+            override = root / "base/lib/python313._pth"
+            override.write_text("/tmp/worker-owned\nimport site\n")
+            with self.assertRaisesRegex(ContractError, "path overrides are forbidden"):
+                self.lifecycle._check_python_runtime()
+            override.unlink()
+            with patch("geniusnew.worker_service.sys.path", [""]):
+                with self.assertRaisesRegex(ContractError, "fixed and absolute"):
+                    self.lifecycle._check_python_runtime()
+
+    def test_unreadable_runtime_tree_and_startup_state_refuse(self):
+        with patch.object(Path, "stat", side_effect=PermissionError):
+            with self.assertRaisesRegex(ContractError, "runtime cannot be inspected"):
+                self.lifecycle._check_runtime_tree(Path("/runtime"))
+        with self.python_runtime(), patch.object(Path, "lstat", side_effect=PermissionError):
+            with self.assertRaisesRegex(ContractError, "startup state cannot be inspected"):
+                self.lifecycle._check_python_runtime()
+        with self.python_runtime(), patch("os.listdir", side_effect=PermissionError):
+            with self.assertRaisesRegex(ContractError, "startup state cannot be inspected"):
+                self.lifecycle._check_python_runtime()
+
+    def test_worker_bootstrap_ignores_site_hooks_and_selects_its_fixed_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "geniusnew"
+            package.mkdir()
+            (package / "__init__.py").write_text("")
+            bootstrap = package / "worker_bootstrap.py"
+            bootstrap.write_bytes(Path(_BOOTSTRAP).read_bytes())
+            marker = root / "hook-ran"
+            hook = f"open({str(marker)!r}, 'w').write('unsafe')\n"
+            (root / "sitecustomize.py").write_text(hook)
+            (root / "startup.pth").write_text("import sitecustomize\n")
+            (package / "worker_service.py").write_text(
+                "import sys\nprint(sys.flags.isolated, sys.flags.no_site, 'site' in sys.modules)\n")
+            completed = subprocess.run([sys.executable, "-I", "-S", str(bootstrap)],
+                                       capture_output=True, text=True, timeout=5)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.stdout.strip(), "1 1 False")
+            self.assertFalse(marker.exists())
+
+    def test_service_landlock_does_not_expose_siblings_of_its_package(self):
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            package = parent / "app/geniusnew"
+            package.mkdir(parents=True)
+            sibling = parent / "app/core-secret"
+            sibling.write_text("SYNTHETIC-CANARY")
+            job = parent / "job"
+            job.mkdir()
+            script = """
+import os, sys
+from pathlib import Path
+import geniusnew.worker_service as service
+from geniusnew.isolation import _install_filesystem_rules
+service.__file__ = sys.argv[1]
+paths = service._service_read_paths()
+assert str(Path(service.__file__).parent.parent) not in paths
+_install_filesystem_rules(sys.argv[2], paths)
+try:
+    descriptor = os.open(sys.argv[3], os.O_RDONLY)
+except PermissionError:
+    print("DENIED")
+else:
+    os.close(descriptor)
+    raise AssertionError("package sibling became readable")
+"""
+            completed = subprocess.run(
+                [sys.executable, "-c", script, str(package / "worker_service.py"),
+                 str(job), str(sibling)], capture_output=True, text=True, timeout=5)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.stdout.strip(), "DENIED")
 
     def test_template_must_be_loaded_without_dropins_or_pending_reload(self):
         properties = {"LoadState": "loaded", "FragmentPath":
@@ -787,6 +991,7 @@ class LifecycleRefusalTest(unittest.TestCase):
                   "NoNewPrivs:\t1\nCapInh:\t0\nCapPrm:\t0\nCapEff:\t0\n"
                   "CapBnd:\t0\nCapAmb:\t0\n")
         with patch("os.getuid", return_value=uid), patch("os.geteuid", return_value=uid), \
+                patch("os.getgid", return_value=self.profile.socket_gid), \
                 patch("os.getgroups", return_value=[]), patch.object(
                     Path, "read_text", return_value=status):
             self.lifecycle._check_core_identity()
@@ -1030,12 +1235,15 @@ class LifecycleRefusalTest(unittest.TestCase):
                     self.lifecycle._check_instance_settings({**settings, key: wrong}, "one")
 
     def test_execstart_cannot_select_another_module_or_identity(self):
-        command = ("{ path=" + sys.executable + " ; argv[]=" + sys.executable + " -I -m "
-                   "geniusnew.worker_service --core-uid " + str(self.profile.core_uid)
+        command = ("{ path=" + sys.executable + " ; argv[]=" + sys.executable + " -I -S "
+                   + _BOOTSTRAP + " --core-uid " + str(self.profile.core_uid)
                    + " --worker-uid " + str(self.profile.worker_uid)
                    + " --worker-gid " + str(self.profile.worker_gid)
                    + " ; ignore_errors=no ; start_time=[n/a] }")
-        with patch.object(self.lifecycle, "_root_controlled"):
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+                self.lifecycle, "_root_controlled"):
+            alias = Path(directory, "same-python")
+            alias.symlink_to(sys.executable)
             self.lifecycle._check_exec(command)
             for changed, reason in (
                     (command[2:-2], "ExecStart is malformed"),
@@ -1046,7 +1254,9 @@ class LifecycleRefusalTest(unittest.TestCase):
                      "ExecStart is ambiguous"),
                     (command.replace("ignore_errors=no", "ignore_errors=yes"),
                      "ExecStart is not fixed"),
-                    (command.replace("geniusnew.worker_service", "evil.worker"),
+                    (command.replace(_BOOTSTRAP, "/evil/worker.py"),
+                     "arguments are not fixed"),
+                    (command.replace(sys.executable, str(alias)),
                      "arguments are not fixed")):
                 with self.subTest(reason=reason), self.assertRaisesRegex(ContractError,
                                                                           reason):
@@ -1058,7 +1268,7 @@ class LifecycleRefusalTest(unittest.TestCase):
                         "@WORKER_UID@": str(self.profile.worker_uid),
                         "@WORKER_GID@": str(self.profile.worker_gid),
                         "@SOCKET_GID@": str(self.profile.socket_gid),
-                        "@PYTHON@": sys.executable}
+                        "@PYTHON@": sys.executable, "@BOOTSTRAP@": _BOOTSTRAP}
         with tempfile.TemporaryDirectory() as directory, patch.object(
                 self.lifecycle, "_root_controlled"):
             for name in ("geniusnew-worker@.service", "geniusnew-worker.socket"):
@@ -1085,7 +1295,7 @@ class LifecycleRefusalTest(unittest.TestCase):
                         ("\n".join("ExecStart=" if line.startswith("ExecStart=")
                                    else line for line in source.splitlines()) + "\n",
                          "service has no fixed bootstrap"),
-                        (source.replace("geniusnew.worker_service", "evil.worker"),
+                        (source.replace(_BOOTSTRAP, "/evil/worker.py"),
                          "service bootstrap is not fixed"),
                     )
                 else:
@@ -1121,8 +1331,8 @@ class RunnerBoundaryTest(unittest.TestCase):
         self.addCleanup(self.core.close)
         self.addCleanup(self.worker.close)
         self.profile = WorkerServiceProfile(
-            core_uid=os.geteuid(), worker_uid=os.geteuid() + 1,
-            worker_gid=os.getegid() + 1, socket_gid=os.getegid(),
+            core_uid=20001, worker_uid=20002,
+            worker_gid=20002, socket_gid=20003,
             socket_path="/run/geniusnew-worker/ipc/worker.sock",
             lease_path="/run/geniusnew-worker/ipc/lease")
         self.lifecycle = Mock(spec=WorkerLifecycle)
@@ -1180,6 +1390,9 @@ class RunnerBoundaryTest(unittest.TestCase):
         self.lifecycle.acquire.assert_called_once()
 
     def test_wrong_kernel_uid_gets_no_request_payload(self):
+        if self.profile.worker_uid == os.geteuid():
+            self.runner.profile = WorkerServiceProfile(**{
+                **vars(self.profile), "worker_uid": os.geteuid() + 1})
         received = []
 
         def fake_service():
@@ -1205,10 +1418,8 @@ class RunnerBoundaryTest(unittest.TestCase):
     def test_one_valid_protocol_result_waits_for_cleanup_before_return(self):
         # This exercises framing and sequencing under one UID. Distinct UID and
         # systemd acceptance are established only by the separate real probe.
-        self.runner.profile = WorkerServiceProfile(
-            core_uid=os.geteuid() + 1, worker_uid=os.geteuid(),
-            worker_gid=os.getegid(), socket_gid=os.getegid() + 1,
-            socket_path=self.profile.socket_path, lease_path=self.profile.lease_path)
+        self.runner.profile = SimpleNamespace(**{
+            **vars(self.profile), "worker_uid": os.geteuid(), "worker_gid": os.getegid()})
         self.lifecycle.bind.return_value = object()
         self.lifecycle.await_end.side_effect = ContractError("cleanup unreadable")
         saw_request = []
@@ -1223,10 +1434,8 @@ class RunnerBoundaryTest(unittest.TestCase):
         self.lifecycle.await_end.assert_called_once()
 
     def test_result_is_returned_only_after_authenticated_eof_and_cleanup(self):
-        self.runner.profile = WorkerServiceProfile(
-            core_uid=os.geteuid() + 1, worker_uid=os.geteuid(),
-            worker_gid=os.getegid(), socket_gid=os.getegid() + 1,
-            socket_path=self.profile.socket_path, lease_path=self.profile.lease_path)
+        self.runner.profile = SimpleNamespace(**{
+            **vars(self.profile), "worker_uid": os.geteuid(), "worker_gid": os.getegid()})
         self.lifecycle.bind.return_value = object()
         seen = []
         thread = threading.Thread(target=self._valid_response, args=(seen,))
@@ -1242,10 +1451,7 @@ class RunnerBoundaryTest(unittest.TestCase):
             os.fstat(self.lease)
 
     def test_ready_requires_a_bound_live_sender_before_request(self):
-        profile = WorkerServiceProfile(
-            core_uid=os.geteuid() + 1, worker_uid=os.geteuid(),
-            worker_gid=os.getegid(), socket_gid=os.getegid() + 1,
-            socket_path=self.profile.socket_path, lease_path=self.profile.lease_path)
+        profile = self.profile
         lifecycle = Mock(spec=WorkerLifecycle)
         nonce = "a" * 64
         result = {"kind": "RESULT", "version": 1, "nonce": nonce,
@@ -1277,10 +1483,7 @@ class RunnerBoundaryTest(unittest.TestCase):
                 exchange.run()
 
     def test_core_result_deadline_also_enforces_worker_wall_limit(self):
-        profile = WorkerServiceProfile(
-            core_uid=os.geteuid() + 1, worker_uid=os.geteuid(),
-            worker_gid=os.getegid(), socket_gid=os.getegid() + 1,
-            socket_path=self.profile.socket_path, lease_path=self.profile.lease_path)
+        profile = self.profile
         nonce = "a" * 64
         deadlines = []
         def read(_connection, *, deadline, identity, **_kwargs):

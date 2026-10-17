@@ -7,6 +7,7 @@ or anchor state. A systemd instance and its cleanup remain separate prerequisite
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from dataclasses import asdict
 import argparse
@@ -27,16 +28,18 @@ import stat
 import struct
 import subprocess
 import sys
+import sysconfig
 import time
 from typing import Any
 
 from .contracts import ContractError, canonical
 from .isolation import IsolationLimits
 from .isolation import (_SandboxDenied, _audit_hook, _install_filesystem_rules,
-                        _install_process_filter, _read_paths, _set_resource_limits)
+                        _install_process_filter, _set_resource_limits)
 from .results import WorkerAuthority
 from .workers import (DeterministicSummarizer, WorkerBoundaryError, WorkerRunner,
                       _WorkerIsolationViolation, _WorkerResourceExhausted)
+from .worker_bootstrap import runtime_paths as _python_runtime_paths
 
 _VERSION = 1
 _HELLO_LIMIT = 256
@@ -48,6 +51,7 @@ _FD = struct.Struct("i")
 _HEADER = struct.Struct("!I")
 _HOST_REFERENCE = "/run/geniusnew-worker/ipc/host-state.json"
 _HOST_NAMESPACES = ("mnt", "pid", "user", "cgroup")
+_BOOTSTRAP = str(Path(__file__).with_name("worker_bootstrap.py"))
 _CONTROL_BYTES = (socket.CMSG_SPACE(_UCREDS.size)
                   + socket.CMSG_SPACE(_FD.size * 8)
                   + socket.CMSG_SPACE(_FD.size))
@@ -369,36 +373,112 @@ class WorkerLifecycle:
         try:
             if not path.is_absolute():
                 _fail("worker installed path is not absolute")
-            resolved = path.resolve(strict=True)
-            for candidate in (path, resolved):
-                current = Path("/")
-                for part in candidate.parts[1:]:
-                    current /= part
-                    info = current.lstat()
-                    link = stat.S_ISLNK(info.st_mode)
-                    if (info.st_uid != 0 or (not link and info.st_mode & 0o022)
-                            or not (stat.S_ISREG(info.st_mode) or link
-                                    if current == candidate and regular
-                                    else stat.S_ISDIR(info.st_mode) or link)):
-                        _fail("worker installed path is not root controlled")
+            current = Path("/")
+            pending = deque((".", *path.parts[1:]))
+            links = 0
+            while pending:
+                part = pending.popleft()
+                candidate = current.parent if part == ".." else current / part
+                info = candidate.lstat()
+                link = stat.S_ISLNK(info.st_mode)
+                expected = stat.S_ISDIR if pending or not regular else stat.S_ISREG
+                if (info.st_uid != 0 or (not link and info.st_mode & 0o022)
+                        or not (link or expected(info.st_mode))):
+                    _fail("worker installed path is not root controlled")
+                if link:
+                    links += 1
+                    if links > 40:
+                        _fail("worker installed path has too many symlinks")
+                    target = candidate.readlink()
+                    # Inspect every link target before following its suffix.
+                    # resolve() alone hides mutable intermediate link parents.
+                    if target.is_absolute():
+                        current = Path("/")
+                        parts = (".", *target.parts[1:])
+                    else:
+                        parts = target.parts or (".",)
+                    pending.extendleft(reversed(parts))
+                else:
+                    current = candidate
         except (OSError, RuntimeError) as exc:
             raise ContractError("worker installed path cannot be inspected") from exc
+
+    def _check_runtime_tree(self, path: Path) -> None:
+        # Follow directory aliases as imports do, but visit each inode once so
+        # a root-owned symlink cycle cannot make the inspection unbounded.
+        pending = [path]
+        seen = set()
+        try:
+            while pending:
+                current = pending.pop()
+                info = current.stat()
+                directory = stat.S_ISDIR(info.st_mode)
+                self._root_controlled(current, regular=not directory)
+                identity = (info.st_dev, info.st_ino)
+                if directory and identity not in seen:
+                    seen.add(identity)
+                    pending.extend(current.iterdir())
+        except (OSError, RuntimeError) as exc:
+            raise ContractError("worker Python runtime cannot be inspected") from exc
+
+    def _check_optional_runtime_path(self, path: Path) -> None:
+        # CPython includes a zip search slot even when that archive is absent.
+        # Its nearest existing parent must prevent an untrusted future insert.
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            parent = path.parent
+            while True:
+                try:
+                    parent.lstat()
+                    break
+                except FileNotFoundError:
+                    parent = parent.parent
+            self._root_controlled(parent, regular=False)
+        else:
+            self._check_runtime_tree(path)
+
+    def _check_python_runtime(self) -> None:
+        if sys.flags.isolated != 1:
+            _fail("Core requires isolated Python startup")
+        try:
+            executables = {Path(sys.executable), Path(sys._base_executable)}
+            directories = {Path(sys.prefix), Path(sys.base_prefix),
+                           Path(sys.exec_prefix), Path(sys.base_exec_prefix),
+                           Path(sysconfig.get_config_var("LIBDIR"))}
+            for executable in executables:
+                self._root_controlled(executable, regular=True)
+                directories.update((executable.parent, executable.resolve().parent))
+            for directory in directories:
+                self._root_controlled(directory, regular=False)
+                if any(name.endswith("._pth") for name in os.listdir(directory)):
+                    _fail("worker Python path overrides are forbidden")
+                self._check_optional_runtime_path(directory / "pyvenv.cfg")
+            required = _python_runtime_paths()
+            for value in (*required, *sys.path):
+                if type(value) is not str or not os.path.isabs(value):
+                    _fail("worker Python import path is not fixed and absolute")
+            for value in required:
+                self._check_runtime_tree(Path(value))
+            # Check initial interpreter paths too: encodings and runpy load
+            # before the fixed bootstrap replaces sys.path with required.
+            for value in sys.path:
+                self._check_optional_runtime_path(Path(value))
+        except ContractError:
+            raise
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            raise ContractError("worker Python startup state cannot be inspected") from exc
 
     def _check_installation(self) -> None:
         from . import contracts, isolation, results, workers
 
+        self._check_python_runtime()
         package = Path(__file__).parent
         self._root_controlled(package, regular=False)
         for module in (contracts, isolation, results, workers):
             self._root_controlled(Path(module.__file__), regular=True)
         self._root_controlled(Path(__file__), regular=True)
-        for root, directories, files in os.walk(
-                package, onerror=lambda error: _fail("worker installed code is unreadable")):
-            for name in directories:
-                self._root_controlled(Path(root, name), regular=False)
-            for name in files:
-                if name.endswith((".py", ".pyc", ".so")):
-                    self._root_controlled(Path(root, name), regular=True)
+        self._root_controlled(Path(_BOOTSTRAP), regular=True)
 
     def _check_unit_file(self, name: str) -> None:
         # systemd exposes a template through an instance name. bind() checks
@@ -474,12 +554,11 @@ class WorkerLifecycle:
                 raise ContractError("worker bootstrap command is malformed") from exc
             if not arguments:
                 _fail("worker installed service has no fixed bootstrap")
-            expected = [arguments[0], "-I", "-m", "geniusnew.worker_service",
+            expected = [sys.executable, "-I", "-S", _BOOTSTRAP,
                         "--core-uid", str(self.profile.core_uid), "--worker-uid",
                         str(self.profile.worker_uid), "--worker-gid",
                         str(self.profile.worker_gid)]
-            if (arguments != expected or not arguments[0].startswith("/")
-                    or Path(arguments[0]).resolve() != Path(sys.executable).resolve()):
+            if arguments != expected or not arguments[0].startswith("/"):
                 _fail("worker installed service bootstrap is not fixed")
             self._root_controlled(Path(arguments[0]), regular=True)
         else:
@@ -511,12 +590,11 @@ class WorkerLifecycle:
         if (not executable or not executable.startswith("/")
                 or fields.get("ignore_errors") != "no" or not arguments):
             _fail("worker ExecStart is not fixed")
-        expected = [executable, "-I", "-m", "geniusnew.worker_service",
+        expected = [sys.executable, "-I", "-S", _BOOTSTRAP,
                     "--core-uid", str(self.profile.core_uid), "--worker-uid",
                     str(self.profile.worker_uid), "--worker-gid",
                     str(self.profile.worker_gid)]
-        if (shlex.split(arguments) != expected
-                or Path(executable).resolve() != Path(sys.executable).resolve()):
+        if shlex.split(arguments) != expected or executable != sys.executable:
             _fail("worker ExecStart arguments are not fixed")
         self._root_controlled(Path(executable), regular=True)
 
@@ -1234,6 +1312,16 @@ def _worker_root(worker_uid: int, worker_gid: int) -> str:
     return value
 
 
+def _service_read_paths() -> tuple[str, ...]:
+    import cryptography
+
+    # Import search roots are broader than sandbox read roots. In particular,
+    # a source installation must not expose files beside the geniusnew package.
+    return tuple(sorted({os.path.realpath(path) for path in (
+        str(Path(__file__).parent), str(Path(cryptography.__file__).parent),
+        *_python_runtime_paths()[1:])}))
+
+
 def _run_service_connection(connection: socket.socket, *, core_uid: int,
                             worker_uid: int, worker_gid: int) -> None:
     _assert_worker_identity(worker_uid, worker_gid)
@@ -1261,7 +1349,7 @@ def _run_service_connection(connection: socket.socket, *, core_uid: int,
     os.environ.update({"HOME": root, "TMPDIR": root, "TMP": root, "TEMP": root})
     state = {"violated": False, "bootstrap": True}
     worker = DeterministicSummarizer()
-    read_paths = _read_paths(worker)
+    read_paths = _service_read_paths()
     _install_filesystem_rules(root, read_paths)
     _install_process_filter()
     import tempfile

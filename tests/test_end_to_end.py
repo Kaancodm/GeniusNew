@@ -597,8 +597,8 @@ class EndToEndTest(Fixture, unittest.TestCase):
                   workers=(DeterministicSummarizer(),), worker_service_profile='local')
         from geniusnew.worker_service import WorkerServiceProfile
         profile = WorkerServiceProfile(
-            core_uid=os.geteuid(), worker_uid=os.geteuid() + 1,
-            worker_gid=os.getegid() + 1, socket_gid=os.getegid(),
+            core_uid=20001, worker_uid=20002,
+            worker_gid=20002, socket_gid=20003,
             socket_path='/run/geniusnew-worker/ipc/worker.sock',
             lease_path='/run/geniusnew-worker/ipc/lease')
         with self.assertRaisesRegex(ContractError, 'cannot be combined'):
