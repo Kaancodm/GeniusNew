@@ -619,6 +619,26 @@ class LifecycleRefusalTest(unittest.TestCase):
             with self.assertRaisesRegex(ContractError, "fixed installed template"):
                 self.lifecycle._check_unit_file("geniusnew-worker@.service")
 
+    def test_template_is_inspected_through_a_valid_instance_name(self):
+        template = "geniusnew-worker@.service"
+        source = Path("/etc/systemd/system") / template
+
+        def show(unit, *properties):
+            # systemd cannot load a bare template through its Unit properties.
+            if unit.endswith("@.service"):
+                raise ContractError("template needs an instance name")
+            return {"LoadState": "loaded", "FragmentPath": str(source),
+                    "DropInPaths": "", "NeedDaemonReload": "no"}
+
+        with patch.object(self.lifecycle, "_show", side_effect=show) as query, \
+                patch.object(self.lifecycle, "_root_controlled"), \
+                patch.object(self.lifecycle, "_check_unit_content") as content:
+            self.lifecycle._check_unit_file(template)
+            query.assert_called_once_with(
+                "geniusnew-worker@internal.service", "LoadState", "FragmentPath",
+                "DropInPaths", "NeedDaemonReload")
+            content.assert_called_once_with(source, template)
+
     def test_unreadable_or_occupied_cgroup_refuses_idle(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -691,17 +711,23 @@ class LifecycleRefusalTest(unittest.TestCase):
                 check(output, **changes)
 
     def _bind_with(self, *, cgroup="0::/system.slice/geniusnew-worker@one.service\n",
-                   active="active", runtime_mode=0o700, exited=(False, False)):
+                   active="active", runtime_mode=0o700, exited=(False, False),
+                   unit_source=None):
         status = {"ActiveState": active, "InvocationID": "a" * 32,
                   "ControlGroup": (cgroup[3:].strip() if cgroup.startswith("0::")
                                    else "/system.slice/geniusnew-worker@one.service"),
-                  "MainPID": "123"}
+                  "MainPID": "123", "LoadState": "loaded",
+                  "FragmentPath": "/etc/systemd/system/geniusnew-worker@.service",
+                  "DropInPaths": "", "NeedDaemonReload": "no"}
+        status.update(unit_source or {})
         info = Mock(st_mode=stat.S_IFDIR | runtime_mode,
                     st_uid=self.profile.worker_uid, st_gid=self.profile.worker_gid)
         with patch("geniusnew.worker_service._pidfd_exited", side_effect=exited), \
                 patch.object(Path, "read_text", return_value=cgroup), \
                 patch.object(Path, "lstat", return_value=info), \
                 patch.object(self.lifecycle, "_show", return_value=status), \
+                patch.object(self.lifecycle, "_root_controlled"), \
+                patch.object(self.lifecycle, "_check_unit_content"), \
                 patch.object(self.lifecycle, "_check_instance_settings"), \
                 patch.object(self.lifecycle, "_check_runtime_root"):
             return self.lifecycle.bind(123, 7)
@@ -718,6 +744,16 @@ class LifecycleRefusalTest(unittest.TestCase):
                 ({"exited": (False, True)}, "exited before payload")):
             with self.subTest(reason=reason), self.assertRaisesRegex(ContractError, reason):
                 self._bind_with(**changes)
+
+    def test_actual_invocation_must_use_the_fixed_template_without_dropins(self):
+        for changed in (
+                {"LoadState": "not-found"},
+                {"FragmentPath": "/etc/systemd/system/geniusnew-worker@one.service"},
+                {"DropInPaths": "/etc/systemd/system/geniusnew-worker@one.service.d/env.conf"},
+                {"NeedDaemonReload": "yes"}):
+            with self.subTest(changed=changed):
+                with self.assertRaisesRegex(ContractError, "fixed installed template"):
+                    self._bind_with(unit_source=changed)
 
     def test_invocation_change_blocks_lease_release(self):
         invocation = _Invocation("geniusnew-worker@one.service", "a" * 32,

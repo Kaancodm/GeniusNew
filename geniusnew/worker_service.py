@@ -399,8 +399,14 @@ class WorkerLifecycle:
                     self._root_controlled(Path(root, name), regular=True)
 
     def _check_unit_file(self, name: str) -> None:
-        properties = self._show(name, "LoadState", "FragmentPath", "DropInPaths",
+        # systemd exposes a template through an instance name. bind() checks
+        # the actual accepted instance again before any job payload is sent.
+        unit = name.replace("@.service", "@internal.service")
+        properties = self._show(unit, "LoadState", "FragmentPath", "DropInPaths",
                                 "NeedDaemonReload")
+        self._check_unit_source(properties, name)
+
+    def _check_unit_source(self, properties: dict[str, str], name: str) -> None:
         path = Path(properties["FragmentPath"])
         if (properties["LoadState"] != "loaded" or properties["DropInPaths"]
                 or properties["NeedDaemonReload"] != "no"
@@ -765,12 +771,14 @@ class WorkerLifecycle:
                     "RuntimeDirectoryMode", "RuntimeDirectoryPreserve", "Slice",
                     "SystemCallFilter", "SystemCallErrorNumber", "ExecStart")
         properties = self._show(unit, "ActiveState", "InvocationID",
-                                "ControlGroup", "MainPID", *settings)
+                                "ControlGroup", "MainPID", "LoadState", "FragmentPath",
+                                "DropInPaths", "NeedDaemonReload", *settings)
         if (properties["ActiveState"] != "active" or properties["ControlGroup"] != group
                 or properties["MainPID"] != str(pid)
                 or re.fullmatch(r"[0-9a-f]{32}", properties["InvocationID"]) is None):
             _fail("worker PID does not match an active invocation")
         instance = unit[len(self.profile.unit_prefix):-len(".service")]
+        self._check_unit_source(properties, self.profile.unit_prefix + ".service")
         self._check_instance_settings(properties, instance)
         self._check_runtime_root()
         runtime = Path(self.profile.runtime_root) / instance
