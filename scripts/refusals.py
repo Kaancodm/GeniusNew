@@ -103,7 +103,10 @@ GUARDED_PYTHON = {
 
 
 def _focused_tests(path: str) -> tuple[str, ...] | None:
-    """Return boundary-specific test patterns or a standalone tool test."""
+    """Return boundary-specific test patterns or a standalone tool test.
+
+    Return None when no focused selection exists, so the caller runs the full suite.
+    """
     focused = GUARDED_PYTHON.get(path)
     if focused is not None:
         return focused
@@ -269,7 +272,12 @@ def _replace_node(source: str, node: ast.AST, replacement: str) -> str:
 
 
 def _disable(source: str, refusal: Refusal) -> str:
-    """Disable a condition or strip only a gateway refusal's audit metadata."""
+    """Return source with one refusal disabled, leaving other sites intact.
+
+    Disable a condition or shell die command, strip a gateway refusal's audit
+    metadata, remove a seccomp kill entry, or allow thread naming. Raise
+    `SystemExit` if the recorded site cannot be located; syntax errors propagate.
+    """
     if refusal.kind == "shell_die":
         lines = source.splitlines(keepends=True)
         target = lines[refusal.line - 1] if refusal.line <= len(lines) else ""
@@ -304,7 +312,13 @@ def _disable(source: str, refusal: Refusal) -> str:
 def _suite_passes(cwd: Path, *, failfast: bool = False,
                   show_failure: bool = False,
                   patterns: tuple[str, ...] | None = None) -> bool:
-    """Run every selected test pattern, returning false on failure or timeout."""
+    """Run every selected test pattern, returning false on failure or timeout.
+
+    Empty or absent `patterns` selects the full suite. Timeouts count as failure:
+    300 seconds for the full suite and 60 per pattern. `failfast` stops each run
+    at its first failure; `show_failure` reports nonzero exits to stderr.
+    Errors starting the subprocess propagate.
+    """
     # A mutant is caught by its first failing test. The unmutated baseline
     # still runs every test so an unrelated failure cannot validate a mutant.
     for pattern in patterns or (None,):
@@ -329,7 +343,14 @@ def _suite_passes(cwd: Path, *, failfast: bool = False,
 
 
 def check(paths: list[str]) -> int:
-    """Require baseline success and a failing test for each isolated refusal mutation."""
+    """Require baseline success and a failing test for each isolated refusal mutation.
+
+    Require the full and focused unmutated baselines to pass before testing
+    each mutant with its selected suite. Print results and return zero only
+    when every mutant is caught; return one for no sites, a failed baseline,
+    or surviving mutants. File, parsing, and subprocess-start errors propagate.
+    A mutation site that cannot be located raises `SystemExit`.
+    """
     refusals = [(Path(ROOT / path), refusal)
                 for path in paths for refusal in find_refusals(ROOT / path)]
     if not refusals:

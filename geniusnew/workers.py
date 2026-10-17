@@ -143,6 +143,13 @@ class WorkerRunner:
         A raw or already validated Handoff is deliberately insufficient. The
         worker boundary accepts only a capability minted by the independent
         gateway after revalidation and any required approval consumption.
+
+        The permit is consumed even if later validation fails. Invalid dispatch
+        time or expiry before or during execution raises `ContractError`.
+        `now` is the dispatch Unix timestamp in seconds; elapsed wall time also
+        counts against the handoff's expiry.
+        `WorkerBoundaryError` propagates without a signed result; ordinary
+        worker exceptions become signed failures if authorization is still live.
         """
         handoff = consume_handoff_from_permit(permit)
         if type(now) is not int:

@@ -205,6 +205,9 @@ def _audit_hook(root: str, state: dict[str, bool], read_paths: tuple[str, ...] =
     Reads are checked against the same allowlist Landlock enforces, so a read
     Python reports is recorded as an isolation violation instead of surfacing as
     an ordinary `PermissionError` inside the worker.
+
+    While `state["bootstrap"]` is true, resource-limit changes are allowed.
+    Denied operations set `state["violated"]` and raise `_SandboxDenied`.
     """
     readable = (root,) + tuple(read_paths)
 
@@ -274,6 +277,10 @@ def _process_filter(machine: str) -> bytes:
     CLONE_THREAD. Threads stay allowed because the interpreter may start them
     and they share the filter. clone3 passes its flags in memory the filter
     cannot read, so it gets ENOSYS and libc falls back to clone, which it can.
+
+    UID/GID changes, group changes, capset, and prctl also kill the process,
+    except that prctl(PR_SET_NAME) returns EPERM. An unsupported `machine`
+    raises `ContractError`.
     """
     spec = _FILTER_ARCHES.get(machine)
     if spec is None:

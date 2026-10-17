@@ -51,7 +51,12 @@ def _refuse_discontinuous_start(service: Service) -> None:
 
 
 def _serve(config_path: str, *, runner_factory=None) -> int:
-    """Load configuration and serve with PostgreSQL ledgers and durable audit."""
+    """Load configuration and serve with PostgreSQL ledgers and durable audit.
+
+    `runner_factory` overrides the configured worker service for tests. Return
+    zero after normal shutdown; configuration, database, and startup errors
+    propagate to the caller. The database connection closes on exit.
+    """
     config = load_config(config_path)
     from .database import PostgresAcceptanceLedger, PostgresJobLedger, open_database
     from .audit_store import PostgresAuditChain
@@ -74,7 +79,13 @@ def _run_service(config: ServiceConfig, *, job_ledger: JobLedger,
                  database_connection=None,
                  audit_chain_factory: Callable[[AuditAuthority], AuditChain] | None = None,
                  runner_factory=None) -> int:
-    """Build the configured service and close it after listener shutdown."""
+    """Build the configured service and close it after listener shutdown.
+
+    Use the configured worker service unless `runner_factory` is supplied.
+    Check audit continuity before opening the listener and propagate startup
+    errors. Stop on SIGTERM or SIGINT and return zero after a normal stop;
+    a separately served anchor stays running when this service closes.
+    """
     if config.anchor_socket is not None:
         # Served anchor (gate C2): its lifecycle is not ours, so `service.close`
         # leaves it running and `_refuse_discontinuous_start` asks it.

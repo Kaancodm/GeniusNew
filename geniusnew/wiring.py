@@ -312,6 +312,11 @@ def build(*, root_secret: bytes, policy: Policy,
     Passing an in-process `AuditAnchor` is a test seam, the same way
     `runner_factory` is: it puts the anchor back inside the writer's memory.
 
+    `worker_service_profile` selects the separate worker service and cannot be
+    combined with `runner_factory`. Service runners must pass preflight before
+    construction completes; contract refusals propagate as `ContractError`.
+    Without either option, workers run in fresh isolated subprocesses.
+
     Callers name principals by exactly one of `api_keys` (plaintext keys, hashed
     here) or `principals` (SHA-256 digests to subjects). A server reads the
     digests from its configuration so that no plaintext key has to exist on it.
