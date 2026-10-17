@@ -135,7 +135,7 @@ class _DeadlineSocket(socket.socket):
     def _arm(self) -> None:
         remaining = self._deadline - time.monotonic()
         if remaining <= 0:
-            raise TimeoutError("iPad API deadline expired")
+            _fail("iPad API deadline expired")
         self.settimeout(remaining)
 
     def connect(self, address) -> None:
@@ -165,8 +165,11 @@ class _BoundHTTPConnection(http.client.HTTPConnection):
     def connect(self) -> None:
         connection = _DeadlineSocket(self._deadline)
         try:
-            connection.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE,
-                                  _INTERFACE.encode("ascii") + b"\0")
+            try:
+                connection.setsockopt(socket.SOL_SOCKET, socket.SO_BINDTODEVICE,
+                                      _INTERFACE.encode("ascii") + b"\0")
+            except OSError:
+                _fail("Tailscale socket binding failed; check interface and permissions")
             connection.connect((self.host, self.port))
         except BaseException:
             connection.close()
@@ -319,10 +322,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--key-file", required=True, type=Path)
     parser.add_argument("--model", help="exact model ID for chat")
     parser.add_argument("--timeout", type=float)
-    parser.add_argument("--max-tokens", type=int, default=256)
+    parser.add_argument("--max-tokens", type=int)
     args = parser.parse_args(argv)
     try:
         if args.command == "models":
+            if args.model is not None or args.max_tokens is not None:
+                _fail("models does not accept chat options")
             names = models(args.host, args.port, args.key_file,
                            timeout=10 if args.timeout is None else args.timeout)
             for name in names:
@@ -333,7 +338,7 @@ def main(argv: list[str] | None = None) -> int:
             prompt = sys.stdin.read(_MAX_PROMPT + 1)
             answer = chat(args.host, args.port, args.key_file, args.model, prompt,
                           timeout=120 if args.timeout is None else args.timeout,
-                          max_tokens=args.max_tokens)
+                          max_tokens=256 if args.max_tokens is None else args.max_tokens)
             print(answer)
     except ContractError as exc:
         print(f"refused: {exc}", file=sys.stderr)

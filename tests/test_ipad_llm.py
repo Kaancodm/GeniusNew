@@ -311,6 +311,18 @@ class IpadModelTest(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("chat requires an exact model ID", output.getvalue())
 
+    def test_models_command_refuses_chat_options_before_any_request(self):
+        self.connected()
+        for option in (("--model", "local-gemma"), ("--max-tokens", "0")):
+            with self.subTest(option=option):
+                output = io.StringIO()
+                with contextlib.redirect_stderr(output):
+                    code = ipad_llm.main(["models", "--host", HOST, "--port", "8080",
+                                          "--key-file", str(self.key_file), *option])
+                self.assertEqual(code, 2)
+                self.assertIn("models does not accept chat options", output.getvalue())
+        self.assertEqual(self.server.requests, [])
+
     def test_proxy_environment_is_ignored(self):
         self.connected()
         with mock.patch.dict(os.environ, {"HTTP_PROXY": "http://127.0.0.1:9",
@@ -322,9 +334,15 @@ class IpadModelTest(unittest.TestCase):
     def test_socket_must_bind_to_the_tailscale_interface(self):
         self.connected()
         with mock.patch.object(ipad_llm, "_INTERFACE", "no-such-interface"):
-            with self.assertRaises(ContractError):
+            with self.assertRaisesRegex(ContractError, "socket binding failed"):
                 ipad_llm.models(HOST, 8080, self.key_file)
         self.assertEqual(self.server.requests, [])
+
+    def test_expired_socket_deadline_refuses_before_reading(self):
+        connection = ipad_llm._DeadlineSocket(time.monotonic() - 1)
+        self.addCleanup(connection.close)
+        with self.assertRaisesRegex(ContractError, "deadline expired"):
+            connection._arm()
 
     def test_response_has_one_overall_deadline(self):
         self.connected()

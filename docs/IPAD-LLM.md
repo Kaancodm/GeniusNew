@@ -54,6 +54,11 @@ kein separates HTTPS-Zertifikat der iPad-App. Ein nicht erreichbares iPad, eine
 unerwartete API-Antwort oder eine abweichende Modell-ID führt zu einer Ablehnung
 ohne Ausweichmodell.
 
+Der Linux-Nutzer muss einen Socket an `tailscale0` binden dürfen
+(`SO_BINDTODEVICE`). Wo der Kernel dafür ein Recht verlangt, ist `CAP_NET_RAW`
+erforderlich. Scheitert die Bindung, lehnt der Client den Aufruf ab, bevor ein
+API-Schlüssel gesendet wird.
+
 **Gerätestatus:** Die lokale Testsuite nutzt einen HTTP-Testserver. Ein echter
 Aufruf zum iPad ist erst nach Installation, Modellstart, API-Konfiguration und
 Angabe des privaten Endpunkts prüfbar. iPadOS kann die Server-App im Hintergrund
