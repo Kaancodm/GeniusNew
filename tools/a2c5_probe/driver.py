@@ -501,7 +501,8 @@ class Monitor(threading.Thread):
 
     def run(self) -> None:
         while not self.stop.is_set():
-            sample = self._sample()
+            # A cgroup torn down mid-scan can fail one read; only a repeat counts.
+            sample = self._sample() or self._sample()
             with self.lock:
                 if sample is None:
                     self.errors += 1
