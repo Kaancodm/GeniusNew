@@ -916,8 +916,17 @@ class LifecycleRefusalTest(unittest.TestCase):
                 for bad, reason in cases:
                     with self.subTest(name=name, reason=reason):
                         path.write_text(bad)
-                        with self.assertRaisesRegex(ContractError, reason):
-                            self.lifecycle._check_unit_content(path, name)
+                        if name.endswith(".service") and "ExecStart=" not in bad:
+                            # Older Python shlex may read stdin for None. A
+                            # missing directive must refuse before parsing.
+                            with patch("geniusnew.worker_service.shlex.split",
+                                       side_effect=AssertionError("parsed missing ExecStart")) as split:
+                                with self.assertRaisesRegex(ContractError, reason):
+                                    self.lifecycle._check_unit_content(path, name)
+                                split.assert_not_called()
+                        else:
+                            with self.assertRaisesRegex(ContractError, reason):
+                                self.lifecycle._check_unit_content(path, name)
 
     def test_pid_outside_expected_systemd_unit_is_refused(self):
         with patch("geniusnew.worker_service._pidfd_exited", return_value=False), \
