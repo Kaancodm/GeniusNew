@@ -255,6 +255,7 @@ def _exchange(config: dict[str, Any], scenario: str, late_passcred: bool,
                                 "result", RESULT_FIELDS)
             output = check_result(value, nonce, digest(frame[4:]))
             received_at = time.monotonic()
+            out["result_received"] = True
             notify("result_received")
             # With Accept=yes systemd keeps its own copy of the connection until
             # the instance is dead, so this EOF also waits for the whole cgroup.
