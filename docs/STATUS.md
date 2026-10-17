@@ -1,6 +1,6 @@
 # GeniusNew — Projektstand
 
-**Stand: 08.10.2026, `main` `7f81e240f6ec4b16d876f081249afb3d47240901`.** Teil der
+**Stand: 17.10.2026, `main` `462709314b6ce1731914ba90cd62ff8acad6c74c`.** Teil der
 Wissensdatenbank, geführt von Claude Code (`docs/COLLABORATION.md`); NotebookLM gibt
 Auskunft. Entscheidungen stehen in `docs/DECISIONS.md`. Dieses Dokument ist in sich
 geschlossen gedacht: als Quelle für NotebookLM, Microsoft 365 Copilot oder jeden anderen
@@ -51,25 +51,29 @@ Audit-Kette festgehalten.
 | B4, B5 | Wartende Jobs und Approval-Speicher, persistente Audit-Kette. **Ohne** `Claude DB Review: APPROVED` am Head gemergt, Nachholung offen (Entscheidung 6) | #94, #95 |
 | B6 | Ledger und Approval-Speicher manipulationssichtbar, Abgleich gegen die verankerte Kette | #97 |
 | B7 | Absturztest mit `SIGKILL` an jeder Zustandsgrenze | #106 |
+| B (Härtung) | PostgreSQL-Sitzungen: Idle-Grenze 60 s für offene Transaktionen, TCP-Keepalives, `application_name`, zentrale Advisory-Lock-IDs | #137 |
 | C1, C2 | `python -m geniusnew serve`; Anker als eigener Dienst mit signierten Antworten | #61, #62 |
 | C3 | Rolle „Freigebende“ mit eigener HTTP-Route | #111 |
 | C4 | Rate-Limit, Job- und Verbindungsgrenze, nginx-Vorlage | #71 |
 | C5 (Teil) | Restore gegen den unabhängigen Anker durchgespielt | #119 |
 | D1 (nur Doku) | Portal→Kern-Vertrag, Replay- und Identitäts-Gates; Code fehlt | #120 |
 | E1 | Demo mit Persistenz-Angriffen | #112 |
-| Werkzeuge | Server-Einrichtung `ops/server/genius-server`, Deck, Reviewkanäle Abacus und Kiro | #110, #114, #116 |
+| Werkzeuge | Server-Einrichtung `ops/server/genius-server`, Deck, Reviewkanäle Abacus und Kiro; manueller iPad-Modellclient über Tailscale (`tools/ipad_llm.py`, Live-Test am Gerät UNKNOWN) | #110, #114, #116, #142 |
 
 **Noch offen:** C5 (Betriebsanleitung mit systemd, Rotation), E3 (frischer Klon auf einem
-echten Server), D1-Code, D2, D3, E2 (Security-Review am Head). Was in der
-`ROADMAP-V02.md`-Spalte „Stand“ noch „offen“ steht, aber oben gemergt ist, gleicht ein
-eigener Docs-PR an (die Roadmap gehört nicht zu diesem Wissens-PR).
+echten Server), D1-Code, D2, D3, E2 (Security-Review am Head). Die
+`ROADMAP-V02.md`-Spalte „Stand“ ist seit #130 (`c6a37bb`) angeglichen. Nur die C3-Zelle
+nennt `Claude DB Review` dort noch UNKNOWN; belegt ist APPROVED am Merge-Head `cc95586`
+(`docs/DECISIONS.md`, 04.10.2026). Das korrigiert ein eigener Docs-PR.
 
-**Messbar (am 08.10.2026 auf `7f81e24` ausgeführt):**
-- 1078 Tests laufen in etwa 94 Sekunden, Ergebnis `OK`. Ein zweiter Lauf unter
-  Python 3.13.16 mit lokalem PostgreSQL 16 endete ebenfalls `OK` (etwa 104 Sekunden).
+**Messbar (am 17.10.2026 auf `4627093` ausgeführt, Python 3.13.16, lokales PostgreSQL 16):**
+- 1100 Tests laufen in etwa 129 Sekunden, Ergebnis `OK`.
 - Die Demo endet mit „PASS“, dabei werden **15 von 15 Angriffe** abgelehnt.
-- Der Refusal-Guard führt 19 Python-Module in `GUARDED` plus eine Shell-Datei
-  (`GUARDED_SHELL`). Er wurde in dieser Sitzung **nicht** ausgeführt: UNKNOWN.
+- Der Refusal-Guard führt 22 Einträge in `GUARDED`: 19 Kernmodule unter `geniusnew/`,
+  `tools/control_deck/actions.py`, `tools/ipad_llm.py` und `ops/server/genius-server`,
+  dazu eine Shell-Datei (`GUARDED_SHELL`). Er wurde in dieser Sitzung **nicht**
+  ausgeführt: UNKNOWN. Laut #137 und #142 lief er für `geniusnew/database.py` (66/66)
+  und `tools/ipad_llm.py` (34/34) grün.
 
 ## Bekannte Grenzen
 
@@ -95,7 +99,10 @@ Eine externe Bewertung von `7f81e24` hat Claude Code am Code nachgeprüft. Best�
   gespeicherte Kette (`_append` ruft `_read` in `geniusnew/audit_store.py`), und jeder
   Commit schickt die ganze Kette an den Anker. An der Größengrenze (64 MiB Anfrage,
   16 MiB Ankerzustand, `SECURITY.md`) verweigert der Dienst weitere Events (fail
-  closed). Für Dauerbetrieb braucht es ein inkrementelles Protokoll.
+  closed). Gemessen in #137 (PostgreSQL 17): Bei voller Kette, 62 137 Records, dauern
+  ein Append etwa 18,3 s und die Audit-Startprüfung etwa 18,3 s; der 62 138. Kopf wird
+  abgelehnt. Für Dauerbetrieb braucht es ein inkrementelles Protokoll (Entwurf in #136,
+  Draft).
 - **Eine Datenbankverbindung für alles.** `python -m geniusnew serve` teilt eine
   Verbindung zwischen Job-Ledger, Annahme-Ledger und Audit-Kette
   (`geniusnew/__main__.py`), gewollt für die B6-Atomarität. Der Durchsatz ist damit
@@ -116,7 +123,8 @@ Reihenfolge laut `docs/ROADMAP-V02.md`; Entscheidungen von Kaan sind dort unter 
 Entscheidungen“ gelistet (Portal in der Beta, Portal→Kern-Authentisierung, abgelaufene
 Jobs, Annahmen und Policy).
 
-1. Roadmap-Spalte „Stand“ an die gemergten PRs angleichen (Docs-PR #130).
+1. Offene PRs fertig aufräumen (Abschnitt unten, Auftrag vom 09.10.2026); danach Pause
+   bis zum neuen v0.2-Master-Prompt, sofern Kaan sie bestätigt.
 2. `Claude DB Review` für B4 (#94) und B5 (#95) am gemergten Stand nachholen.
 3. Kaan entscheidet: Python-Version der CI (3.13 zusätzlich oder statt 3.11) und ob
    Linter, Typprüfung, Coverage und `pip-audit` als Entwicklungswerkzeuge dazukommen.
@@ -132,6 +140,30 @@ Jobs, Annahmen und Policy).
 8. Quellenpaket für NotebookLM nach Verfahren (`docs/COLLABORATION.md`).
 9. D1-Code (Codex) nach dem Vertrag aus #120, danach D2 und D3.
 10. E2: Security-Review des vollständigen Heads (Claude und Copilot).
+11. Roadmap: C3-Zelle auf den Beleg aus `docs/DECISIONS.md` korrigieren (eigener Docs-PR).
+
+## Aufräumen der offenen PRs (Stand 17.10.2026)
+
+Auftrag von Kaan vom 09.10.2026 (`docs/DECISIONS.md`). Am 17.10.2026 hat Claude Code mit
+Kaans OK ohne Merge geschlossen:
+
+| PR | Head | Grund |
+| --- | --- | --- |
+| #101 | `97b400d` | Die drei Tests sind über #97 (`f220e30`) schon auf `main` |
+| #109 | `42a5aeb` | Rollenmodell überholt durch die Regeln vom 04.10.2026; Konflikt in allen drei Dateien |
+| #134 | `cbf32f6` | Regeländerung ohne belegte Kaan-Entscheidung und ohne die nötigen Reviews; schwächt Schutzregeln ab (Entscheidung 07.10.2026) |
+| #118 | `8ab7fca` | Überholt durch #129 und #130; die C3-Entscheidung steht jetzt in `docs/DECISIONS.md` |
+
+Danach sind 16 PRs offen. Keiner ist mergebereit; überall fehlt das Copilot-Review
+(Kontingent erschöpft). Offen für Kaan:
+
+- **Pause:** Gilt sie noch? Am 17.10.2026 wurde #142 (neues Werkzeug) gemergt, und an
+  A2/C5 wird in #140 und #144 gearbeitet. UNKNOWN, bis Kaan entscheidet.
+- **Copilot-Review:** warten oder für die Dauer des Engpasses einen Ersatz festlegen.
+- **Regelfassung:** #139 und #141 berufen sich auf zwei verschiedene, nicht eingetragene
+  Kaan-Entscheidungen (08.10. und 06.10.2026) und widersprechen sich in `AGENTS.md` und
+  `docs/COLLABORATION.md`; #128 berührt dieselben Regeldateien. Welche gilt, entscheidet
+  Kaan schriftlich; Claude Code trägt es in `docs/DECISIONS.md` ein.
 
 ## Zusammenarbeit der Werkzeuge
 
@@ -154,7 +186,7 @@ Plattformen mit Überschreibrecht und hilft, wenn Codex feststeckt.
 | GitHub Copilot Pro | Editor und Review jedes PRs | `.github/copilot-instructions.md` |
 | Kiro-CLI | Unabhängige Zweitprüfung für Claudes eigenen Code, nur lesend | `docs/COLLABORATION.md` |
 | Microsoft 365 Copilot | Berichte, E-Mails, Folien | OneDrive-Ordner `GeniusNew` |
-| Claude Code | **Besitzt `docs/COLLABORATION.md`/`docs/DECISIONS.md`, Ordnung, Konfliktlöser mit Überschreibrecht**, Sicherheits-Review von Kaans DB-Entwurf und Codex' DB-Code, Hilfe bei Hilferuf | `AGENTS.md`, `docs/COLLABORATION.md` |
+| Claude Code | **Besitzt `docs/COLLABORATION.md`/`docs/DECISIONS.md`, Ordnung, Konfliktlöser mit Überschreibrecht**, Sicherheits-Review von ChatGPTs DB-Entwurf und Codex' DB-Code, Hilfe bei Hilferuf | `AGENTS.md`, `docs/COLLABORATION.md` |
 
 Übergaben zwischen den Werkzeugen laufen über die zwei Prompts in `docs/HANDOVER.md`.
 
