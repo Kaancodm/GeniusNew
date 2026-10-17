@@ -48,6 +48,11 @@ class Files:
                 "root_secret_file": self.secret_path,
                 "anchor_state": self.anchor_path,
                 "database_dsn_file": self.dsn_path,
+                "worker": {"core_uid": os.geteuid(), "worker_uid": os.geteuid() + 1,
+                           "worker_gid": os.getegid() + 1,
+                           "socket_gid": os.getegid(),
+                           "socket_path": "/run/geniusnew-worker/ipc/worker.sock",
+                           "lease_path": "/run/geniusnew-worker/ipc/lease"},
                 "limits": {"rate_per_minute": 30, "burst": 5,
                            "max_in_flight": 4, "max_connections": 32},
             },
@@ -144,6 +149,17 @@ class StructureTest(Files, unittest.TestCase):
         data = self.data()
         data["service"]["tls"] = True
         self.refused(data, "unknown keys: tls")
+
+    def test_worker_profile_is_required_and_closed(self):
+        data = self.data()
+        del data["service"]["worker"]
+        self.refused(data, "missing keys: worker")
+        data = self.data()
+        data["service"]["worker"]["fallback"] = "local"
+        self.refused(data, "unknown keys: fallback")
+        data = self.data()
+        data["service"]["worker"]["worker_uid"] = data["service"]["worker"]["core_uid"]
+        self.refused(data, "different UIDs")
 
     def test_grants_that_are_not_an_array_are_refused(self):
         data = self.data()

@@ -1,0 +1,32 @@
+[Unit]
+Description=GeniusNew isolated worker for one accepted connection
+
+[Service]
+Type=exec
+Slice=system.slice
+User=@WORKER_UID@
+Group=@WORKER_GID@
+SupplementaryGroups=
+ExecStart=@PYTHON@ -I -m geniusnew.worker_service --core-uid @CORE_UID@ --worker-uid @WORKER_UID@ --worker-gid @WORKER_GID@
+StandardInput=socket
+StandardOutput=null
+StandardError=null
+LimitCORE=0
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+PrivateNetwork=yes
+SystemCallFilter=~socket socketpair
+SystemCallErrorNumber=EPERM
+KillMode=control-group
+SendSIGKILL=yes
+Restart=no
+TimeoutStartSec=5s
+RuntimeMaxSec=12s
+TimeoutStopSec=2s
+TasksMax=4
+MemoryMax=512M
+UMask=0077
+RuntimeDirectory=geniusnew-worker/jobs/%i
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=no

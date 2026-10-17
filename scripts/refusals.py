@@ -64,6 +64,7 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/audit.py", "geniusnew/audit_chain.py",
            "geniusnew/results.py", "geniusnew/keys.py",
            "geniusnew/workers.py", "geniusnew/isolation.py",
+           "geniusnew/worker_service.py",
            "geniusnew/isolation_child.py", "geniusnew/gateway.py",
            "geniusnew/orchestrator.py", "geniusnew/verifier.py",
            "geniusnew/http_entry.py", "geniusnew/wiring.py",
@@ -74,6 +75,25 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
 
 # Guarded shell scripts and the one test module that runs each of them.
 GUARDED_SHELL = {"ops/server/genius-server": "test_server_tool.py"}
+
+# Mutants run the tests that exercise each boundary. The unmutated baseline
+# still runs all tests; every selected test file must pass for a mutation to
+# survive. A missing refusal test is therefore still a failure of this guard.
+GUARDED_PYTHON = {
+    "geniusnew/worker_service.py": ("test_worker_service.py",),
+    "geniusnew/isolation.py": ("test_isolation.py",),
+    "geniusnew/workers.py": ("test_workers.py", "test_isolation.py", "test_ttl.py"),
+    "geniusnew/wiring.py": (
+        "test_approver_roles.py", "test_c3_durable_approvers.py",
+        "test_end_to_end.py", "test_approval_recovery_validation.py",
+        "test_anchored_wiring.py", "test_persistent_audit_wiring.py",
+        "test_ledger_audit_boundary.py", "test_approver_routes.py",
+        "test_acceptance_ledger.py", "test_b6_reconciliation.py",
+        "test_pending_database.py", "test_b7_crash_recovery.py", "test_serve.py",
+    ),
+    "geniusnew/config.py": ("test_config.py", "test_approver_config.py"),
+    "geniusnew/__main__.py": ("test_persistent_audit_wiring.py", "test_serve.py"),
+}
 
 # `die "` as a command, not as the German article inside a message, a comment
 # or the definition `die() {`.
@@ -89,7 +109,8 @@ _SHELL_DIE = re.compile(r'(?<![\w-])die(\s+")')
 # The pattern is explicit: whatever a guarded module refuses with belongs here
 # the same day the module joins GUARDED.
 _REFUSAL_CALLS = {"_fail", "_deny"}
-_REFUSAL_RAISES = {"ContractError", "Rejected", "GatewayRejected", "AgentStartRefused"}
+_REFUSAL_RAISES = {"ContractError", "Rejected", "GatewayRejected", "AgentStartRefused",
+                   "WorkerBoundaryError", "_OccupiedCgroup"}
 _REFUSAL_RETURNS = {"_refusal"}
 
 
@@ -217,22 +238,29 @@ def _disable(source: str, refusal: Refusal) -> str:
 
 
 def _suite_passes(cwd: Path, *, failfast: bool = False,
-                  show_failure: bool = False, pattern: str | None = None) -> bool:
+                  show_failure: bool = False,
+                  patterns: tuple[str, ...] | None = None) -> bool:
     # A mutant is caught by its first failing test. The unmutated baseline
     # still runs every test so an unrelated failure cannot validate a mutant.
-    command = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"]
-    if pattern:
-        command += ["-p", pattern]
-    if failfast:
-        command.append("-f")
-    completed = subprocess.run(
-        command,
-        cwd=cwd, capture_output=True, text=True,
-    )
-    if show_failure and completed.returncode != 0:
-        print(completed.stdout[-4000:], file=sys.stderr)
-        print(completed.stderr[-4000:], file=sys.stderr)
-    return completed.returncode == 0
+    for pattern in patterns or (None,):
+        command = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"]
+        if pattern:
+            command += ["-p", pattern]
+        if failfast:
+            command.append("-f")
+        try:
+            completed = subprocess.run(
+                command, cwd=cwd, capture_output=True, text=True,
+                timeout=300 if pattern is None else 60,
+            )
+        except subprocess.TimeoutExpired:
+            return False
+        if show_failure and completed.returncode != 0:
+            print(completed.stdout[-4000:], file=sys.stderr)
+            print(completed.stderr[-4000:], file=sys.stderr)
+        if completed.returncode != 0:
+            return False
+    return True
 
 
 def check(paths: list[str]) -> int:
@@ -251,6 +279,15 @@ def check(paths: list[str]) -> int:
             print("the suite does not pass unmutated — fix that first", file=sys.stderr)
             return 1
 
+        focused_patterns = sorted({pattern for path in paths
+                                   for pattern in GUARDED_PYTHON.get(path, ())
+                                   or ((GUARDED_SHELL[path],) if path in GUARDED_SHELL else ())})
+        for pattern in focused_patterns:
+            if not _suite_passes(workspace, show_failure=True, patterns=(pattern,)):
+                print(f"focused baseline {pattern} does not pass — fix that first",
+                      file=sys.stderr)
+                return 1
+
         survivors = []
         for index, (path, refusal) in enumerate(refusals, start=1):
             target = workspace / refusal.path
@@ -260,8 +297,10 @@ def check(paths: list[str]) -> int:
             # not locate the refusal" after ten minutes of work.
             original = target.read_text()
             target.write_text(_disable(original, refusal))
+            focused = GUARDED_PYTHON.get(refusal.path)
+            shell_test = GUARDED_SHELL.get(refusal.path)
             survived = _suite_passes(workspace, failfast=True,
-                                     pattern=GUARDED_SHELL.get(refusal.path))
+                                     patterns=focused or ((shell_test,) if shell_test else None))
             target.write_text(original)
 
             mark = "SURVIVED" if survived else "caught  "

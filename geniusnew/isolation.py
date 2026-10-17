@@ -79,7 +79,11 @@ _FORBIDDEN_READ_ROOTS = ("/proc", "/sys", "/dev")
 # Other architectures fail closed until the same raw-syscall suite runs on
 # native CI for them.
 _FILTER_ARCHES = {
-    "x86_64": {"arch": 0xC000003E, "kill": (57, 58, 59, 322),
+    "x86_64": {"arch": 0xC000003E,
+               # A service worker may not undo nondumpable or change the UID
+               # after the trusted bootstrap has installed its fixed identity.
+               "kill": (57, 58, 59, 105, 106, 113, 114, 116, 117,
+                        119, 122, 123, 126, 157, 322),
                "clone": 56, "clone3": 435},
 }
 _X32_SYSCALL_BIT = 0x40000000
@@ -207,6 +211,8 @@ def _audit_hook(root: str, state: dict[str, bool], read_paths: tuple[str, ...] =
         raise _SandboxDenied()
 
     def hook(event: str, args: tuple[Any, ...]) -> None:
+        if event == "resource.setrlimit" and state.get("bootstrap", False):
+            return
         if event.startswith("socket."):
             deny()
         if (event in _FORBIDDEN_PROCESS_EVENTS

@@ -445,7 +445,9 @@ class IsolationChildContractTest(unittest.TestCase):
 # control that shows a probe can pass at all.
 _SYSCALLS = {
     "x86_64": {"getpid": 39, "clone": 56, "fork": 57, "vfork": 58, "execve": 59,
-               "execveat": 322, "clone3": 435},
+               "execveat": 322, "clone3": 435, "setuid": 105, "setgid": 106,
+               "setgroups": 116, "setresuid": 117, "setresgid": 119,
+               "setfsuid": 122, "setfsgid": 123, "capset": 126, "prctl": 157},
 }
 _PROBE = r"""
 import ctypes, os, sys
@@ -534,6 +536,14 @@ class ProcessFilterTest(unittest.TestCase):
         for name in ("fork", "vfork", "execve", "execveat"):
             with self.subTest(syscall=name):
                 self.assertEqual(self.probe("native", self.syscalls[name]), -signal.SIGSYS)
+
+    def test_identity_changes_and_dump_reactivation_are_killed(self):
+        for name in ("setuid", "setgid", "setgroups", "setresuid", "setresgid",
+                     "setfsuid", "setfsgid", "capset"):
+            with self.subTest(syscall=name):
+                self.assertEqual(self.probe("native", self.syscalls[name], 0), -signal.SIGSYS)
+        self.assertEqual(self.probe("native", self.syscalls["prctl"], 4, 1),
+                         -signal.SIGSYS)
 
     def test_clone_without_clone_thread_is_killed(self):
         self.assertEqual(

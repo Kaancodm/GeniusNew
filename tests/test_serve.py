@@ -45,6 +45,14 @@ root_secret_file = "{secret_path}"
 anchor_state = "{anchor_path}"
 database_dsn_file = "{database_dsn_file}"
 
+[service.worker]
+core_uid = {os.geteuid()}
+worker_uid = {os.geteuid() + 1}
+worker_gid = {os.getegid() + 1}
+socket_gid = {os.getegid()}
+socket_path = "/run/geniusnew-worker/ipc/worker.sock"
+lease_path = "/run/geniusnew-worker/ipc/lease"
+
 [service.limits]
 rate_per_minute = {rate_per_minute}
 burst = {burst}
@@ -110,7 +118,8 @@ class ServeTest(unittest.TestCase):
 
     def start(self):
         self.process = subprocess.Popen(
-            [sys.executable, "-m", "geniusnew", "serve", "--config", str(self.config)],
+            [sys.executable, str(ROOT / "tests" / "serve_fixture.py"),
+             "--config", str(self.config)],
             cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE)
         deadline = time.monotonic() + 30
@@ -156,6 +165,15 @@ class ServeTest(unittest.TestCase):
         self.assertNotIn(b"listening on", result.stderr)
         self.assertNotIn(b"Traceback", result.stderr)
         self.assertNotIn(self.dsn_path.read_bytes(), result.stderr)
+        with socket.socket() as probe:
+            self.assertNotEqual(probe.connect_ex(("127.0.0.1", self.port)), 0)
+
+    def test_real_server_refuses_without_verified_worker_service(self):
+        result = run_module("serve", "--config", str(self.config), timeout=20)
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn(b"listening on", result.stderr)
+        self.assertNotIn(b"Traceback", result.stderr)
+        self.assertNotIn(ROOT_SECRET, result.stderr)
         with socket.socket() as probe:
             self.assertNotEqual(probe.connect_ex(("127.0.0.1", self.port)), 0)
 

@@ -591,6 +591,21 @@ class EndToEndTest(Fixture, unittest.TestCase):
             build(root_secret=ROOT_SECRET, policy=self.policy_for(),
                   api_keys={API_KEY: 'subject-demo'},
                   workers=(DeterministicSummarizer(),), anchor='not-an-anchor')
+        with self.assertRaisesRegex(ContractError, 'worker_service_profile must be'):
+            build(root_secret=ROOT_SECRET, policy=self.policy_for(),
+                  api_keys={API_KEY: 'subject-demo'},
+                  workers=(DeterministicSummarizer(),), worker_service_profile='local')
+        from geniusnew.worker_service import WorkerServiceProfile
+        profile = WorkerServiceProfile(
+            core_uid=os.geteuid(), worker_uid=os.geteuid() + 1,
+            worker_gid=os.getegid() + 1, socket_gid=os.getegid(),
+            socket_path='/run/geniusnew-worker/ipc/worker.sock',
+            lease_path='/run/geniusnew-worker/ipc/lease')
+        with self.assertRaisesRegex(ContractError, 'cannot be combined'):
+            build(root_secret=ROOT_SECRET, policy=self.policy_for(),
+                  api_keys={API_KEY: 'subject-demo'},
+                  workers=(DeterministicSummarizer(),), worker_service_profile=profile,
+                  runner_factory=lambda worker: 'not-a-runner')
 
     def _slow_runner(self, *, takes):
         keys = self.service.keys

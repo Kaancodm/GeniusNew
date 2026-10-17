@@ -1,13 +1,12 @@
 # A2/C5: Getrennter Worker-Dienst und Betriebsvertrag
 
-**Status: ENTWURF / DESIGN-VORPRÜFUNG AUSSTEHEND.** Basis ist `main`
-`62b6d1966da5e30fe71f230629a48dea369ae62c` vom 08.10.2026. Kaans GO vom
-09.10.2026 für diese Überarbeitung umfasst den Entwurf mit Identitätsprüfung vor
-Nutzdaten und strikt seriellen Workern sowie die unabhängige Design-Vorprüfung.
-Es aktiviert keinen Dienst und erteilt keine Freigabe für Runtime-Code oder
-Serveränderungen. Vor einer gesondert freizugebenden isolierten Systemprobe und
-der anschließenden Implementierungsentscheidung steht die Gemini-Prüfung nach
-[`docs/COLLABORATION.md`](COLLABORATION.md). Er ergänzt den bestehenden
+**Status: IMPLEMENTIERUNG IN DRAFT-PR #140; SYSTEMABNAHME HOLD.** Dieser Entwurf
+basierte ursprünglich auf `main` `62b6d1966da5e30fe71f230629a48dea369ae62c`
+vom 08.10.2026. Nach der Design-Freigabe vom 09.10.2026 hat Kaan am 17.10.2026
+die reversible Implementierung des getrennten Worker-Pfads in PR #140 beauftragt.
+Die Unit-Vorlagen werden hier nicht installiert oder aktiviert. Der Serverpfad
+bleibt bis zur unabhängigen Gemini-Prüfung und einer bestandenen echten
+UID-/systemd-Probe ohne Betriebsabnahme. Der Entwurf ergänzt den bestehenden
 [C5-Betriebsentwurf in PR #117](https://github.com/Kaancodm/GeniusNew/pull/117),
 ohne dessen Dateien zu übernehmen oder zu ersetzen.
 
@@ -67,8 +66,8 @@ Die Service-Unit setzt `User=geniusnew-worker`, eine eigene primäre Gruppe, kei
 ergänzenden Gruppen und keine Linux-Capabilities. Der Core erhält insbesondere
 **weder Root noch `CAP_SETUID`/`CAP_SETGID`**. Er verbindet sich als
 `geniusnew-core` über eine ausschließlich für diesen Socket bestimmte Gruppe.
-Der Anker-Nutzer gehört keiner dieser Gruppen an. Installationsbefehle und Units
-gehören erst in einen gesondert freigegebenen Umsetzungs- und Betriebs-PR.
+Der Anker-Nutzer gehört keiner dieser Gruppen an. Die Unit-Vorlagen liegen in
+`ops/worker/`; Installation und Aktivierung bleiben gesondert freizugeben.
 
 Der Socket-Knoten liegt in einem von `root` kontrollierten Verzeichnis, das nur
 Core und systemd traversieren können. Die spätere Installation muss Eigentümer,
@@ -156,8 +155,9 @@ UID-/GID-/Dateisystem-ID-Wechsel; Prozessstart und Exec bleiben bereits verboten
 Fehlt eine Schicht, gibt es kein READY und keine Nutzdaten. Die Wirkungen auf
 `/proc`-Leserechte sind bei der Invocation-Zuordnung mitzuprüfen; siehe
 [PR_SET_DUMPABLE(2)](https://man7.org/linux/man-pages/man2/PR_SET_DUMPABLE.2const.html).
-Dies ist eine Anforderung an die spätere Sandbox, keine Änderung der globalen
-Core-Dump-Konfiguration oder bestehender Systemdienste in diesem PR.
+Die Implementierung setzt diese Bootstrap-Prüfung; ihre Kernelwirkung bleibt
+Teil der echten Systemprobe. Die globale Core-Dump-Konfiguration und bestehende
+Systemdienste werden in diesem PR nicht geändert.
 
 ## Autorität und IPC-Vertrag
 
@@ -173,7 +173,7 @@ keine zusätzliche kryptografische Trennung zwischen Core und Ergebnis-Signierer
 der Core hält heute bereits `WorkerAuthority`, und ein gemeinsames Root-Secret
 bleibt die in [`SECURITY.md`](../SECURITY.md) dokumentierte Grenze.
 
-| Schritt | Vorgeschlagener Vertrag für die spätere Implementierung |
+| Schritt | Vertrag für die Implementierung |
 | --- | --- |
 | Verbindungsaufbau | Core prüft absoluten Socket-Pfad, Eigentümer/Modus und die erwartete Dienstkonfiguration. Fehler, fehlender Socket, unbekannte UID oder unklarer Zustand: `ContractError`, kein lokaler Worker-Fallback. |
 | Core-Identität | Die Worker-Instanz prüft auf der angenommenen AF_UNIX-Verbindung die vom Kernel gelieferten Peer-Credentials gegen die **konfigurierte numerische Core-UID**. Die Gruppenzugehörigkeit öffnet nur den Socket; sie ersetzt nicht die UID-Prüfung. |
@@ -274,37 +274,34 @@ oder nachweislich kernelseitig gesperrte Signale, Ptrace,
 weder alle IPC-Wege noch alle nativen Prozesszugriffe; siehe
 [Linux-Kernel-Dokumentation zu Landlock](https://docs.kernel.org/userspace-api/landlock.html).
 
-## Geplanter Dateischnitt und Abnahme
+## Umsetzung in PR #140 und offene Abnahme
 
-**In diesem Entwurfs-PR geändert:** nur dieses Dokument. Keine Runtime-, Test-,
-CI-, Unit-, Secret-, Rechte- oder `SECURITY.md`-Datei wird verändert.
+Kaan hat am 17.10.2026 die reversible Implementierung auf dem bestehenden
+Draft-Branch #140 beauftragt. Der PR enthält Code, Negativtests, Refusal-Guard und
+nicht installierte Unit-Vorlagen. Er verändert weder `SECURITY.md` noch Secrets,
+produktive Rechte oder installierte Dienste.
 
-**Erst nach Gemini-Design-Vorprüfung, gesondert freigegebener Systemprobe und
-anschließender Implementierungsentscheidung in einem Code-PR umzusetzen:**
-
-| Datei/Ort | Geplanter Änderungszweck |
+| Datei/Ort | Umgesetzter Zweck |
 | --- | --- |
-| `geniusnew/isolation.py`, `geniusnew/isolation_child.py` | Bestehenden lokalen Kindprozess im `serve`-Pfad durch strikt begrenzten IPC-Client und eine einmalige Worker-Instanz ersetzen; Kernel-Sandbox und Ressourcenlimits erhalten. |
-| `geniusnew/wiring.py`, `geniusnew/config.py` | Socket-/UID-Betriebsprofil nur für den Dienst konfigurieren und vor Listener prüfen; Demo/Test-Injektionen bleiben ausdrücklich getrennt. Kein unbemerkter Fallback. |
-| Neues kleines `geniusnew/worker_service.py` | Versioniertes Protokoll, Kernel-Credentials, eine Anfrage je Dienstinstanz, feste Worker-Registry, kein Signierschlüssel. |
-| `tests/test_isolation.py`, neue gezielte IPC-/Diensttests, `tests/test_b7_crash_recovery.py` | Negative UID-, Secret-, Protokoll-, Zeit-, Parallelitäts- und Crash-Tests; beide Seiten der Grenze tatsächlich ausführen. |
-| `scripts/refusals.py`, gegebenenfalls `.github/workflows/verify.yml` | Jede neue Ablehnung mutieren; disposable CI-Umgebung mit real verschiedenen UIDs und gegebenenfalls systemd-Integration nachweisen. |
-| C5-Dokumentation/Unit-Vorlagen in Abstimmung mit #117 | Getrennte Nutzer und Rechte, Socket-Aktivierung, Backup/Restore, Rotation, E3-Protokoll; keine Übernahme fremder Änderungen ohne Abstimmung. |
-| `SECURITY.md` | Nur in einem eigens freigegebenen Grenz-PR mit umgekehrten Boundary-Tests aktualisieren. |
+| `geniusnew/worker_service.py`, `geniusnew/wiring.py`, `geniusnew/config.py` | Fester Service-Runner im `serve`-Pfad, UID-/systemd-/Cgroup-Prüfung, Lease, versioniertes IPC mit Kernel-Credentials und Nonce; kein lokaler Fallback. |
+| `geniusnew/isolation.py`, `geniusnew/workers.py` | Bestehende Landlock-/Seccomp-/Ressourcenbegrenzung im Dienst, Fehler der vertrauenswürdigen Grenze ohne signierbares Worker-Ergebnis. |
+| `tests/test_worker_service.py`, vorhandene Kern- und Servertests, `scripts/refusals.py` | Negativfälle für Profil, Transport, Antworten und Lifecycle sowie Mutation jeder neuen Ablehnung. |
+| `ops/worker/` | Nicht installierte Socket- und Dienstvorlagen mit getrennten numerischen UIDs und festen Rechten. |
 
-Reihenfolge: überarbeiteter Entwurf → Gemini-Design-Vorprüfung am exakten Head →
-separates GO für eine disposable Linux-Systemprobe mit echten UIDs und systemd →
-Kaans Implementierungsentscheidung. Die Probe muss Handshake vor Nutzdaten,
-Lease-/Invocation-Zuordnung, Crash-/Neustart-Reconciliation und Bereinigung ohne
-neue Core-Privilegien belegen. Keine Probe auf produktiven Jobs, Secrets oder
-Dienstidentitäten; keine lokale Simulation als Ersatz für reale Credentials.
-Danach verlangt die Code-Abnahme gezielte Negativtests, vollständige
-Unittests mit echtem PostgreSQL, Demo, Persistenz-/Restore-Demo und
-Refusal-Guard **nacheinander** auf demselben Head, `contracts` grün, unabhängiger
-Security-Review und C5/E3-Nachweis auf einem sauberen Linux-Testhost. Kein Mock
-einer UID oder eines Peer-Credentials zählt als OS-Isolationsnachweis.
+**HOLD:** Claudes jüngste statische Probe vom 17.10.2026 hat
+`full_systemd_probe_executed=false`; die letzte echte systemd-Probe blieb HOLD.
+Die Vorlage und `systemctl show` belegen die konfigurierte Syscall-Sperre, aber
+erst eine echte Probe belegt ihre Kernelwirkung, zwei verschiedene UIDs,
+Credential- und Invocation-Bindung, Crash-/Neustart-Reconciliation und die
+vollständige Bereinigung auf dem Zielhost. Ein Mock ersetzt diesen Nachweis
+nicht. Die Dienstinstallation, Rechteänderung, Produktion, Release und der
+Merge nach `main` brauchen Kaans gesondertes GO. Gemini prüft den exakten
+Implementierungs-Head unabhängig.
 
-**HOLD:** Dieses Überarbeitungs-GO umfasst nur Dokumentation und unabhängiges
-Design-Review. Systemprobe, Runtime-Code, Nutzer-/Gruppen-/systemd-Änderungen,
-Secrets, Main-Merge, Deployment und Release bleiben gesondert freizugeben.
-Ein grüner Doku-CI-Lauf ist kein Nachweis der noch nicht implementierten Grenze.
+Der Job-Wall-Timer im Dienst ist ein Python-Signal und kann von untrusted
+Worker-Code manipuliert werden. Der Core verweigert eine Antwort nach der
+zweiten, extern gemessenen Zwei-Sekunden-Grenze und hält die Lease bis zum
+nachgewiesenen Instanzende; systemd setzt zusätzlich `RuntimeMaxSec=12s`.
+Damit entsteht kein später signierbarer Erfolg. Die echte Probe und der
+unabhängige Review müssen das Verhalten eines weiterlaufenden Workers bis zur
+Bereinigung ausdrücklich bewerten.
