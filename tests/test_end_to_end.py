@@ -570,6 +570,7 @@ class EndToEndTest(Fixture, unittest.TestCase):
         self.assertIsNotNone(service)
 
     def test_build_refuses_what_it_cannot_rely_on(self):
+        """Reject invalid wiring inputs and conflicting runner configuration."""
         for policy in (None, 'policy', 42, {}):
             with self.subTest(policy=type(policy)):
                 with self.assertRaisesRegex(ContractError, 'policy is invalid'):

@@ -542,6 +542,7 @@ class ProcessFilterTest(unittest.TestCase):
                 self.assertEqual(self.probe("native", self.syscalls[name]), -signal.SIGSYS)
 
     def test_identity_changes_and_dump_reactivation_are_killed(self):
+        """Require fatal seccomp refusals for identity changes and restoring dumpability."""
         for name in ("setuid", "setgid", "setreuid", "setregid", "setgroups", "setresuid", "setresgid",
                      "setfsuid", "setfsgid", "capset"):
             with self.subTest(syscall=name):
@@ -550,6 +551,7 @@ class ProcessFilterTest(unittest.TestCase):
                          -signal.SIGSYS)
 
     def test_setting_a_thread_name_refuses_without_killing_the_thread(self):
+        """Require thread naming to return EPERM while the calling process survives."""
         # Python 3.14 names OS threads; exercise its syscall on older Python too.
         # Its OSError handler can continue, without exposing payload in comm.
         self.assertEqual(self.probe("thread-name", self.syscalls["prctl"], 15),

@@ -66,6 +66,7 @@ _CONTROL_BYTES = (socket.CMSG_SPACE(_UCREDS.size)
 
 
 def _fail(message: str) -> None:
+    """Raise a contract refusal without producing a worker outcome."""
     raise ContractError(message)
 
 
@@ -85,6 +86,7 @@ class WorkerServiceProfile:
     total_seconds: float = 30.0
 
     def __post_init__(self) -> None:
+        """Reject unsafe identities, paths, unit names, or deadline settings."""
         ids = (self.core_uid, self.worker_uid, self.worker_gid, self.socket_gid)
         if any(type(value) is not int or value <= 0 for value in ids):
             _fail("worker service identities must be positive numeric IDs")
@@ -111,6 +113,7 @@ class WorkerServiceProfile:
 
 
 def _pidfd_pid(fd: int) -> int:
+    """Read the unique numeric PID reported by a kernel pidfd."""
     try:
         with open(f"/proc/self/fdinfo/{fd}", encoding="ascii") as handle:
             fields = handle.read().splitlines()
@@ -123,6 +126,7 @@ def _pidfd_pid(fd: int) -> int:
 
 
 def _pidfd_exited(fd: int) -> bool:
+    """Return whether the pidfd signals exit, refusing ambiguous poll states."""
     try:
         poller = select.poll()
         poller.register(fd, select.POLLIN)
@@ -146,11 +150,13 @@ class FrameIdentity:
     pidfd: int | None = None
 
     def close(self) -> None:
+        """Close and clear the retained sender pidfd, if one is bound."""
         if self.pidfd is not None:
             os.close(self.pidfd)
             self.pidfd = None
 
     def accept(self, data: bytes, controls: list[tuple[int, int, bytes]], flags: int) -> None:
+        """Authenticate fragment controls and retain only the first valid pidfd."""
         credentials: list[bytes] = []
         pidfds: list[bytes] = []
         owned_fds: list[int] = []
@@ -220,6 +226,7 @@ class FrameIdentity:
 
 def _recv_exact(connection: socket.socket, length: int, *, deadline: float,
                 identity: FrameIdentity) -> bytes:
+    """Read the requested bytes by the deadline, authenticating every fragment."""
     chunks = []
     remaining = length
     while remaining:
@@ -240,6 +247,7 @@ def _recv_exact(connection: socket.socket, length: int, *, deadline: float,
 
 def _read_frame(connection: socket.socket, *, limit: int, deadline: float,
                 identity: FrameIdentity) -> dict[str, Any]:
+    """Read one bounded canonical JSON object from an authenticated sender."""
     size = _HEADER.unpack(_recv_exact(connection, _HEADER.size,
                                       deadline=deadline, identity=identity))[0]
     if not 0 < size <= limit:
@@ -256,6 +264,7 @@ def _read_frame(connection: socket.socket, *, limit: int, deadline: float,
 
 def _write_frame(connection: socket.socket, value: dict[str, Any], *,
                  limit: int, deadline: float) -> bytes:
+    """Send a bounded canonical JSON frame by the deadline and return its JSON."""
     raw = canonical(value)
     if not 0 < len(raw) <= limit:
         _fail("worker outbound frame length is invalid")
@@ -278,6 +287,7 @@ def _write_frame(connection: socket.socket, value: dict[str, Any], *,
 
 def _expect_eof(connection: socket.socket, *, deadline: float,
                 identity: FrameIdentity) -> None:
+    """Require authenticated EOF by the deadline and refuse trailing bytes."""
     wait = deadline - time.monotonic()
     if wait <= 0 or not select.select((connection,), (), (), wait)[0]:
         _fail("worker EOF deadline exceeded")
@@ -291,6 +301,7 @@ def _expect_eof(connection: socket.socket, *, deadline: float,
 
 
 def _validate_ready(value: dict[str, Any], nonce: str) -> None:
+    """Require the exact READY shape, protocol version, and handshake nonce."""
     if (type(value) is not dict or set(value) != {"kind", "version", "nonce"}
             or value["kind"] != "READY" or value["version"] != _VERSION
             or value["nonce"] != nonce):
@@ -314,9 +325,11 @@ class WorkerLifecycle:
     """Read-only systemd/cgroup evidence and a Core-only host-wide lease."""
 
     def __init__(self, profile: WorkerServiceProfile) -> None:
+        """Bind lifecycle checks to the fixed worker service profile."""
         self.profile = profile
 
     def _systemctl(self, *arguments: str) -> str:
+        """Read bounded ASCII systemctl output, refusing errors or warnings."""
         try:
             completed = subprocess.run(
                 ["/usr/bin/systemctl", *arguments], capture_output=True,
@@ -333,6 +346,7 @@ class WorkerLifecycle:
             raise ContractError("worker systemd state is not ASCII") from exc
 
     def _show(self, unit: str, *properties: str) -> dict[str, str]:
+        """Read exactly the requested unit properties, rejecting duplicate fields."""
         output = self._systemctl("show", unit, "--no-pager",
                                  *(f"-p{property_name}" for property_name in properties))
         if type(output) is not str:
@@ -351,6 +365,7 @@ class WorkerLifecycle:
 
     def _check_node(self, path: str, *, kind: str, gid: int,
                     mode: int) -> os.stat_result:
+        """Check root ownership, path types, and exact IPC permissions."""
         target = Path(path)
         current = Path("/")
         for part in target.parts[1:-1]:
@@ -378,6 +393,7 @@ class WorkerLifecycle:
 
     @staticmethod
     def _root_controlled(path: Path, *, regular: bool) -> None:
+        """Require root control of every path component and traversed symlink."""
         try:
             if not path.is_absolute():
                 _fail("worker installed path is not absolute")
@@ -412,6 +428,7 @@ class WorkerLifecycle:
             raise ContractError("worker installed path cannot be inspected") from exc
 
     def _check_runtime_tree(self, path: Path) -> None:
+        """Check the complete runtime tree, visiting directory inodes once."""
         # Follow directory aliases as imports do, but visit each inode once so
         # a root-owned symlink cycle cannot make the inspection unbounded.
         pending = [path]
@@ -430,6 +447,7 @@ class WorkerLifecycle:
             raise ContractError("worker Python runtime cannot be inspected") from exc
 
     def _check_optional_runtime_path(self, path: Path) -> None:
+        """Check an existing runtime path or secure its nearest existing parent."""
         # CPython includes a zip search slot even when that archive is absent.
         # Its nearest existing parent must prevent an untrusted future insert.
         try:
@@ -447,6 +465,7 @@ class WorkerLifecycle:
             self._check_runtime_tree(path)
 
     def _check_python_runtime(self) -> None:
+        """Verify isolated startup and root control of Python runtime paths."""
         if sys.flags.isolated != 1:
             _fail("Core requires isolated Python startup")
         try:
@@ -482,6 +501,7 @@ class WorkerLifecycle:
             raise ContractError("worker Python startup state cannot be inspected") from exc
 
     def _check_loader_configuration(self) -> None:
+        """Refuse loader overrides, unsafe configuration, and native preloads."""
         if any(name.startswith("LD_") or name in _LOADER_ENVIRONMENT.split()
                for name in os.environ):
             _fail("Core loader environment is not fixed")
@@ -498,6 +518,7 @@ class WorkerLifecycle:
             raise ContractError("worker loader configuration cannot be inspected") from exc
 
     def _check_native_mappings(self) -> None:
+        """Check executable mappings against root-controlled files and inodes."""
         # The fixed bootstrap imports the same native modules as this Core.
         # Check the actual ELF loader and DSOs, not just LIBDIR's directory mode.
         # The trusted installer must establish this runtime before the first exec.
@@ -531,6 +552,7 @@ class WorkerLifecycle:
             raise ContractError("Core native runtime cannot be inspected") from exc
 
     def _check_installation(self) -> None:
+        """Check the Python runtime, installed worker modules, and bootstrap."""
         from . import contracts, isolation, results, workers
 
         self._check_python_runtime()
@@ -542,6 +564,7 @@ class WorkerLifecycle:
         self._root_controlled(Path(_BOOTSTRAP), regular=True)
 
     def _check_unit_file(self, name: str) -> None:
+        """Inspect a loaded unit, querying service templates through an instance."""
         # systemd exposes a template through an instance name. bind() checks
         # the actual accepted instance again before any job payload is sent.
         unit = name.replace("@.service", "@internal.service")
@@ -550,6 +573,7 @@ class WorkerLifecycle:
         self._check_unit_source(properties, name)
 
     def _check_unit_source(self, properties: dict[str, str], name: str) -> None:
+        """Require the fixed installed unit without drop-ins or a pending reload."""
         path = Path(properties["FragmentPath"])
         if (properties["LoadState"] != "loaded" or properties["DropInPaths"]
                 or properties["NeedDaemonReload"] != "no"
@@ -559,6 +583,7 @@ class WorkerLifecycle:
         self._check_unit_content(path, name)
 
     def _check_unit_content(self, path: Path, name: str) -> None:
+        """Require the exact service or socket directives and fixed bootstrap."""
         try:
             source = path.read_text(encoding="ascii")
         except (OSError, UnicodeError) as exc:
@@ -634,9 +659,11 @@ class WorkerLifecycle:
                 _fail("worker installed socket directives are not fixed")
 
     def _check_runtime_root(self) -> None:
+        """Require root control of the configured runtime parent directory."""
         self._root_controlled(Path(self.profile.runtime_root), regular=False)
 
     def _check_exec(self, value: str) -> None:
+        """Require systemd ExecStart to use the fixed interpreter and bootstrap."""
         if not value.startswith("{ ") or not value.endswith(" }"):
             _fail("worker ExecStart is malformed")
         fields = {}
@@ -661,6 +688,7 @@ class WorkerLifecycle:
         self._root_controlled(Path(executable), regular=True)
 
     def _check_instance_settings(self, properties: dict[str, str], instance: str) -> None:
+        """Check effective instance hardening and its fixed execution command."""
         expected = {
             "User": str(self.profile.worker_uid),
             "Group": str(self.profile.worker_gid),
@@ -692,6 +720,7 @@ class WorkerLifecycle:
         self._check_exec(properties["ExecStart"])
 
     def _check_core_identity(self) -> None:
+        """Require the fixed Core UID, allowed groups, and no Linux capabilities."""
         if (os.getuid() != self.profile.core_uid
                 or os.geteuid() != self.profile.core_uid
                 or self.profile.worker_gid in (os.getgid(), *os.getgroups())
@@ -715,6 +744,7 @@ class WorkerLifecycle:
 
     @staticmethod
     def _check_id_maps() -> None:
+        """Require initial host UID and GID mappings for ownership evidence."""
         # Without this gate, root ownership inside an unprivileged user
         # namespace would not establish the provenance of the reference file.
         for name in ("uid_map", "gid_map"):
@@ -727,6 +757,7 @@ class WorkerLifecycle:
 
     @staticmethod
     def _namespace_ids(pid: str) -> dict[str, list[int]]:
+        """Return device and inode identities for the required process namespaces."""
         namespaces = {}
         try:
             for name in _HOST_NAMESPACES:
@@ -741,10 +772,12 @@ class WorkerLifecycle:
         return namespaces
 
     def _host_paths(self) -> dict[str, str]:
+        """Return the host paths whose inodes bind the provisioning reference."""
         return {"root": "/", "proc": "/proc", "cgroup": "/sys/fs/cgroup",
                 "runtime": self.profile.runtime_root, "lease": self.profile.lease_path}
 
     def _host_snapshot(self, *, pid: str = "self", lease_fd: int | None = None) -> bytes:
+        """Serialize boot, namespace, and path identities, optionally using an open lease."""
         namespaces = self._namespace_ids(pid)
         try:
             boot = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
@@ -785,6 +818,7 @@ class WorkerLifecycle:
         return self._host_snapshot(pid="1")
 
     def _check_host_namespaces(self, *, lease_fd: int | None = None) -> None:
+        """Match the trusted boot reference and require a complete procfs view."""
         # Nonroot Core cannot dereference /proc/1/ns across the UID boundary.
         # A boot-bound root reference preserves the comparison without granting
         # ptrace capabilities. Path inodes also detect chroot and split leases.
@@ -826,6 +860,7 @@ class WorkerLifecycle:
             _fail("Core procfs hides worker processes")
 
     def preflight(self) -> None:
+        """Verify Core identity, host evidence, installed code, and socket activation."""
         self._check_core_identity()
         self._check_host_namespaces()
         self._check_node(self.profile.socket_path, kind="socket",
@@ -850,6 +885,7 @@ class WorkerLifecycle:
             _fail("worker socket unit does not match its fixed profile")
 
     def acquire(self) -> int:
+        """Acquire a nonblocking lease and return its checked, caller-owned descriptor."""
         self._check_node(self.profile.lease_path, kind="file",
                          gid=self.profile.socket_gid, mode=0o660)
         try:
@@ -874,6 +910,7 @@ class WorkerLifecycle:
         return descriptor
 
     def _require_empty_cgroup(self, path: Path) -> None:
+        """Require a verifiably absent cgroup or an empty process subtree."""
         try:
             try:
                 info = path.lstat()
@@ -896,6 +933,7 @@ class WorkerLifecycle:
 
     @staticmethod
     def _runtime_absent(path: Path) -> bool:
+        """Return whether the runtime path is absent, refusing unreadable state."""
         try:
             path.lstat()
         except FileNotFoundError:
@@ -905,6 +943,7 @@ class WorkerLifecycle:
         return False
 
     def _cgroup_path(self, group: str) -> Path:
+        """Resolve a cgroup path confined to the host system slice."""
         if (type(group) is not str or not group.startswith("/system.slice/")
                 or ".." in group.split("/") or group.endswith("/")):
             _fail("worker cgroup path is unexpected")
@@ -914,6 +953,7 @@ class WorkerLifecycle:
         return path
 
     def _uid_processes(self) -> list[int]:
+        """List processes with any worker UID field, refusing unreadable evidence."""
         found = []
         try:
             entries = os.scandir("/proc")
@@ -939,6 +979,7 @@ class WorkerLifecycle:
         return found
 
     def assert_idle(self) -> None:
+        """Require no active worker instance, residual runtime, or worker UID process."""
         prefix = self.profile.unit_prefix
         output = self._systemctl("list-units", "--all", "--plain", "--no-legend",
                                  prefix + "*.service")
@@ -975,6 +1016,7 @@ class WorkerLifecycle:
             _fail("worker UID still has a live process")
 
     def bind(self, pid: int, pidfd: int) -> _Invocation:
+        """Bind a live sender to its active hardened invocation and private runtime."""
         if _pidfd_exited(pidfd):
             _fail("worker exited before the invocation check")
         try:
@@ -1022,6 +1064,7 @@ class WorkerLifecycle:
                            runtime, pid)
 
     def await_end(self, invocation: _Invocation, pidfd: int, deadline: float) -> None:
+        """Wait until sender exit, instance termination, and cleanup are confirmed."""
         while time.monotonic() < deadline:
             properties = self._show(invocation.unit, "ActiveState", "InvocationID",
                                     "ControlGroup", "MainPID")
@@ -1042,6 +1085,7 @@ class WorkerLifecycle:
 
 
 def _request(payload: dict[str, str], nonce: str) -> dict[str, Any]:
+    """Build the fixed summarizer request with a text payload and default limits."""
     if set(payload) != {"text"} or type(payload["text"]) is not str:
         _fail("worker service accepts only a text payload")
     return {"kind": "REQUEST", "version": _VERSION, "nonce": nonce,
@@ -1051,6 +1095,7 @@ def _request(payload: dict[str, str], nonce: str) -> dict[str, Any]:
 
 def _validate_result(value: dict[str, Any], nonce: str,
                      request_digest: str) -> Any:
+    """Validate result identity and return text output or a permitted error code."""
     common = {"kind", "version", "nonce", "request_digest"}
     if (type(value) is not dict or value.get("kind") != "RESULT"
             or value.get("version") != _VERSION or value.get("nonce") != nonce
@@ -1072,6 +1117,7 @@ class _CoreExchange:
     def __init__(self, connection: socket.socket, profile: WorkerServiceProfile,
                  lifecycle: WorkerLifecycle, payload: dict[str, str],
                  total_deadline: float) -> None:
+        """Prepare one connection exchange with a fixed identity and total deadline."""
         self.connection = connection
         self.profile = profile
         self.lifecycle = lifecycle
@@ -1081,9 +1127,11 @@ class _CoreExchange:
         self.invocation: _Invocation | None = None
 
     def _deadline(self) -> float:
+        """Return the next phase deadline capped by the total exchange deadline."""
         return min(self.total_deadline, time.monotonic() + self.profile.phase_seconds)
 
     def run(self) -> Any:
+        """Authenticate READY, bind the invocation, and validate one result and EOF."""
         nonce = secrets.token_hex(32)
         _write_frame(self.connection, {"kind": "HELLO", "version": _VERSION,
                                        "nonce": nonce}, limit=_HELLO_LIMIT,
@@ -1120,6 +1168,7 @@ class ServiceWorkerRunner(WorkerRunner):
     def __init__(self, worker: DeterministicSummarizer, *, authority: WorkerAuthority,
                  profile: WorkerServiceProfile,
                  lifecycle: WorkerLifecycle | None = None) -> None:
+        """Create a runner for the fixed summarizer and a validated service profile."""
         if type(worker) is not DeterministicSummarizer:
             _fail("worker service supports only the fixed summarizer")
         if not isinstance(profile, WorkerServiceProfile):
@@ -1130,6 +1179,7 @@ class ServiceWorkerRunner(WorkerRunner):
         self._pending: list[tuple[int, FrameIdentity | None]] = []
 
     def preflight(self) -> None:
+        """Check service readiness, then verify idle state under the exclusive lease."""
         self.lifecycle.preflight()
         descriptor = self.lifecycle.acquire()
         try:
@@ -1138,6 +1188,7 @@ class ServiceWorkerRunner(WorkerRunner):
             os.close(descriptor)
 
     def _connect(self) -> socket.socket:
+        """Connect with credential and pidfd reception enabled in nonblocking mode."""
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             connection.settimeout(self.profile.phase_seconds)
@@ -1151,6 +1202,7 @@ class ServiceWorkerRunner(WorkerRunner):
         return connection
 
     def _run_worker(self, payload: dict[str, str]) -> dict[str, str]:
+        """Run one authenticated job and retain the lease until cleanup is confirmed."""
         if self._pending:
             raise WorkerBoundaryError("worker service has an unconfirmed prior instance")
         try:
@@ -1203,6 +1255,7 @@ class ServiceWorkerRunner(WorkerRunner):
 
 
 def _plain_exact(descriptor: int, length: int, deadline: float) -> bytes:
+    """Read exactly the requested bytes from a descriptor before the deadline."""
     chunks = []
     while length:
         wait = deadline - time.monotonic()
@@ -1222,6 +1275,7 @@ def _plain_exact(descriptor: int, length: int, deadline: float) -> bytes:
 
 
 def _plain_frame(descriptor: int, *, limit: int, deadline: float) -> dict[str, Any]:
+    """Read one bounded canonical ASCII JSON object from the Core descriptor."""
     size = _HEADER.unpack(_plain_exact(descriptor, _HEADER.size, deadline))[0]
     if not 0 < size <= limit:
         _fail("worker service input length is invalid")
@@ -1236,6 +1290,7 @@ def _plain_frame(descriptor: int, *, limit: int, deadline: float) -> dict[str, A
 
 
 def _plain_expect_eof(descriptor: int, deadline: float) -> None:
+    """Require the Core request to end by the deadline without trailing bytes."""
     wait = deadline - time.monotonic()
     if wait <= 0 or not select.select((descriptor,), (), (), wait)[0]:
         _fail("worker service request end deadline exceeded")
@@ -1250,6 +1305,7 @@ def _plain_expect_eof(descriptor: int, deadline: float) -> None:
 
 
 def _plain_write(descriptor: int, value: dict[str, Any], deadline: float) -> None:
+    """Send one bounded canonical JSON frame before the deadline."""
     data = canonical(value)
     if not 0 < len(data) <= _PAYLOAD_LIMIT:
         _fail("worker service output length is invalid")
@@ -1270,6 +1326,7 @@ def _plain_write(descriptor: int, value: dict[str, Any], deadline: float) -> Non
 
 
 def _validate_hello(value: dict[str, Any]) -> str:
+    """Check the exact HELLO shape and return its random hexadecimal nonce."""
     if (set(value) != {"kind", "version", "nonce"} or value["kind"] != "HELLO"
             or value["version"] != _VERSION or type(value["nonce"]) is not str
             or re.fullmatch(r"[0-9a-f]{64}", value["nonce"]) is None):
@@ -1279,6 +1336,7 @@ def _validate_hello(value: dict[str, Any]) -> str:
 
 def _validate_request(value: dict[str, Any], nonce: str,
                       ceiling: IsolationLimits) -> IsolationLimits:
+    """Check the fixed worker request and return limits within the ceiling."""
     if (set(value) != {"kind", "version", "nonce", "worker", "payload", "limits"}
             or value["kind"] != "REQUEST" or value["version"] != _VERSION
             or value["nonce"] != nonce or value["worker"] != "summarize"):
@@ -1296,6 +1354,7 @@ def _validate_request(value: dict[str, Any], nonce: str,
 
 
 def _assert_null_outputs() -> None:
+    """Require both standard output descriptors to refer to the null device."""
     null = os.stat(os.devnull)
     for descriptor in (1, 2):
         try:
@@ -1307,6 +1366,7 @@ def _assert_null_outputs() -> None:
 
 
 def _assert_no_extra_fds() -> None:
+    """Refuse inherited descriptors beyond standard input, output, and error."""
     try:
         descriptors = [int(name) for name in os.listdir("/proc/self/fd")]
     except (OSError, ValueError) as exc:
@@ -1324,6 +1384,7 @@ def _assert_no_extra_fds() -> None:
 
 
 def _set_nondumpable() -> None:
+    """Disable process dumpability and verify that the kernel accepted it."""
     libc = ctypes.CDLL(None, use_errno=True)
     libc.prctl.argtypes = (ctypes.c_int,) + (ctypes.c_ulong,) * 4
     libc.prctl.restype = ctypes.c_int
@@ -1332,6 +1393,7 @@ def _set_nondumpable() -> None:
 
 
 def _assert_worker_identity(worker_uid: int, worker_gid: int) -> None:
+    """Require the fixed nonroot identity, allowed groups, and no capabilities."""
     # systemd initgroups retains the primary GID in the supplementary vector.
     # Repeating that GID adds no authority; every other group must refuse.
     if (os.geteuid() != worker_uid or os.getegid() != worker_gid
@@ -1355,6 +1417,7 @@ def _assert_worker_identity(worker_uid: int, worker_gid: int) -> None:
 
 
 def _worker_root(worker_uid: int, worker_gid: int) -> str:
+    """Return the private runtime directory bound to this systemd instance."""
     value = os.environ.get("RUNTIME_DIRECTORY")
     if (type(value) is not str or not value.startswith("/run/geniusnew-worker/jobs/")
             or ":" in value or os.path.normpath(value) != value):
@@ -1378,6 +1441,7 @@ def _worker_root(worker_uid: int, worker_gid: int) -> str:
 
 
 def _service_read_paths() -> tuple[str, ...]:
+    """Return sandbox read roots limited to worker packages and Python runtime."""
     import cryptography
 
     # Import search roots are broader than sandbox read roots. In particular,
@@ -1389,6 +1453,7 @@ def _service_read_paths() -> tuple[str, ...]:
 
 def _run_service_connection(connection: socket.socket, *, core_uid: int,
                             worker_uid: int, worker_gid: int) -> None:
+    """Authenticate the Core, install isolation, and process exactly one job."""
     _assert_worker_identity(worker_uid, worker_gid)
     _assert_null_outputs()
     _assert_no_extra_fds()
@@ -1435,6 +1500,7 @@ def _run_service_connection(connection: socket.socket, *, core_uid: int,
     result = {"kind": "RESULT", "version": _VERSION, "nonce": nonce,
               "request_digest": digest}
     def wall_expired(_signal: int, _frame: Any) -> None:
+        """Interrupt worker execution when its local wall timer expires."""
         raise _WorkerResourceExhausted()
 
     previous_handler = signal.signal(signal.SIGALRM, wall_expired)
@@ -1463,6 +1529,7 @@ def _run_service_connection(connection: socket.socket, *, core_uid: int,
 
 
 def main() -> int:
+    """Serve one inherited connection, returning two if it cannot complete."""
     parser = argparse.ArgumentParser(prog="python -m geniusnew.worker_service")
     parser.add_argument("--core-uid", type=int, required=True)
     parser.add_argument("--worker-uid", type=int, required=True)

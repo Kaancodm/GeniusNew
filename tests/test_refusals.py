@@ -54,6 +54,7 @@ class RefusalScannerTest(unittest.TestCase):
             self.assertEqual(str(caught.exception), "fixed message")
 
     def test_each_seccomp_kill_rule_is_removed_independently(self):
+        """Check that each syscall mutation removes only its selected kill-table entry."""
         source = '_FILTER_ARCHES = {"x86_64": {"kill": (105, 113, 114)}}\n'
         found = self.find(source)
         self.assertEqual([item.condition for item in found], ["105", "113", "114"])
@@ -65,6 +66,7 @@ class RefusalScannerTest(unittest.TestCase):
                                    if value != int(refusal.condition)))
 
     def test_seccomp_thread_name_refusal_is_replaced_by_allow(self):
+        """Check that the thread-name mutation replaces its refusal with ALLOW."""
         source = ('_SECCOMP_RET_ERRNO = 0x00050000\n'
                   '_SECCOMP_RET_ALLOW = 0x7fff0000\n'
                   '_THREAD_NAME_ACTION = _SECCOMP_RET_ERRNO | 1\n')

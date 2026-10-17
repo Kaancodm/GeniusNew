@@ -19,6 +19,7 @@ from geniusnew.results import WorkerAuthority
 
 
 def main() -> int:
+    """Serve the test configuration with an explicitly injected local isolated runner."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     args = parser.parse_args()

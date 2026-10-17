@@ -103,6 +103,7 @@ GUARDED_PYTHON = {
 
 
 def _focused_tests(path: str) -> tuple[str, ...] | None:
+    """Return boundary-specific test patterns or a standalone tool test."""
     focused = GUARDED_PYTHON.get(path)
     if focused is not None:
         return focused
@@ -183,6 +184,7 @@ def _find_shell_refusals(path: Path) -> list[Refusal]:
 
 
 def _seccomp_kill_rules(tree: ast.AST):
+    """Yield each numeric kill-table entry together with its containing tuple."""
     for assignment in ast.walk(tree):
         if not (isinstance(assignment, ast.Assign)
                 and any(isinstance(target, ast.Name) and target.id == "_FILTER_ARCHES"
@@ -201,6 +203,7 @@ def _seccomp_kill_rules(tree: ast.AST):
 
 
 def _thread_name_actions(tree: ast.AST):
+    """Yield values assigned to the seccomp thread-name refusal action."""
     for node in ast.walk(tree):
         if (isinstance(node, ast.Assign)
                 and any(isinstance(target, ast.Name) and target.id == "_THREAD_NAME_ACTION"
@@ -209,6 +212,7 @@ def _thread_name_actions(tree: ast.AST):
 
 
 def find_refusals(path: Path) -> list[Refusal]:
+    """Locate supported conditional, gateway, shell, and seccomp refusals."""
     if path.suffix != ".py":
         return _find_shell_refusals(path)
     source = path.read_text()
@@ -300,6 +304,7 @@ def _disable(source: str, refusal: Refusal) -> str:
 def _suite_passes(cwd: Path, *, failfast: bool = False,
                   show_failure: bool = False,
                   patterns: tuple[str, ...] | None = None) -> bool:
+    """Run every selected test pattern, returning false on failure or timeout."""
     # A mutant is caught by its first failing test. The unmutated baseline
     # still runs every test so an unrelated failure cannot validate a mutant.
     for pattern in patterns or (None,):
@@ -324,6 +329,7 @@ def _suite_passes(cwd: Path, *, failfast: bool = False,
 
 
 def check(paths: list[str]) -> int:
+    """Require baseline success and a failing test for each isolated refusal mutation."""
     refusals = [(Path(ROOT / path), refusal)
                 for path in paths for refusal in find_refusals(ROOT / path)]
     if not refusals:

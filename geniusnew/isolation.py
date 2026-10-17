@@ -213,6 +213,7 @@ def _audit_hook(root: str, state: dict[str, bool], read_paths: tuple[str, ...] =
         raise _SandboxDenied()
 
     def hook(event: str, args: tuple[Any, ...]) -> None:
+        """Refuse forbidden audit events, allowing resource limits during bootstrap."""
         if event == "resource.setrlimit" and state.get("bootstrap", False):
             return
         if event.startswith("socket."):

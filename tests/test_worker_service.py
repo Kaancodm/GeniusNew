@@ -56,6 +56,7 @@ from geniusnew.workers import DeterministicSummarizer, WorkerBoundaryError
 
 class FramingTest(unittest.TestCase):
     def setUp(self):
+        """Create a socket pair that receives kernel credentials and sender pidfds."""
         self.core, self.worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         self.addCleanup(self.core.close)
         self.addCleanup(self.worker.close)
@@ -66,11 +67,13 @@ class FramingTest(unittest.TestCase):
         self.addCleanup(self.identity.close)
 
     def read(self, limit=256):
+        """Read one authenticated frame with the fixture identity and a short deadline."""
         return _read_frame(self.core, limit=limit,
                            deadline=time.monotonic() + 1,
                            identity=self.identity)
 
     def test_a_kernel_authenticated_canonical_frame_is_accepted(self):
+        """Accept canonical JSON and bind its kernel-authenticated sender and pidfd."""
         value = {"kind": "READY", "nonce": "a" * 64, "version": 1}
         _write_frame(self.worker, value, limit=256,
                      deadline=time.monotonic() + 1)
@@ -79,6 +82,7 @@ class FramingTest(unittest.TestCase):
         self.assertIsNotNone(self.identity.pidfd)
 
     def test_zero_and_oversized_lengths_are_refused(self):
+        """Reject empty frames and lengths beyond the configured limit."""
         for length in (0, 257):
             with self.subTest(length=length):
                 self.worker.sendall(struct.pack("!I", length))
@@ -86,18 +90,21 @@ class FramingTest(unittest.TestCase):
                     self.read()
 
     def test_noncanonical_json_is_refused(self):
+        """Reject valid JSON whose bytes differ from canonical serialization."""
         wire = b'{ "kind":"READY"}'
         self.worker.sendall(struct.pack("!I", len(wire)) + wire)
         with self.assertRaisesRegex(ContractError, "frame is not canonical JSON"):
             self.read()
 
     def test_truncated_frame_is_refused(self):
+        """Reject EOF before the declared frame length has arrived."""
         self.worker.sendall(struct.pack("!I", 12) + b"{}")
         self.worker.shutdown(socket.SHUT_WR)
         with self.assertRaisesRegex(ContractError, "frame was truncated"):
             self.read()
 
     def test_descriptor_passing_is_refused_without_a_leak(self):
+        """Reject SCM_RIGHTS and close every received file descriptor."""
         with tempfile.TemporaryFile() as handle:
             wire = canonical({"kind": "READY"})
             payload = struct.pack("!I", len(wire)) + wire
@@ -109,6 +116,7 @@ class FramingTest(unittest.TestCase):
             self.assertEqual(len(os.listdir("/proc/self/fd")), before)
 
     def test_wrong_uid_is_refused_before_frame_content(self):
+        """Reject a sender whose kernel UID differs from the expected worker UID."""
         self.identity.expected_uid = os.geteuid() + 1
         _write_frame(self.worker, {"kind": "READY"}, limit=256,
                      deadline=time.monotonic() + 1)
@@ -116,8 +124,10 @@ class FramingTest(unittest.TestCase):
             self.read()
 
     def test_phase_deadline_is_not_extended_by_fragments(self):
+        """Require all fragments of a frame to share the original deadline."""
         self.worker.sendall(struct.pack("!I", 20) + b"{")
         def finish_after_deadline():
+            """Send the remaining frame bytes after the reader deadline has expired."""
             time.sleep(0.03)
             self.worker.sendall(b'"a":"123456789012"}')
 
@@ -130,6 +140,7 @@ class FramingTest(unittest.TestCase):
         self.assertFalse(thread.is_alive())
 
     def test_bound_sender_eof_is_accepted_and_extra_bytes_are_refused(self):
+        """Accept clean EOF after a frame has bound the sender identity."""
         _write_frame(self.worker, {"kind": "READY"}, limit=256,
                      deadline=time.monotonic() + 1)
         self.read()
@@ -139,6 +150,7 @@ class FramingTest(unittest.TestCase):
         self.identity.close()
 
     def test_extra_bytes_after_result_are_refused(self):
+        """Reject data received where authenticated result EOF is required."""
         _write_frame(self.worker, {"kind": "READY"}, limit=256,
                      deadline=time.monotonic() + 1)
         self.read()
@@ -149,6 +161,7 @@ class FramingTest(unittest.TestCase):
         self.identity.close()
 
     def test_ambiguous_pidfd_controls_close_all_received_descriptors(self):
+        """Reject multiple pidfds and close both received descriptors."""
         credentials = struct.pack("3i", os.getpid(), os.geteuid(), os.getegid())
         one = os.pidfd_open(os.getpid())
         two = os.pidfd_open(os.getpid())
@@ -161,6 +174,7 @@ class FramingTest(unittest.TestCase):
         self.assertEqual(len(os.listdir("/proc/self/fd")), before - 2)
 
     def test_bad_pidfd_poll_state_does_not_count_as_exit(self):
+        """Reject invalid descriptors and polling errors as unreadable exit evidence."""
         descriptor = os.pidfd_open(os.getpid())
         os.close(descriptor)
         with self.assertRaisesRegex(ContractError, "pidfd state is unreadable"):
@@ -170,6 +184,7 @@ class FramingTest(unittest.TestCase):
                 _pidfd_exited(123)
 
     def test_ambiguous_pidfd_exit_signal_is_refused(self):
+        """Reject a hangup that lacks the readable event proving sender exit."""
         poller = Mock()
         poller.poll.return_value = [(123, select.POLLHUP)]
         with patch("geniusnew.worker_service.select.poll", return_value=poller):
@@ -177,23 +192,27 @@ class FramingTest(unittest.TestCase):
                 _pidfd_exited(123)
 
     def test_pidfd_information_must_name_exactly_one_pid(self):
+        """Reject pidfd information without a unique numeric PID."""
         with patch("builtins.open", return_value=io.StringIO("Pid:\tunknown\n")):
             with self.assertRaisesRegex(ContractError, "no unambiguous PID"):
                 _pidfd_pid(123)
 
     def test_missing_credentials_and_unbound_eof_are_refused(self):
+        """Reject fragments without credentials and EOF without a bound sender."""
         with self.assertRaisesRegex(ContractError, "credentials are missing"):
             self.identity.accept(b"X", [], 0)
         with self.assertRaisesRegex(ContractError, "EOF has invalid controls"):
             self.identity.accept(b"", [], 0)
 
     def test_bound_eof_rejects_extra_controls(self):
+        """Reject unexpected ancillary controls even after binding the sender."""
         self.identity.pid = os.getpid()
         self.identity.pidfd = os.pidfd_open(os.getpid())
         with self.assertRaisesRegex(ContractError, "EOF has invalid controls"):
             self.identity.accept(b"", [(socket.SOL_SOCKET, 999, b"x")], 0)
 
     def test_first_pidfd_must_identify_live_credential_pid(self):
+        """Reject an initial pidfd sentinel or a PID that differs from credentials."""
         credentials = struct.pack("3i", os.getpid(), os.geteuid(), os.getegid())
         with self.assertRaisesRegex(ContractError, "first worker fragment"):
             self.identity.accept(b"X", [(socket.SOL_SOCKET, socket.SCM_CREDENTIALS,
@@ -208,6 +227,7 @@ class FramingTest(unittest.TestCase):
                                           struct.pack("i", descriptor))], 0)
 
     def test_later_pidfd_must_match_and_cannot_claim_early_exit(self):
+        """Reject premature exit sentinels and pidfds for another sender."""
         self.identity.pid = os.getpid()
         self.identity.pidfd = os.pidfd_open(os.getpid())
         credentials = struct.pack("3i", os.getpid(), os.geteuid(), os.getegid())
@@ -224,6 +244,7 @@ class FramingTest(unittest.TestCase):
                                           struct.pack("i", descriptor))], 0)
 
     def test_outbound_limits_and_deadline_prevent_sending(self):
+        """Reject oversized output and expired outbound deadlines."""
         with self.assertRaisesRegex(ContractError, "outbound frame length is invalid"):
             _write_frame(self.worker, {"text": "X" * 100}, limit=8,
                          deadline=time.monotonic() + 1)
@@ -232,6 +253,7 @@ class FramingTest(unittest.TestCase):
                          deadline=time.monotonic() - 1)
 
     def test_outbound_zero_write_is_refused(self):
+        """Treat a zero-byte socket write as a transport failure."""
         sender = Mock()
         sender.fileno.return_value = self.worker.fileno()
         sender.send.return_value = 0
@@ -240,6 +262,7 @@ class FramingTest(unittest.TestCase):
                          deadline=time.monotonic() + 1)
 
     def test_eof_deadline_is_hard(self):
+        """Reject result EOF checks once their deadline has expired."""
         self.core.setblocking(False)
         self.identity.pid = os.getpid()
         self.identity.pidfd = os.pidfd_open(os.getpid())
@@ -250,6 +273,7 @@ class FramingTest(unittest.TestCase):
 
 class ReadyTest(unittest.TestCase):
     def test_a_wrong_nonce_or_unknown_field_blocks_the_request(self):
+        """Reject READY messages with a wrong nonce, extra field, or wrong kind."""
         expected = "a" * 64
         for ready in (
                 {"kind": "READY", "version": 1, "nonce": "b" * 64},
@@ -261,6 +285,7 @@ class ReadyTest(unittest.TestCase):
 
 class ServiceRequestTest(unittest.TestCase):
     def test_hello_carries_only_a_version_and_random_nonce(self):
+        """Accept only the fixed HELLO shape and a full hexadecimal nonce."""
         nonce = "a" * 64
         self.assertEqual(_validate_hello({"kind": "HELLO", "version": 1,
                                           "nonce": nonce}), nonce)
@@ -272,6 +297,7 @@ class ServiceRequestTest(unittest.TestCase):
                 _validate_hello(bad)
 
     def test_request_cannot_choose_code_paths_or_exceed_fixed_limits(self):
+        """Reject worker selection overrides, extra payload fields, and excessive limits."""
         from dataclasses import asdict
 
         fixed = IsolationLimits()
@@ -290,6 +316,7 @@ class ServiceRequestTest(unittest.TestCase):
                 _validate_request(changed, request["nonce"], fixed)
 
     def test_result_requires_bound_digest_and_closed_error_code(self):
+        """Require the request digest and an exclusive, validated output or error shape."""
         common = {"kind": "RESULT", "version": 1, "nonce": "a" * 64,
                   "request_digest": "b" * 64}
         self.assertEqual(_validate_result({**common, "output": {"text": "ok"}},
@@ -305,18 +332,21 @@ class ServiceRequestTest(unittest.TestCase):
                 _validate_result(bad, common["nonce"], common["request_digest"])
 
     def test_request_rejects_unknown_payload_before_serialization(self):
+        """Reject payload fields beyond text before building a wire request."""
         with self.assertRaisesRegex(ContractError, "only a text payload"):
             _request({"text": "CANARY", "path": "/etc/shadow"}, "a" * 64)
 
 
 class WorkerSideFramingTest(unittest.TestCase):
     def setUp(self):
+        """Create a socket pair with a nonblocking worker descriptor."""
         self.core, self.worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         self.addCleanup(self.core.close)
         self.addCleanup(self.worker.close)
         self.worker.setblocking(False)
 
     def test_one_frame_followed_by_eof_is_accepted(self):
+        """Accept one canonical Core frame followed by a clean request EOF."""
         _write_frame(self.core, {"kind": "HELLO"}, limit=256,
                      deadline=time.monotonic() + 1)
         self.core.shutdown(socket.SHUT_WR)
@@ -325,6 +355,7 @@ class WorkerSideFramingTest(unittest.TestCase):
         _plain_expect_eof(self.worker.fileno(), time.monotonic() + 1)
 
     def test_second_request_byte_is_rejected_before_worker_execution(self):
+        """Reject any byte following the single permitted request frame."""
         _write_frame(self.core, {"kind": "REQUEST"}, limit=256,
                      deadline=time.monotonic() + 1)
         self.core.sendall(b"X")
@@ -334,6 +365,7 @@ class WorkerSideFramingTest(unittest.TestCase):
             _plain_expect_eof(self.worker.fileno(), time.monotonic() + 1)
 
     def test_worker_input_length_and_canonical_form_are_strict(self):
+        """Reject zero input lengths and malformed JSON on the worker side."""
         for wire, reason in ((struct.pack("!I", 0), "input length is invalid"),
                              (struct.pack("!I", 10) + b'not-json!!',
                               "input is not ASCII JSON")):
@@ -344,7 +376,9 @@ class WorkerSideFramingTest(unittest.TestCase):
                                  deadline=time.monotonic() + 1)
 
     def test_worker_input_deadline_and_truncation_are_distinct(self):
+        """Reject input that arrives after the worker read deadline."""
         def delayed_frame():
+            """Send a complete Core frame after the worker read deadline."""
             time.sleep(0.03)
             _write_frame(self.core, {"kind": "HELLO"}, limit=256,
                          deadline=time.monotonic() + 1)
@@ -357,6 +391,7 @@ class WorkerSideFramingTest(unittest.TestCase):
         self.assertFalse(thread.is_alive())
 
     def test_worker_truncated_input_refuses_at_eof(self):
+        """Reject Core EOF before the declared request length is complete."""
         self.core.sendall(struct.pack("!I", 10) + b"{}")
         self.core.shutdown(socket.SHUT_WR)
         with self.assertRaisesRegex(ContractError, "input was truncated"):
@@ -364,6 +399,7 @@ class WorkerSideFramingTest(unittest.TestCase):
                          deadline=time.monotonic() + 0.1)
 
     def test_worker_noncanonical_input_is_refused(self):
+        """Reject Core JSON containing noncanonical whitespace."""
         wire = b'{ "kind":"HELLO"}'
         self.core.sendall(struct.pack("!I", len(wire)) + wire)
         with self.assertRaisesRegex(ContractError, "input is not canonical JSON"):
@@ -371,10 +407,12 @@ class WorkerSideFramingTest(unittest.TestCase):
                          deadline=time.monotonic() + 1)
 
     def test_worker_request_end_deadline_is_hard(self):
+        """Reject request EOF checks after their deadline has expired."""
         with self.assertRaisesRegex(ContractError, "request end deadline exceeded"):
             _plain_expect_eof(self.worker.fileno(), time.monotonic() - 1)
 
     def test_worker_output_limit_is_checked_before_send(self):
+        """Reject oversized worker output before any bytes reach the Core."""
         with self.assertRaisesRegex(ContractError, "output length is invalid"):
             _plain_write(self.worker.fileno(), {"text": "X" * 32768},
                          time.monotonic() + 1)
@@ -383,6 +421,7 @@ class WorkerSideFramingTest(unittest.TestCase):
             self.core.recv(1)
 
     def test_worker_output_deadline_and_zero_write_are_refused(self):
+        """Reject expired worker output deadlines and writes that make no progress."""
         with self.assertRaisesRegex(ContractError, "output deadline exceeded"):
             _plain_write(self.worker.fileno(), {"kind": "RESULT"},
                          time.monotonic() - 1)
@@ -394,12 +433,14 @@ class WorkerSideFramingTest(unittest.TestCase):
 
 class WorkerBootstrapTest(unittest.TestCase):
     def test_inherited_descriptor_refuses_before_ready(self):
+        """Reject extra inherited descriptors without closing their existing owners."""
         with tempfile.TemporaryFile() as handle:
             with self.assertRaisesRegex(ContractError, "inherited an extra descriptor"):
                 _assert_no_extra_fds()
             self.assertFalse(handle.closed)
 
     def test_worker_requires_all_identity_fields_and_zero_capabilities(self):
+        """Require every worker identity field, no capabilities, and NoNewPrivs."""
         uid, gid = 20002, 20002
         status = (f"Uid:\t{uid}\t{uid}\t{uid}\t{uid}\n"
                   f"Gid:\t{gid}\t{gid}\t{gid}\t{gid}\n"
@@ -421,6 +462,7 @@ class WorkerBootstrapTest(unittest.TestCase):
                     _assert_worker_identity(uid, gid)
 
     def test_worker_allows_only_its_primary_gid_in_the_group_vector(self):
+        """Accept a repeated primary group and reject every additional group."""
         uid, gid = 20002, 20002
         status = (f"Uid:\t{uid}\t{uid}\t{uid}\t{uid}\n"
                   f"Gid:\t{gid}\t{gid}\t{gid}\t{gid}\n"
@@ -439,14 +481,17 @@ class WorkerBootstrapTest(unittest.TestCase):
                         _assert_worker_identity(uid, gid)
 
     def test_worker_root_identity_is_never_accepted(self):
+        """Reject a worker configured to run with root identity."""
         with patch("os.geteuid", return_value=0), patch("os.getegid", return_value=0), \
                 patch("os.getgroups", return_value=[]):
             with self.assertRaisesRegex(ContractError, "unexpected OS identity"):
                 _assert_worker_identity(0, 0)
 
     def test_stdout_and_stderr_must_be_null_devices(self):
+        """Reject a regular file substituted for worker standard output."""
         real_fstat = os.fstat
         def fstat(descriptor):
+            """Substitute a regular file for stdout while inspecting other descriptors normally."""
             if descriptor == 1:
                 return Mock(st_mode=stat.S_IFREG | 0o600, st_rdev=0)
             return real_fstat(descriptor)
@@ -455,6 +500,7 @@ class WorkerBootstrapTest(unittest.TestCase):
                 _assert_null_outputs()
 
     def test_dumpable_must_be_zero_before_ready(self):
+        """Reject failure to disable process dumpability during bootstrap."""
         libc = Mock()
         libc.prctl.side_effect = [-1, 0]
         with patch("geniusnew.worker_service.ctypes.CDLL", return_value=libc):
@@ -462,6 +508,7 @@ class WorkerBootstrapTest(unittest.TestCase):
                 _set_nondumpable()
 
     def test_runtime_path_must_match_private_systemd_instance(self):
+        """Require a private runtime directory matching the worker unit instance."""
         uid, gid = os.geteuid(), os.getegid()
         path = "/run/geniusnew-worker/jobs/one"
         valid = Mock(st_mode=stat.S_IFDIR | 0o700, st_uid=uid, st_gid=gid)
@@ -484,6 +531,7 @@ class WorkerBootstrapTest(unittest.TestCase):
                     _worker_root(uid, gid)
 
     def test_worker_refuses_non_unix_fd_and_wrong_core_peer(self):
+        """Reject non-Unix connections and peers with the wrong Core UID."""
         uid = os.geteuid()
         with patch("geniusnew.worker_service._assert_worker_identity"), patch(
                 "geniusnew.worker_service._assert_null_outputs"), patch(
@@ -509,6 +557,7 @@ class WorkerBootstrapTest(unittest.TestCase):
                 worker.close()
 
     def test_worker_main_refuses_nonpositive_configured_identity(self):
+        """Reject nonpositive configured IDs before opening the inherited socket."""
         with patch("sys.argv", ["worker_service", "--core-uid", "0",
                                 "--worker-uid", "2", "--worker-gid", "3"]), \
                 patch("geniusnew.worker_service.socket.socket") as make_socket, \
@@ -520,12 +569,14 @@ class WorkerBootstrapTest(unittest.TestCase):
 
 class ProfileTest(unittest.TestCase):
     def test_profile_fixture_does_not_inherit_root_ids(self):
+        """Keep synthetic service identities nonroot even when the test runs as root."""
         with patch("os.geteuid", return_value=0), patch("os.getegid", return_value=0):
             profile = self.profile()
         self.assertGreater(profile.core_uid, 0)
         self.assertGreater(profile.socket_gid, 0)
 
     def profile(self, **changed):
+        """Build a fixed nonroot service profile with explicit field overrides."""
         fields = {"core_uid": 20001, "worker_uid": 20002,
                   "worker_gid": 20002, "socket_gid": 20003,
                   "socket_path": "/run/geniusnew/worker.sock",
@@ -534,14 +585,17 @@ class ProfileTest(unittest.TestCase):
         return WorkerServiceProfile(**fields)
 
     def test_core_and_worker_must_have_distinct_fixed_uids(self):
+        """Reject profiles that assign the Core and worker the same UID."""
         with self.assertRaisesRegex(ContractError, "different UIDs"):
             self.profile(worker_uid=self.profile().core_uid)
 
     def test_worker_cannot_belong_to_socket_group(self):
+        """Reject a worker primary group equal to the Core socket group."""
         with self.assertRaisesRegex(ContractError, "Core-only socket group"):
             self.profile(worker_gid=self.profile().socket_gid)
 
     def test_profile_rejects_bad_ids_paths_and_deadlines(self):
+        """Reject invalid identity, lease, unit, runtime, and deadline settings."""
         for changed, reason in (
                 ({"worker_uid": 0}, "positive numeric IDs"),
                 ({"socket_path": "/run/geniusnew/worker.lease"},
@@ -554,6 +608,7 @@ class ProfileTest(unittest.TestCase):
                 self.profile(**changed)
 
     def test_paths_must_be_absolute_run_filesystem_paths(self):
+        """Reject relative paths and IPC paths outside the run filesystem."""
         for socket_path, lease_path in (
                 ("worker.sock", "/run/geniusnew/worker.lease"),
                 ("/tmp/worker.sock", "/run/geniusnew/worker.lease"),
@@ -567,6 +622,7 @@ class ProfileTest(unittest.TestCase):
 
 class LifecycleRefusalTest(unittest.TestCase):
     def setUp(self):
+        """Prepare a fixed service profile and its lifecycle inspector."""
         self.profile = WorkerServiceProfile(
             core_uid=20001, worker_uid=20002,
             worker_gid=20002, socket_gid=20003,
@@ -575,10 +631,12 @@ class LifecycleRefusalTest(unittest.TestCase):
         self.lifecycle = WorkerLifecycle(self.profile)
 
     def test_missing_socket_or_lease_refuses_preflight(self):
+        """Require preflight to refuse the unprovisioned service fixture."""
         with self.assertRaises(ContractError):
             self.lifecycle.preflight()
 
     def test_access_denied_or_unreadable_systemd_properties_refuse(self):
+        """Reject unavailable, malformed, incomplete, or duplicate systemd properties."""
         for output in (None, "AccessDenied", "ActiveState=active\n",
                        "ActiveState=active\nMainPID=1\nMainPID=2\n"):
             with self.subTest(output=output), patch.object(
@@ -588,6 +646,7 @@ class LifecycleRefusalTest(unittest.TestCase):
                                          "ActiveState", "MainPID")
 
     def test_systemctl_nonzero_exit_refuses_without_interpreting_output(self):
+        """Reject systemctl errors or stderr even when stdout resembles valid state."""
         for code, stderr in ((1, b"AccessDenied"), (0, b"warning")):
             completed = Mock(returncode=code, stdout=b"ActiveState=active\n",
                              stderr=stderr)
@@ -597,6 +656,7 @@ class LifecycleRefusalTest(unittest.TestCase):
                     self.lifecycle._systemctl("show", "geniusnew-worker.socket")
 
     def test_socket_and_lease_path_metadata_must_be_root_controlled(self):
+        """Require safe parent ownership and exact IPC node type and permissions."""
         target = self.profile.socket_path
         valid_dir = Mock(st_mode=stat.S_IFDIR | 0o755, st_uid=0, st_gid=0)
         parent = Mock(st_mode=stat.S_IFDIR | 0o710, st_uid=0,
@@ -605,7 +665,9 @@ class LifecycleRefusalTest(unittest.TestCase):
                     st_gid=self.profile.socket_gid, st_nlink=1)
 
         def check(*, changed_path=None, changed_info=None):
+            """Inspect the socket path with an optional substituted metadata record."""
             def metadata(path):
+                """Return synthetic metadata for the target node, parents, or changed path."""
                 if str(path) == changed_path:
                     return changed_info
                 if str(path) == target:
@@ -632,6 +694,7 @@ class LifecycleRefusalTest(unittest.TestCase):
             check(changed_path=str(Path(target).parent), changed_info=bad_parent)
 
     def test_installed_code_path_must_not_be_user_writable(self):
+        """Reject relative installation paths and files under an unsafe parent."""
         with self.assertRaisesRegex(ContractError, "not absolute"):
             self.lifecycle._root_controlled(Path("geniusnew/worker_service.py"),
                                             regular=True)
@@ -642,6 +705,7 @@ class LifecycleRefusalTest(unittest.TestCase):
                 self.lifecycle._root_controlled(path, regular=True)
 
     def test_installed_paths_check_every_intermediate_symlink_target(self):
+        """Reject mutable components hidden inside an otherwise fixed symlink chain."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for name in ("safe", "user", "fixed"):
@@ -654,6 +718,7 @@ class LifecycleRefusalTest(unittest.TestCase):
             real_lstat = Path.lstat
             for unsafe in (None, root / "user", root / "user/relay"):
                 def metadata(path):
+                    """Use real path types with synthetic ownership for one symlink-chain component."""
                     info = real_lstat(path)
                     # Only ownership is synthetic; links and paths are real.
                     owner = 1000 if path == unsafe else 0
@@ -671,6 +736,7 @@ class LifecycleRefusalTest(unittest.TestCase):
                             self.lifecycle._root_controlled(entry, regular=True)
 
     def test_installed_paths_bound_symlink_traversal(self):
+        """Accept forty symlink traversals and reject a chain requiring forty-one."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "end").write_bytes(b"interpreter")
@@ -678,6 +744,7 @@ class LifecycleRefusalTest(unittest.TestCase):
                 (root / str(index)).symlink_to(str(index + 1) if index < 40 else "end")
             real_lstat = Path.lstat
             def metadata(path):
+                """Preserve real symlink types while simulating root ownership of the chain."""
                 info = real_lstat(path)
                 mode = (info.st_mode if stat.S_ISLNK(info.st_mode)
                         else stat.S_IFMT(info.st_mode) | 0o755)
@@ -688,6 +755,7 @@ class LifecycleRefusalTest(unittest.TestCase):
                     self.lifecycle._root_controlled(root / "0", regular=True)
 
     def test_installation_checks_the_python_runtime_before_worker_start(self):
+        """Propagate unsafe Python runtime refusals from installation checks."""
         with patch.object(self.lifecycle, "_root_controlled"), patch.object(
                 self.lifecycle, "_check_python_runtime",
                 side_effect=ContractError("unsafe Python runtime")):
@@ -695,6 +763,7 @@ class LifecycleRefusalTest(unittest.TestCase):
                 self.lifecycle._check_installation()
 
     def test_runtime_tree_checks_all_files_including_symlink_targets(self):
+        """Inspect startup files and native libraries reached through directory aliases."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory, "runtime")
             target = Path(directory, "extensions")
@@ -705,6 +774,7 @@ class LifecycleRefusalTest(unittest.TestCase):
                 unsafe = target / name
                 unsafe.write_bytes(b"canary")
                 def inspect(path, *, regular):
+                    """Refuse the selected runtime leaf after resolving its symlink target."""
                     if path.resolve() == unsafe:
                         raise ContractError("unsafe runtime leaf")
                 with self.subTest(name=name), patch.object(
@@ -714,12 +784,14 @@ class LifecycleRefusalTest(unittest.TestCase):
                 unsafe.unlink()
 
     def test_python_runtime_requires_isolated_core_startup(self):
+        """Reject Core startup without the isolated interpreter flag."""
         with patch("geniusnew.worker_service.sys.flags", SimpleNamespace(isolated=0)):
             with self.assertRaisesRegex(ContractError, "isolated Python"):
                 self.lifecycle._check_python_runtime()
 
     @contextmanager
     def python_runtime(self):
+        """Yield synthetic runtime trees and a spy for root ownership checks."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             prefix, base = root / "venv", root / "base"
@@ -746,6 +818,7 @@ class LifecycleRefusalTest(unittest.TestCase):
                 yield root, inspect
 
     def test_python_runtime_checks_venv_configuration_and_missing_zip_parent(self):
+        """Check venv configuration and protect the parent of an absent import archive."""
         with self.python_runtime() as (root, inspect):
             configuration = root / "venv/pyvenv.cfg"
             configuration.write_text("home = /fixed/base\n")
@@ -753,6 +826,7 @@ class LifecycleRefusalTest(unittest.TestCase):
             inspect.assert_any_call(configuration, regular=True)
             inspect.assert_any_call(root / "base", regular=False)
             def unsafe(path, *, regular):
+                """Refuse the synthetic venv configuration when the runtime walker reaches it."""
                 if path == configuration:
                     raise ContractError("unsafe venv configuration")
             inspect.side_effect = unsafe
@@ -760,6 +834,7 @@ class LifecycleRefusalTest(unittest.TestCase):
                 self.lifecycle._check_python_runtime()
 
     def test_python_runtime_refuses_path_overrides_and_relative_paths(self):
+        """Reject interpreter path overrides and relative import search entries."""
         with self.python_runtime() as (root, _):
             override = root / "base/lib/python313._pth"
             override.write_text("/tmp/worker-owned\nimport site\n")
@@ -771,10 +846,12 @@ class LifecycleRefusalTest(unittest.TestCase):
                     self.lifecycle._check_python_runtime()
 
     def test_native_library_not_yet_loaded_must_be_root_controlled(self):
+        """Inspect native runtime libraries even before the Core loads them."""
         with self.python_runtime() as (root, inspect):
             library = root / "base/lib/libpython-future.so"
             library.write_bytes(b"native canary")
             def unsafe(path, *, regular):
+                """Refuse the synthetic native library during runtime tree inspection."""
                 if path == library:
                     raise ContractError("unsafe native library")
             inspect.side_effect = unsafe
@@ -782,11 +859,13 @@ class LifecycleRefusalTest(unittest.TestCase):
                 self.lifecycle._check_python_runtime()
 
     def native_mapping(self, path):
+        """Render a synthetic executable mapping using a real file device and inode."""
         info = path.stat()
         device = f"{os.major(info.st_dev):02x}:{os.minor(info.st_dev):02x}"
         return f"1000-2000 r-xp 00000000 {device} {info.st_ino} {path}\n"
 
     def test_native_mappings_check_the_loader_and_libraries_outside_libdir(self):
+        """Inspect executable libraries beyond the configured Python library directory."""
         with tempfile.TemporaryDirectory() as directory:
             library = Path(directory) / "libc.so.6"
             library.write_bytes(b"native canary")
@@ -800,6 +879,7 @@ class LifecycleRefusalTest(unittest.TestCase):
                     self.lifecycle._check_native_mappings()
 
     def test_unknown_or_replaced_executable_mappings_refuse(self):
+        """Reject missing, malformed, anonymous, deleted, or replaced executable mappings."""
         with tempfile.TemporaryDirectory() as directory:
             library = Path(directory) / "lib.so"
             library.write_bytes(b"native")
@@ -817,6 +897,7 @@ class LifecycleRefusalTest(unittest.TestCase):
                 self.lifecycle._check_native_mappings()
 
     def test_ambiguous_mapping_names_refuse_even_when_the_literal_file_exists(self):
+        """Reject deleted-name suffixes and escaped names even when stat would succeed."""
         # If stat merely failed, deleting the path refusal would go unnoticed.
         with tempfile.TemporaryDirectory() as directory:
             for name in ("native.so (deleted)", "native\\alias.so"):
@@ -829,6 +910,7 @@ class LifecycleRefusalTest(unittest.TestCase):
                         self.lifecycle._check_native_mappings()
 
     def test_native_loader_overrides_and_preloads_refuse(self):
+        """Reject loader environment overrides, preload content, and unsafe loader files."""
         with tempfile.TemporaryDirectory() as directory:
             cache, preload = Path(directory) / "cache", Path(directory) / "preload"
             cache.write_bytes(b"root loader cache")
@@ -853,6 +935,7 @@ class LifecycleRefusalTest(unittest.TestCase):
                     self.lifecycle._check_loader_configuration()
 
     def test_unreadable_runtime_tree_and_startup_state_refuse(self):
+        """Convert inaccessible runtime trees and interpreter paths into contract refusals."""
         with patch.object(Path, "stat", side_effect=PermissionError):
             with self.assertRaisesRegex(ContractError, "runtime cannot be inspected"):
                 self.lifecycle._check_runtime_tree(Path("/runtime"))
@@ -864,6 +947,7 @@ class LifecycleRefusalTest(unittest.TestCase):
                 self.lifecycle._check_python_runtime()
 
     def test_worker_bootstrap_ignores_site_hooks_and_selects_its_fixed_package(self):
+        """Run the isolated bootstrap and verify site hooks never execute."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             package = root / "geniusnew"
@@ -884,6 +968,7 @@ class LifecycleRefusalTest(unittest.TestCase):
             self.assertFalse(marker.exists())
 
     def test_service_landlock_does_not_expose_siblings_of_its_package(self):
+        """Require real Landlock rules to deny a canary beside the installed package."""
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory)
             package = parent / "app/geniusnew"
@@ -916,6 +1001,7 @@ else:
             self.assertEqual(completed.stdout.strip(), "DENIED")
 
     def test_template_must_be_loaded_without_dropins_or_pending_reload(self):
+        """Reject a service template loaded with a systemd drop-in."""
         properties = {"LoadState": "loaded", "FragmentPath":
                       "/etc/systemd/system/geniusnew-worker@.service",
                       "DropInPaths": "", "NeedDaemonReload": "no"}
@@ -927,10 +1013,12 @@ else:
                 self.lifecycle._check_unit_file("geniusnew-worker@.service")
 
     def test_template_is_inspected_through_a_valid_instance_name(self):
+        """Query template properties through an instance and inspect the template source."""
         template = "geniusnew-worker@.service"
         source = Path("/etc/systemd/system") / template
 
         def show(unit, *properties):
+            """Emulate systemd refusing a bare template while accepting instance queries."""
             # systemd cannot load a bare template through its Unit properties.
             if unit.endswith("@.service"):
                 raise ContractError("template needs an instance name")
@@ -947,6 +1035,7 @@ else:
             content.assert_called_once_with(source, template)
 
     def test_unreadable_or_occupied_cgroup_refuses_idle(self):
+        """Reject cgroups containing a process or lacking readable process evidence."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             group = root / "geniusnew-worker@one.service"
@@ -959,6 +1048,7 @@ else:
                 self.lifecycle._require_empty_cgroup(group)
 
     def test_cgroup_absence_and_disappearance_are_distinct_failures(self):
+        """Reject ambiguous absence, disappearing subtrees, and symlinked cgroups."""
         with tempfile.TemporaryDirectory() as directory:
             missing = Path(directory, "old.service")
             with patch("os.listdir", return_value=[missing.name]):
@@ -978,6 +1068,7 @@ else:
                 self.lifecycle._require_empty_cgroup(link)
 
     def test_cgroup_paths_cannot_escape_system_slice(self):
+        """Reject cgroup paths outside system.slice, including resolved escapes."""
         with self.assertRaisesRegex(ContractError, "path is unexpected"):
             self.lifecycle._cgroup_path("/user.slice/evil")
         with patch.object(Path, "resolve", return_value=Path("/tmp/evil")):
@@ -985,6 +1076,7 @@ else:
                 self.lifecycle._cgroup_path("/system.slice/worker.service")
 
     def test_uid_process_listing_requires_unambiguous_status(self):
+        """Reject process status records whose UID fields cannot be established."""
         entry = SimpleNamespace(name="123", path="/proc/123")
         scanner = MagicMock()
         scanner.__iter__.return_value = iter([entry])
@@ -994,9 +1086,11 @@ else:
                 self.lifecycle._uid_processes()
 
     def test_idle_refuses_malformed_active_or_residual_worker_state(self):
+        """Reject malformed unit listings, active workers, leftover runtimes, or live UIDs."""
         root = Mock(st_mode=stat.S_IFDIR | 0o755, st_uid=0)
 
         def check(output, *, state="inactive", runtime_absent=True, pids=()):
+            """Check idle state with synthetic unit, runtime, and worker process evidence."""
             self.lifecycle._systemctl = Mock(return_value=output)
             self.lifecycle._show = Mock(return_value={"ActiveState": state,
                                                        "MainPID": "0",
@@ -1020,6 +1114,7 @@ else:
     def _bind_with(self, *, cgroup="0::/system.slice/geniusnew-worker@one.service\n",
                    active="active", runtime_mode=0o700, exited=(False, False),
                    unit_source=None):
+        """Bind a synthetic sender with configurable cgroup, unit, and runtime evidence."""
         status = {"ActiveState": active, "InvocationID": "a" * 32,
                   "ControlGroup": (cgroup[3:].strip() if cgroup.startswith("0::")
                                    else "/system.slice/geniusnew-worker@one.service"),
@@ -1040,6 +1135,7 @@ else:
             return self.lifecycle.bind(123, 7)
 
     def test_bind_requires_live_pid_cgroup_invocation_and_private_runtime(self):
+        """Require a live sender, active invocation, and private runtime before binding."""
         self.assertEqual(self._bind_with().pid, 123)
         self.assertEqual(self._bind_with(cgroup=(
             "0::/system.slice/geniusnew-worker@127-0-0-1.service\n")).pid, 123)
@@ -1053,6 +1149,7 @@ else:
                 self._bind_with(**changes)
 
     def test_actual_invocation_must_use_the_fixed_template_without_dropins(self):
+        """Reject invocation source changes, drop-ins, missing units, and pending reloads."""
         for changed in (
                 {"LoadState": "not-found"},
                 {"FragmentPath": "/etc/systemd/system/geniusnew-worker@one.service"},
@@ -1063,6 +1160,7 @@ else:
                     self._bind_with(unit_source=changed)
 
     def test_invocation_change_blocks_lease_release(self):
+        """Refuse cleanup confirmation when the manager reports another invocation."""
         invocation = _Invocation("geniusnew-worker@one.service", "a" * 32,
                                  Path("/sys/fs/cgroup/system.slice/one"),
                                  Path("/run/geniusnew-worker/jobs/one"), 123)
@@ -1077,9 +1175,11 @@ else:
                 self.lifecycle.await_end(invocation, 7, time.monotonic() + 1)
 
     def test_orphan_runtime_directory_blocks_a_new_connection(self):
+        """Reject an orphan runtime directory even when no worker unit or PID remains."""
         self.lifecycle._systemctl = Mock(return_value="")
         self.lifecycle._uid_processes = Mock(return_value=[])
         def listing(path):
+            """Report an orphan entry only inside the configured runtime root."""
             return ["orphan"] if str(path) == self.profile.runtime_root else []
         info = Mock(st_mode=stat.S_IFDIR | 0o755, st_uid=0)
         with patch("os.listdir", side_effect=listing), patch.object(
@@ -1088,6 +1188,7 @@ else:
                 self.lifecycle.assert_idle()
 
     def test_core_identity_requires_no_capabilities_and_no_new_privileges(self):
+        """Reject wrong Core IDs, worker group access, capabilities, or privilege gains."""
         uid = self.profile.core_uid
         status = (f"Uid:\t{uid}\t{uid}\t{uid}\t{uid}\n"
                   "NoNewPrivs:\t1\nCapInh:\t0\nCapPrm:\t0\nCapEff:\t0\n"
@@ -1113,6 +1214,7 @@ else:
 
     @contextmanager
     def host_reference(self, raw=None):
+        """Yield a synthetic opened host reference and its metadata check spy."""
         expected = canonical({"version": 1, "boot_id": "a" * 36,
                               "namespaces": {name: [4, 123] for name in
                                              ("mnt", "pid", "user", "cgroup")},
@@ -1129,6 +1231,7 @@ else:
                 yield expected, node
 
     def test_core_reads_a_host_reference_without_cross_uid_namespace_access(self):
+        """Check host evidence through the reference without inspecting another UID."""
         with self.host_reference() as (_, node):
             with patch("geniusnew.worker_service.os.stat",
                        side_effect=PermissionError("no cross-UID namespace access")):
@@ -1138,6 +1241,7 @@ else:
                                          mode=0o440)
 
     def test_reference_must_match_boot_namespaces_and_path_inodes(self):
+        """Reject stale, incomplete, oversized, or altered host reference content."""
         with self.host_reference() as (raw, _):
             expected = json.loads(raw)
         changes = [{}, {**expected, "boot_id": "old"},
@@ -1154,12 +1258,14 @@ else:
                     self.lifecycle._check_host_namespaces()
 
     def test_reference_inode_swap_is_refused(self):
+        """Reject a host reference whose inode changes between checking and opening."""
         with self.host_reference() as (_, node):
             node.return_value = Mock(st_dev=-1, st_ino=-1)
             with self.assertRaisesRegex(ContractError, "host reference inode changed"):
                 self.lifecycle._check_host_namespaces()
 
     def test_procfs_must_still_show_all_worker_processes(self):
+        """Reject missing procfs evidence and mounts that hide worker processes."""
         for content, reason in (
                 ("", "complete procfs process view"),
                 ("25 30 0:23 / /proc rw,hidepid=2 - proc proc rw\n", "hides worker processes")):
@@ -1169,6 +1275,7 @@ else:
                     self.lifecycle._check_host_namespaces()
 
     def test_initial_uid_and_gid_maps_are_required(self):
+        """Require the initial host mapping for both user and group IDs."""
         initial = "         0          0 4294967295\n"
         with patch.object(Path, "read_text", return_value=initial):
             self.lifecycle._check_id_maps()
@@ -1179,6 +1286,7 @@ else:
                     self.lifecycle._check_id_maps()
 
     def test_unprivileged_snapshot_uses_readable_own_namespaces(self):
+        """Build a snapshot from readable namespace descriptors of the current process."""
         with patch.object(self.lifecycle, "_host_paths", return_value={"root": "/"}):
             snapshot = json.loads(self.lifecycle._host_snapshot())
         self.assertEqual(set(snapshot["namespaces"]), {"mnt", "pid", "user", "cgroup"})
@@ -1187,10 +1295,12 @@ else:
             self.assertTrue(all(type(value) is int and value > 0 for value in identity))
 
     def test_snapshot_binds_all_five_host_paths(self):
+        """Bind device and inode identities for every required host path."""
         paths = {"/": [1, 10], "/proc": [2, 20], "/sys/fs/cgroup": [3, 30],
                  "/run/geniusnew-worker/jobs": [4, 40],
                  "/run/geniusnew-worker/ipc/lease": [4, 50]}
         def metadata(path):
+            """Return the synthetic device and inode assigned to a host path."""
             device, inode = paths[path]
             return SimpleNamespace(st_dev=device, st_ino=inode)
         with patch("geniusnew.worker_service.os.stat", side_effect=metadata):
@@ -1200,11 +1310,13 @@ else:
             "runtime": [4, 40], "lease": [4, 50]})
 
     def test_host_reference_requires_privileged_host_provisioning(self):
+        """Reject attempts to provision the trusted host reference without root."""
         with patch("os.getuid", return_value=1000), patch("os.geteuid", return_value=1000):
             with self.assertRaisesRegex(ContractError, "host root"):
                 self.lifecycle.host_reference()
 
     def test_reference_provisioning_requires_manager_namespaces_and_root(self):
+        """Require provisioning to share the service manager namespaces and root inode."""
         own = SimpleNamespace(st_dev=1, st_ino=2)
         with patch("os.getuid", return_value=0), patch("os.geteuid", return_value=0), \
                 patch.object(self.lifecycle, "_check_id_maps"), \
@@ -1225,6 +1337,7 @@ else:
                 self.lifecycle.host_reference()
 
     def test_host_snapshot_rejects_unknown_boot_identity(self):
+        """Reject a snapshot whose boot identity is not a valid UUID."""
         with patch.object(self.lifecycle, "_namespace_ids", return_value={}), \
                 patch.object(self.lifecycle, "_host_paths", return_value={}), \
                 patch.object(Path, "read_text", return_value="unknown"):
@@ -1232,6 +1345,7 @@ else:
                 self.lifecycle._host_snapshot()
 
     def test_unreadable_host_evidence_is_not_an_empty_reference(self):
+        """Reject inaccessible ID maps, namespace descriptors, and reference bytes."""
         with patch.object(Path, "read_text", side_effect=PermissionError):
             with self.assertRaisesRegex(ContractError, "ID mapping cannot be read"):
                 self.lifecycle._check_id_maps()
@@ -1244,6 +1358,7 @@ else:
                 self.lifecycle._check_host_namespaces()
 
     def test_host_snapshot_binds_the_open_lease_descriptor(self):
+        """Use the held lease inode instead of reopening its configured path."""
         with tempfile.TemporaryFile() as lease, patch.object(
                 self.lifecycle, "_host_paths", return_value={"lease": "/nonexistent"}):
             snapshot = json.loads(self.lifecycle._host_snapshot(lease_fd=lease.fileno()))
@@ -1251,6 +1366,7 @@ else:
             self.assertEqual(snapshot["paths"]["lease"], [info.st_dev, info.st_ino])
 
     def test_unconfirmed_lease_reference_closes_the_new_descriptor(self):
+        """Close a newly opened lease if its host reference cannot be confirmed."""
         descriptor = os.open(os.devnull, os.O_RDONLY)
         try:
             info = os.fstat(descriptor)
@@ -1272,6 +1388,7 @@ else:
                 pass
 
     def test_socket_unit_effective_profile_refuses_wrong_listener(self):
+        """Reject an active socket unit listening on a path outside its fixed profile."""
         properties = {"ActiveState": "active", "Accept": "yes",
                       "MaxConnections": "1", "SocketUser": "root",
                       "SocketGroup": str(self.profile.socket_gid),
@@ -1289,6 +1406,7 @@ else:
                 self.lifecycle.preflight()
 
     def test_lease_inode_swap_is_refused_after_open(self):
+        """Reject a lease whose path and opened descriptor identify different inodes."""
         descriptor = os.open(os.devnull, os.O_RDONLY)
         try:
             with patch.object(self.lifecycle, "_check_node"), \
@@ -1304,6 +1422,7 @@ else:
                 pass
 
     def test_effective_unit_must_be_hardened_before_payload(self):
+        """Require effective instance identity, isolation, runtime, and loader settings."""
         settings = {
             "User": str(self.profile.worker_uid),
             "Group": str(self.profile.worker_gid),
@@ -1343,6 +1462,7 @@ else:
                     self.lifecycle._check_instance_settings({**settings, key: wrong}, "one")
 
     def test_execstart_cannot_select_another_module_or_identity(self):
+        """Reject malformed or altered bootstrap commands, including interpreter aliases."""
         command = ("{ path=" + sys.executable + " ; argv[]=" + sys.executable + " -I -S "
                    + _BOOTSTRAP + " --core-uid " + str(self.profile.core_uid)
                    + " --worker-uid " + str(self.profile.worker_uid)
@@ -1371,6 +1491,7 @@ else:
                     self.lifecycle._check_exec(changed)
 
     def test_rendered_unit_templates_refuse_extra_commands_and_missing_filter(self):
+        """Validate rendered templates and reject added commands or weakened directives."""
         root = Path(__file__).resolve().parent.parent / "ops" / "worker"
         replacements = {"@CORE_UID@": str(self.profile.core_uid),
                         "@WORKER_UID@": str(self.profile.worker_uid),
@@ -1425,6 +1546,7 @@ else:
                                 self.lifecycle._check_unit_content(path, name)
 
     def test_pid_outside_expected_systemd_unit_is_refused(self):
+        """Reject a sender PID assigned to a unit outside the fixed system slice path."""
         with patch("geniusnew.worker_service._pidfd_exited", return_value=False), \
                 patch.object(Path, "read_text", return_value="0::/user.slice/a.service\n"):
             with self.assertRaisesRegex(ContractError, "outside the expected unit"):
@@ -1433,6 +1555,7 @@ else:
 
 class RunnerBoundaryTest(unittest.TestCase):
     def setUp(self):
+        """Prepare a protocol runner with real sockets and mocked lifecycle evidence."""
         self.core, self.worker = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         self.core.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
         self.core.setsockopt(socket.SOL_SOCKET, 76, 1)
@@ -1456,22 +1579,26 @@ class RunnerBoundaryTest(unittest.TestCase):
         self.addCleanup(self._close_pending)
 
     def _close_pending(self):
+        """Close sender pidfds retained by fixture transactions that lacked cleanup proof."""
         for descriptor, identity in self.runner._pending:
             if identity is not None:
                 identity.close()
 
     def _close_lease(self):
+        """Close the fixture lease unless the runner has already released it."""
         try:
             os.close(self.lease)
         except OSError:
             pass
 
     def _receive_hello(self):
+        """Read and decode the Core HELLO from the fixture socket."""
         header = self.worker.recv(4)
         length = struct.unpack("!I", header)[0]
         return json.loads(self.worker.recv(length))
 
     def _valid_response(self, seen):
+        """Answer HELLO, record one request, and send a digest-bound result and EOF."""
         hello = self._receive_hello()
         _write_frame(self.worker, {"kind": "READY", "version": 1,
                                    "nonce": hello["nonce"]}, limit=256,
@@ -1489,6 +1616,7 @@ class RunnerBoundaryTest(unittest.TestCase):
         self.worker.shutdown(socket.SHUT_WR)
 
     def test_unreadable_prior_lifecycle_prevents_connect_and_quarantines_slot(self):
+        """Prevent connection and further lease acquisition after uncertain prior state."""
         self.lifecycle.assert_idle.side_effect = ContractError("unreadable")
         with self.assertRaises(WorkerBoundaryError):
             self.runner._run_worker({"text": "CANARY"})
@@ -1498,12 +1626,14 @@ class RunnerBoundaryTest(unittest.TestCase):
         self.lifecycle.acquire.assert_called_once()
 
     def test_wrong_kernel_uid_gets_no_request_payload(self):
+        """Withhold the request payload when READY comes from the wrong kernel UID."""
         if self.profile.worker_uid == os.geteuid():
             self.runner.profile = WorkerServiceProfile(**{
                 **vars(self.profile), "worker_uid": os.geteuid() + 1})
         received = []
 
         def fake_service():
+            """Send READY under the test UID and record whether any request bytes arrive."""
             hello = self._receive_hello()
             _write_frame(self.worker, {"kind": "READY", "version": 1,
                                        "nonce": hello["nonce"]}, limit=256,
@@ -1524,6 +1654,7 @@ class RunnerBoundaryTest(unittest.TestCase):
         self.lifecycle.bind.assert_not_called()
 
     def test_one_valid_protocol_result_waits_for_cleanup_before_return(self):
+        """Refuse a valid protocol result when lifecycle cleanup cannot be confirmed."""
         # This exercises framing and sequencing under one UID. Distinct UID and
         # systemd acceptance are established only by the separate real probe.
         self.runner.profile = SimpleNamespace(**{
@@ -1542,6 +1673,7 @@ class RunnerBoundaryTest(unittest.TestCase):
         self.lifecycle.await_end.assert_called_once()
 
     def test_result_is_returned_only_after_authenticated_eof_and_cleanup(self):
+        """Return verified output and release the lease after EOF and confirmed cleanup."""
         self.runner.profile = SimpleNamespace(**{
             **vars(self.profile), "worker_uid": os.geteuid(), "worker_gid": os.getegid()})
         self.lifecycle.bind.return_value = object()
@@ -1559,6 +1691,7 @@ class RunnerBoundaryTest(unittest.TestCase):
             os.fstat(self.lease)
 
     def test_ready_requires_a_bound_live_sender_before_request(self):
+        """Withhold payload until READY identifies a bound sender that is still alive."""
         profile = self.profile
         lifecycle = Mock(spec=WorkerLifecycle)
         nonce = "a" * 64
@@ -1578,6 +1711,7 @@ class RunnerBoundaryTest(unittest.TestCase):
             lifecycle.bind.assert_not_called()
 
         def bind_sender(_connection, *, identity, **_kwargs):
+            """Supply a READY frame with synthetic sender PID and pidfd evidence."""
             identity.pid = 123
             identity.pidfd = 7
             return ready
@@ -1591,10 +1725,12 @@ class RunnerBoundaryTest(unittest.TestCase):
                 exchange.run()
 
     def test_core_result_deadline_also_enforces_worker_wall_limit(self):
+        """Cap result reception by the worker wall limit as well as phase deadlines."""
         profile = self.profile
         nonce = "a" * 64
         deadlines = []
         def read(_connection, *, deadline, identity, **_kwargs):
+            """Bind a synthetic READY sender and record the following result deadline."""
             if not deadlines:
                 deadlines.append(None)
                 identity.pid = 123
@@ -1615,6 +1751,7 @@ class RunnerBoundaryTest(unittest.TestCase):
         self.assertLessEqual(deadlines[1] - start, IsolationLimits().wall_seconds + 0.1)
 
     def test_runner_rejects_other_worker_types_and_unchecked_profile(self):
+        """Reject runner construction with unsupported workers or an unchecked profile."""
         authority = WorkerAuthority(result_key=b"r" * 32, integrity_key=b"i" * 32)
         with self.assertRaisesRegex(ContractError, "fixed summarizer"):
             ServiceWorkerRunner(object(), authority=authority, profile=self.profile)

@@ -41,6 +41,7 @@ class Files:
         return str(path)
 
     def data(self):
+        """Return a complete configuration using private fixture files and fixed worker IDs."""
         return {
             "service": {
                 "listen_host": "127.0.0.1",
@@ -151,6 +152,7 @@ class StructureTest(Files, unittest.TestCase):
         self.refused(data, "unknown keys: tls")
 
     def test_worker_profile_is_required_and_closed(self):
+        """Reject missing worker profiles, unknown settings, and shared Core/worker UIDs."""
         data = self.data()
         del data["service"]["worker"]
         self.refused(data, "missing keys: worker")

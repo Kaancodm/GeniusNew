@@ -12,6 +12,7 @@ import sysconfig
 
 
 def runtime_paths() -> tuple[str, str, str]:
+    """Return fixed package, standard library, and extension import roots."""
     return (os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             sysconfig.get_path("stdlib"), sysconfig.get_config_var("DESTSHARED"))
 

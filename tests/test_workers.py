@@ -156,8 +156,10 @@ class WorkerBoundaryTest(unittest.TestCase):
                 self.assertEqual(taken.reason_code, 'WORKER_FAILED')
 
     def test_a_service_boundary_failure_cannot_be_signed_as_worker_failed(self):
+        """Require transport or lifecycle failures to escape without a signed outcome."""
         class FailedService(WorkerRunner):
             def _run_worker(self, payload):
+                """Simulate an unconfirmed worker lifecycle at the service boundary."""
                 raise WorkerBoundaryError("unconfirmed worker lifecycle")
 
         runner = FailedService(DeterministicSummarizer(), authority=self.authority)
