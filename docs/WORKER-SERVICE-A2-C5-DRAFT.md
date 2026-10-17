@@ -64,7 +64,8 @@ Die Semantik dieser Vorgaben
 steht in [systemd.socket(5)](https://man7.org/linux/man-pages/man5/systemd.socket.5.html)
 und [systemd.kill(5)](https://man7.org/linux/man-pages/man5/systemd.kill.5.html).
 Die Service-Unit setzt `User=geniusnew-worker`, eine eigene primäre Gruppe, keine
-ergänzenden Gruppen und keine Linux-Capabilities. Der Core erhält insbesondere
+fremden ergänzenden Gruppen und keine Linux-Capabilities. Die in der Gruppenliste
+wiederholte primäre GID ist zulässig. Der Core erhält insbesondere
 **weder Root noch `CAP_SETUID`/`CAP_SETGID`**. Er verbindet sich als
 `geniusnew-core` über eine ausschließlich für diesen Socket bestimmte Gruppe.
 Der Anker-Nutzer gehört keiner dieser Gruppen an. Die Unit-Vorlagen liegen in
@@ -256,7 +257,7 @@ auditierter Ablauf; dieser Entwurf erzeugt oder rotiert keine Schlüssel.
 | Identität | Minimal benötigter Zugriff | Ausdrücklich ausgeschlossen |
 | --- | --- | --- |
 | `geniusnew-core` | Eigene Core-Konfiguration und Root-Secret; bestehende Runtime-DB-Rolle; Connect auf genau den Worker-Socket; Core-only Lifecycle-Lease und lesbarer systemd-/Cgroup-Zustand; Client des getrennten Ankers. | Root, `CAP_SETUID`, `CAP_SETGID`, Schreibrecht auf Ankerzustand, Eigentum am Worker-Socket. |
-| `geniusnew-worker` | Lesbarer installierter Python-/GeniusNew-Code und genau ein temporäres Job-Verzeichnis; angenommener Socket-FD. | Root-Secret, DB-DSN und DB-Login, Ankerzustand/-Socket, Core-API-Keys, Netzwerk-Listener, Core-Lifecycle-Lease, ergänzende Gruppen oder Capabilities. |
+| `geniusnew-worker` | Lesbarer installierter Python-/GeniusNew-Code und genau ein temporäres Job-Verzeichnis; angenommener Socket-FD. | Root-Secret, DB-DSN und DB-Login, Ankerzustand/-Socket, Core-API-Keys, Netzwerk-Listener, Core-Lifecycle-Lease, andere Gruppen als seine feste primäre GID oder Capabilities. |
 | `geniusnew-anchor` | Eigener Zustandsordner und vorhandener Anker-Socket gemäß C2. | Worker-Socket-Gruppe, Core-DB-Rolle und Worker-Dateien. |
 | `root`/systemd | Anlage der statischen Nutzer, eng begrenzten Gruppe und Socket-/Service-Units erst nach separatem Betriebs-GO. | Laufende Job-Entscheidungen oder Kenntnis der Anwendungs-Payloads im normalen Betrieb. |
 
@@ -314,7 +315,7 @@ produktive Rechte oder installierte Dienste.
 | `ops/worker/` | Nicht installierte Socket- und Dienstvorlagen mit getrennten numerischen UIDs und festen Rechten. |
 
 **HOLD:** [Claudes neue Probe in PR #144](https://github.com/Kaancodm/GeniusNew/pull/144)
-am Head `e86eed73c8e4a6c1de5dbd4d89a4d3f99bf34a74` meldet zweimal 30/30 PASS
+am Head `55d5e2605d829bb44b2d9967066747ce48042019` meldet zweimal 30/30 PASS
 in einem verschachtelten systemd-Labor. Die Rohberichte samt SHA-256 fehlen im
 PR zum Zeitpunkt der Integration; diese Angabe ist daher ein gemeldetes Ergebnis,
 kein hier unabhängig verifizierter Abnahmenachweis. Der Zielhost ist weiterhin

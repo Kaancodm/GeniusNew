@@ -52,6 +52,14 @@ _HEADER = struct.Struct("!I")
 _HOST_REFERENCE = "/run/geniusnew-worker/ipc/host-state.json"
 _HOST_NAMESPACES = ("mnt", "pid", "user", "cgroup")
 _BOOTSTRAP = str(Path(__file__).with_name("worker_bootstrap.py"))
+_LOADER_CACHE = Path("/etc/ld.so.cache")
+_LOADER_PRELOAD = Path("/etc/ld.so.preload")
+_LOADER_ENVIRONMENT = (
+    "LD_LIBRARY_PATH LD_PRELOAD LD_AUDIT LD_DEBUG LD_DEBUG_OUTPUT LD_DYNAMIC_WEAK "
+    "LD_BIND_NOT LD_BIND_NOW LD_HWCAP_MASK LD_ORIGIN_PATH LD_PROFILE LD_PROFILE_OUTPUT "
+    "LD_SHOW_AUXV LD_TRACE_LOADED_OBJECTS LD_USE_LOAD_BIAS LD_VERBOSE LD_WARN "
+    "LD_PREFER_MAP_32BIT_EXEC GLIBC_TUNABLES GCONV_PATH LOCPATH"
+)
 _CONTROL_BYTES = (socket.CMSG_SPACE(_UCREDS.size)
                   + socket.CMSG_SPACE(_FD.size * 8)
                   + socket.CMSG_SPACE(_FD.size))
@@ -442,6 +450,8 @@ class WorkerLifecycle:
         if sys.flags.isolated != 1:
             _fail("Core requires isolated Python startup")
         try:
+            self._check_loader_configuration()
+            self._check_native_mappings()
             executables = {Path(sys.executable), Path(sys._base_executable)}
             directories = {Path(sys.prefix), Path(sys.base_prefix),
                            Path(sys.exec_prefix), Path(sys.base_exec_prefix),
@@ -460,6 +470,8 @@ class WorkerLifecycle:
                     _fail("worker Python import path is not fixed and absolute")
             for value in required:
                 self._check_runtime_tree(Path(value))
+            # Also cover shared libraries not loaded by this Core yet.
+            self._check_runtime_tree(Path(sysconfig.get_config_var("LIBDIR")))
             # Check initial interpreter paths too: encodings and runpy load
             # before the fixed bootstrap replaces sys.path with required.
             for value in sys.path:
@@ -468,6 +480,55 @@ class WorkerLifecycle:
             raise
         except (OSError, RuntimeError, TypeError, ValueError) as exc:
             raise ContractError("worker Python startup state cannot be inspected") from exc
+
+    def _check_loader_configuration(self) -> None:
+        if any(name.startswith("LD_") or name in _LOADER_ENVIRONMENT.split()
+               for name in os.environ):
+            _fail("Core loader environment is not fixed")
+        try:
+            self._check_optional_runtime_path(_LOADER_CACHE)
+            self._check_optional_runtime_path(_LOADER_PRELOAD)
+            try:
+                preload = _LOADER_PRELOAD.read_bytes()
+            except FileNotFoundError:
+                preload = b""
+            if preload:
+                _fail("worker native preloads are forbidden")
+        except OSError as exc:
+            raise ContractError("worker loader configuration cannot be inspected") from exc
+
+    def _check_native_mappings(self) -> None:
+        # The fixed bootstrap imports the same native modules as this Core.
+        # Check the actual ELF loader and DSOs, not just LIBDIR's directory mode.
+        # The trusted installer must establish this runtime before the first exec.
+        try:
+            mappings = Path("/proc/self/maps").read_text(encoding="ascii")
+            inspected = set()
+            for line in mappings.splitlines():
+                fields = line.split(maxsplit=5)
+                if (len(fields) < 5 or re.fullmatch(r"[r-][w-][x-][ps]", fields[1]) is None):
+                    _fail("Core executable mappings are malformed")
+                if "x" not in fields[1]:
+                    continue
+                path = fields[5] if len(fields) == 6 else ""
+                if path in ("[vdso]", "[vsyscall]") and fields[4] == "0":
+                    continue
+                if (not path.startswith("/") or path.endswith(" (deleted)") or "\\" in path):
+                    _fail("Core executable mapping has no fixed file")
+                target = Path(path)
+                self._root_controlled(target, regular=True)
+                info = target.stat()
+                device = tuple(int(value, 16) for value in fields[3].split(":"))
+                if (int(fields[4]) != info.st_ino
+                        or device != (os.major(info.st_dev), os.minor(info.st_dev))):
+                    _fail("Core executable mapping file was replaced")
+                inspected.add(path)
+            if not inspected:
+                _fail("Core executable mappings are missing")
+        except ContractError:
+            raise
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise ContractError("Core native runtime cannot be inspected") from exc
 
     def _check_installation(self) -> None:
         from . import contracts, isolation, results, workers
@@ -541,6 +602,7 @@ class WorkerLifecycle:
                 "TimeoutStopSec": "2s", "TasksMax": "4", "MemoryMax": "512M",
                 "UMask": "0077", "RuntimeDirectory": "geniusnew-worker/jobs/%i",
                 "RuntimeDirectoryMode": "0700", "RuntimeDirectoryPreserve": "no",
+                "UnsetEnvironment": _LOADER_ENVIRONMENT,
             }
             service = fields.get("Service", {})
             command = service.pop("ExecStart", None)
@@ -623,6 +685,7 @@ class WorkerLifecycle:
             "Slice": "system.slice",
             "SystemCallFilter": "~socket socketpair",
             "SystemCallErrorNumber": "1",
+            "UnsetEnvironment": _LOADER_ENVIRONMENT,
         }
         if any(properties.get(key) != value for key, value in expected.items()):
             _fail("worker instance hardening does not match its fixed profile")
@@ -932,7 +995,7 @@ class WorkerLifecycle:
                     "LimitCORESoft", "KillMode", "SendSIGKILL", "Restart",
                     "RuntimeMaxUSec", "TimeoutStopUSec", "RuntimeDirectory",
                     "RuntimeDirectoryMode", "RuntimeDirectoryPreserve", "Slice",
-                    "SystemCallFilter", "SystemCallErrorNumber", "ExecStart")
+                    "SystemCallFilter", "SystemCallErrorNumber", "UnsetEnvironment", "ExecStart")
         properties = self._show(unit, "ActiveState", "InvocationID",
                                 "ControlGroup", "MainPID", "LoadState", "FragmentPath",
                                 "DropInPaths", "NeedDaemonReload", *settings)
@@ -1269,8 +1332,10 @@ def _set_nondumpable() -> None:
 
 
 def _assert_worker_identity(worker_uid: int, worker_gid: int) -> None:
+    # systemd initgroups retains the primary GID in the supplementary vector.
+    # Repeating that GID adds no authority; every other group must refuse.
     if (os.geteuid() != worker_uid or os.getegid() != worker_gid
-            or os.getgroups() or worker_uid == 0):
+            or any(group != worker_gid for group in os.getgroups()) or worker_uid == 0):
         _fail("worker process has an unexpected OS identity")
     try:
         status = Path("/proc/self/status").read_text(encoding="ascii")

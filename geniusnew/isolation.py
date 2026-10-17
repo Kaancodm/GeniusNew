@@ -84,7 +84,7 @@ _FILTER_ARCHES = {
                # after the trusted bootstrap has installed its fixed identity.
                "kill": (57, 58, 59, 105, 106, 113, 114, 116, 117,
                         119, 122, 123, 126, 157, 322),
-               "clone": 56, "clone3": 435},
+               "clone": 56, "clone3": 435, "prctl": 157},
 }
 _X32_SYSCALL_BIT = 0x40000000
 _CLONE_THREAD = 0x00010000
@@ -92,6 +92,7 @@ _ENOSYS = 38
 _SECCOMP_RET_KILL_PROCESS = 0x80000000
 _SECCOMP_RET_ERRNO = 0x00050000
 _SECCOMP_RET_ALLOW = 0x7FFF0000
+_THREAD_NAME_ACTION = _SECCOMP_RET_ERRNO | 1  # EPERM
 _BPF_LD_W_ABS = 0x20
 _BPF_JEQ_K = 0x15
 _BPF_JGE_K = 0x35
@@ -100,6 +101,7 @@ _BPF_RET_K = 0x06
 _SIGSYS = getattr(signal, "SIGSYS", None)  # absent on Windows
 _PR_SET_SECCOMP = 22
 _PR_SET_NO_NEW_PRIVS = 38
+_PR_SET_NAME = 15
 _SECCOMP_MODE_FILTER = 2
 
 # Landlock (gate A2). ABI 4 (Linux 6.7) is the minimum because it is the first
@@ -283,6 +285,14 @@ def _process_filter(machine: str) -> bytes:
         _bpf(_BPF_LD_W_ABS, 0, 0, 0),                   # seccomp_data.nr
         _bpf(_BPF_JGE_K, 0, 1, _X32_SYSCALL_BIT),
         kill,
+        # Python 3.14 tolerates a name-setting OSError. EPERM preserves thread
+        # execution without exposing payload in comm. Other prctl operations,
+        # including PR_SET_DUMPABLE, retain their fatal refusal below.
+        _bpf(_BPF_JEQ_K, 0, 3, spec["prctl"]),
+        _bpf(_BPF_LD_W_ABS, 0, 0, 16),
+        _bpf(_BPF_JEQ_K, 0, 1, _PR_SET_NAME),
+        _bpf(_BPF_RET_K, 0, 0, _THREAD_NAME_ACTION),
+        _bpf(_BPF_LD_W_ABS, 0, 0, 0),
     ]
     for number in spec["kill"]:
         program += [_bpf(_BPF_JEQ_K, 0, 1, number), kill]

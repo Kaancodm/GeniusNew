@@ -420,6 +420,24 @@ class WorkerBootstrapTest(unittest.TestCase):
                 with self.assertRaisesRegex(ContractError, "unexpected OS identity"):
                     _assert_worker_identity(uid, gid)
 
+    def test_worker_allows_only_its_primary_gid_in_the_group_vector(self):
+        uid, gid = 20002, 20002
+        status = (f"Uid:\t{uid}\t{uid}\t{uid}\t{uid}\n"
+                  f"Gid:\t{gid}\t{gid}\t{gid}\t{gid}\n"
+                  "NoNewPrivs:\t1\nCapInh:\t0\nCapPrm:\t0\nCapEff:\t0\n"
+                  "CapBnd:\t0\nCapAmb:\t0\n")
+        with patch("os.geteuid", return_value=uid), patch("os.getegid", return_value=gid), \
+                patch.object(Path, "read_text", return_value=status):
+            # systemd initgroups includes the primary group even with an empty
+            # SupplementaryGroups= assignment. That duplicate grants no access.
+            for groups in ([], [gid]):
+                with self.subTest(groups=groups), patch("os.getgroups", return_value=groups):
+                    _assert_worker_identity(uid, gid)
+            for groups in ([20003], [gid, 20003], [gid, 0]):
+                with self.subTest(groups=groups), patch("os.getgroups", return_value=groups):
+                    with self.assertRaisesRegex(ContractError, "unexpected OS identity"):
+                        _assert_worker_identity(uid, gid)
+
     def test_worker_root_identity_is_never_accepted(self):
         with patch("os.geteuid", return_value=0), patch("os.getegid", return_value=0), \
                 patch("os.getgroups", return_value=[]):
@@ -711,6 +729,8 @@ class LifecycleRefusalTest(unittest.TestCase):
             executable = prefix / "bin/python"
             executable.write_bytes(b"interpreter")
             with patch.object(self.lifecycle, "_root_controlled") as inspect, \
+                    patch.object(self.lifecycle, "_check_loader_configuration"), \
+                    patch.object(self.lifecycle, "_check_native_mappings"), \
                     patch("geniusnew.worker_service.sys.flags", SimpleNamespace(isolated=1)), \
                     patch("geniusnew.worker_service.sys.executable", str(executable)), \
                     patch("geniusnew.worker_service.sys._base_executable", str(executable)), \
@@ -749,6 +769,76 @@ class LifecycleRefusalTest(unittest.TestCase):
             with patch("geniusnew.worker_service.sys.path", [""]):
                 with self.assertRaisesRegex(ContractError, "fixed and absolute"):
                     self.lifecycle._check_python_runtime()
+
+    def test_native_library_not_yet_loaded_must_be_root_controlled(self):
+        with self.python_runtime() as (root, inspect):
+            library = root / "base/lib/libpython-future.so"
+            library.write_bytes(b"native canary")
+            def unsafe(path, *, regular):
+                if path == library:
+                    raise ContractError("unsafe native library")
+            inspect.side_effect = unsafe
+            with self.assertRaisesRegex(ContractError, "unsafe native library"):
+                self.lifecycle._check_python_runtime()
+
+    def native_mapping(self, path):
+        info = path.stat()
+        device = f"{os.major(info.st_dev):02x}:{os.minor(info.st_dev):02x}"
+        return f"1000-2000 r-xp 00000000 {device} {info.st_ino} {path}\n"
+
+    def test_native_mappings_check_the_loader_and_libraries_outside_libdir(self):
+        with tempfile.TemporaryDirectory() as directory:
+            library = Path(directory) / "libc.so.6"
+            library.write_bytes(b"native canary")
+            maps = self.native_mapping(library) + "2000-3000 r-xp 0 00:00 0 [vdso]\n"
+            with patch.object(Path, "read_text", return_value=maps), patch.object(
+                    self.lifecycle, "_root_controlled") as inspect:
+                self.lifecycle._check_native_mappings()
+                inspect.assert_any_call(library, regular=True)
+                inspect.side_effect = ContractError("unsafe mapped library")
+                with self.assertRaisesRegex(ContractError, "unsafe mapped library"):
+                    self.lifecycle._check_native_mappings()
+
+    def test_unknown_or_replaced_executable_mappings_refuse(self):
+        with tempfile.TemporaryDirectory() as directory:
+            library = Path(directory) / "lib.so"
+            library.write_bytes(b"native")
+            valid = self.native_mapping(library)
+            for maps in ("", "malformed\n", "1000-2000 rwxp 0 00:00 0\n",
+                         "1000-2000 r-xp 0 00:00 0 [unknown]\n",
+                         valid.rstrip() + " (deleted)\n",
+                         valid.replace(str(library.stat().st_ino), "1")):
+                with self.subTest(maps=maps), patch.object(Path, "read_text", return_value=maps), \
+                        patch.object(self.lifecycle, "_root_controlled"):
+                    with self.assertRaises(ContractError):
+                        self.lifecycle._check_native_mappings()
+        with patch.object(Path, "read_text", side_effect=PermissionError):
+            with self.assertRaises(ContractError):
+                self.lifecycle._check_native_mappings()
+
+    def test_native_loader_overrides_and_preloads_refuse(self):
+        with tempfile.TemporaryDirectory() as directory:
+            cache, preload = Path(directory) / "cache", Path(directory) / "preload"
+            cache.write_bytes(b"root loader cache")
+            with patch("geniusnew.worker_service._LOADER_CACHE", cache), \
+                    patch("geniusnew.worker_service._LOADER_PRELOAD", preload), \
+                    patch.dict(os.environ, {}, clear=True), \
+                    patch.object(self.lifecycle, "_root_controlled") as inspect:
+                self.lifecycle._check_loader_configuration()
+                inspect.assert_any_call(cache, regular=True)
+                for variable in ("LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT",
+                                 "GLIBC_TUNABLES", "GCONV_PATH", "LOCPATH"):
+                    with self.subTest(variable=variable), patch.dict(os.environ, {variable: ""}):
+                        with self.assertRaisesRegex(ContractError, "loader environment"):
+                            self.lifecycle._check_loader_configuration()
+                preload.write_bytes(b"/untrusted.so\n")
+                with self.assertRaisesRegex(ContractError, "native preloads"):
+                    self.lifecycle._check_loader_configuration()
+                preload.write_bytes(b"")
+                self.lifecycle._check_loader_configuration()
+                inspect.side_effect = ContractError("unsafe loader configuration")
+                with self.assertRaisesRegex(ContractError, "unsafe loader configuration"):
+                    self.lifecycle._check_loader_configuration()
 
     def test_unreadable_runtime_tree_and_startup_state_refuse(self):
         with patch.object(Path, "stat", side_effect=PermissionError):
@@ -1218,6 +1308,11 @@ else:
             "Slice": "system.slice", "ExecStart": "fixed",
             "SystemCallFilter": "~socket socketpair",
             "SystemCallErrorNumber": "1",
+            "UnsetEnvironment": (
+                "LD_LIBRARY_PATH LD_PRELOAD LD_AUDIT LD_DEBUG LD_DEBUG_OUTPUT LD_DYNAMIC_WEAK "
+                "LD_BIND_NOT LD_BIND_NOW LD_HWCAP_MASK LD_ORIGIN_PATH LD_PROFILE LD_PROFILE_OUTPUT "
+                "LD_SHOW_AUXV LD_TRACE_LOADED_OBJECTS LD_USE_LOAD_BIAS LD_VERBOSE LD_WARN "
+                "LD_PREFER_MAP_32BIT_EXEC GLIBC_TUNABLES GCONV_PATH LOCPATH"),
         }
         with patch.object(self.lifecycle, "_check_exec") as check_exec:
             self.lifecycle._check_instance_settings(settings, "one")
@@ -1229,7 +1324,8 @@ else:
                                ("SystemCallFilter", "socket socketpair"),
                                ("SystemCallFilter", "~socket"),
                                ("SystemCallFilter", ""),
-                               ("SystemCallErrorNumber", "0")):
+                               ("SystemCallErrorNumber", "0"),
+                               ("UnsetEnvironment", "LD_PRELOAD")):
                 with self.subTest(key=key), self.assertRaisesRegex(
                         ContractError, "hardening"):
                     self.lifecycle._check_instance_settings({**settings, key: wrong}, "one")

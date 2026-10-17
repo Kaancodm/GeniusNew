@@ -461,6 +461,9 @@ syscall = ctypes.CDLL(None, use_errno=True).syscall
 syscall.restype = ctypes.c_long
 syscall.argtypes = (ctypes.c_long,) * 6
 values = [int(value) for value in sys.argv[2:]]
+if sys.argv[1] == "thread-name":
+    name = ctypes.create_string_buffer(b"worker-test")
+    values.append(ctypes.addressof(name))
 isolation._install_process_filter()
 result = syscall(*values, *[0] * (6 - len(values)))
 os._exit(100 + ctypes.get_errno() if result < 0 else 0)
@@ -545,6 +548,12 @@ class ProcessFilterTest(unittest.TestCase):
                 self.assertEqual(self.probe("native", self.syscalls[name], 0), -signal.SIGSYS)
         self.assertEqual(self.probe("native", self.syscalls["prctl"], 4, 1),
                          -signal.SIGSYS)
+
+    def test_setting_a_thread_name_refuses_without_killing_the_thread(self):
+        # Python 3.14 names OS threads; exercise its syscall on older Python too.
+        # Its OSError handler can continue, without exposing payload in comm.
+        self.assertEqual(self.probe("thread-name", self.syscalls["prctl"], 15),
+                         100 + errno.EPERM)
 
     def test_clone_without_clone_thread_is_killed(self):
         self.assertEqual(

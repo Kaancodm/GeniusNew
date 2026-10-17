@@ -64,6 +64,16 @@ class RefusalScannerTest(unittest.TestCase):
                              tuple(value for value in (105, 113, 114)
                                    if value != int(refusal.condition)))
 
+    def test_seccomp_thread_name_refusal_is_replaced_by_allow(self):
+        source = ('_SECCOMP_RET_ERRNO = 0x00050000\n'
+                  '_SECCOMP_RET_ALLOW = 0x7fff0000\n'
+                  '_THREAD_NAME_ACTION = _SECCOMP_RET_ERRNO | 1\n')
+        found = self.find(source)
+        self.assertEqual(len(found), 1)
+        namespace = {}
+        exec(refusals._disable(source, found[0]), namespace)
+        self.assertEqual(namespace['_THREAD_NAME_ACTION'], 0x7fff0000)
+
     def test_all_except_wrappers_are_discovered_and_mutated_one_at_a_time(self):
         source = textwrap.dedent('''\
             try:

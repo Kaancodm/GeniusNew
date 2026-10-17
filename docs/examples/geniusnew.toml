@@ -1,4 +1,4 @@
-# Example configuration for `python -m geniusnew serve --config <this file>`.
+# Example configuration for `python -I -m geniusnew serve --config <this file>`.
 # Checked by geniusnew/config.py; every table has a closed key set, and any
 # unknown or missing key refuses the start. This file starts nothing as it is:
 # the principal below is a placeholder, not a SHA-256 digest.

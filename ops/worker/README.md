@@ -34,6 +34,18 @@ Laufzeit; das Elternverzeichnis eines Quellpakets wird nicht zusätzlich lesbar.
 Der echte Diensttest muss den Bootstrap und den festen Summarizer mit dieser
 Installation ausführen.
 
+Auch `LIBDIR` wird rekursiv geprüft. Für den festen Bootstrap mit demselben
+Interpreter prüft der Core zusätzlich seine tatsächlich ausführbar gemappten
+Dateien einschließlich ELF-Loader, `libc`, `libm` und gegebenenfalls `libpython`:
+Root-Eigentum, Schreibschutz, Pfadkette sowie Geräte-/Inode-Identität. Gelöschte,
+anonyme, ersetzte oder unlesbare ausführbare Mappings verweigern den Start.
+Der Core lehnt Loader-Umgebungsvariablen ab; die Worker-Unit entfernt die benannten
+Loader-Overrides mit `UnsetEnvironment=` vor `execve`. Cache und Preload-Datei
+müssen geschützt sein; ein nicht leeres `/etc/ld.so.preload` ist unzulässig.
+Der Root-Installer verantwortet die anfängliche native Suchpfad-/RPATH-Konfiguration
+und die systemd-Manager-Umgebung. Dieser Nachweis gilt für den festen Bootstrap;
+weitere dynamisch geladene Worker-Module sind kein unterstützter Erweiterungspfad.
+
 Der Core prüft vor dem Listener und erneut vor jedem Job die geladenen Unit-
 Dateien ohne Drop-ins, den installierten Code, den Socket unter
 `/run/geniusnew-worker/ipc/worker.sock` und die Lease. Das Verzeichnis `ipc`
@@ -42,6 +54,12 @@ brauchen `root:SOCKET_GID` und `0660`. Der nur durch systemd bereinigte Baum
 `/run/geniusnew-worker/jobs` darf nicht von Worker oder Core beschreibbar sein.
 Der Core braucht die Socket-Gruppe, aber keine Worker-Gruppe, Capabilities oder
 privaten Mount-, PID-, User- oder Cgroup-Namespace.
+
+Der Worker darf ausschließlich seine feste primäre GID besitzen. systemd ruft
+`initgroups` auf: Ein leeres `SupplementaryGroups=` entfernt die Gruppen aus der
+Systemdatenbank nicht. Die dadurch in der ergänzenden Gruppenliste wiederholte
+primäre GID ist zulässig; jede fremde GID verweigert den Bootstrap vor READY.
+Die echte Probe muss auch einen Worker mit fremder zusätzlicher Gruppe ablehnen.
 
 ## Bootgebundener Hostnachweis
 

@@ -31,6 +31,7 @@ the complete suite.
 
 Each numeric entry in the sandbox's `_FILTER_ARCHES` kill table is also a
 refusal: remove it independently and require the raw-syscall tests to notice.
+The thread-name EPERM action is replaced by ALLOW independently as well.
 
 This is deliberately not general-purpose mutation testing. Flipping arbitrary
 operators produces mutants that change nothing observable, and the survivors are
@@ -199,6 +200,14 @@ def _seccomp_kill_rules(tree: ast.AST):
                             yield rules, entry
 
 
+def _thread_name_actions(tree: ast.AST):
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign)
+                and any(isinstance(target, ast.Name) and target.id == "_THREAD_NAME_ACTION"
+                        for target in node.targets)):
+            yield node.value
+
+
 def find_refusals(path: Path) -> list[Refusal]:
     if path.suffix != ".py":
         return _find_shell_refusals(path)
@@ -206,6 +215,11 @@ def find_refusals(path: Path) -> list[Refusal]:
     tree = ast.parse(source)
     lines = source.splitlines()
     found: list[Refusal] = []
+    for value in _thread_name_actions(tree):
+        found.append(Refusal(
+            path=str(path.relative_to(ROOT)), line=value.lineno,
+            condition="thread-name action", message="seccomp refuses thread names",
+            kind="seccomp_thread_name"))
     for _, entry in _seccomp_kill_rules(tree):
         found.append(Refusal(
             path=str(path.relative_to(ROOT)), line=entry.lineno,
@@ -260,6 +274,10 @@ def _disable(source: str, refusal: Refusal) -> str:
         lines[refusal.line - 1] = _SHELL_DIE.sub(r":\1", target)
         return "".join(lines)
     tree = ast.parse(source)
+    if refusal.kind == "seccomp_thread_name":
+        for value in _thread_name_actions(tree):
+            if value.lineno == refusal.line:
+                return _replace_node(source, value, "_SECCOMP_RET_ALLOW")
     if refusal.kind == "seccomp_kill":
         for rules, entry in _seccomp_kill_rules(tree):
             if entry.lineno == refusal.line and str(entry.value) == refusal.condition:
