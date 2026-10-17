@@ -816,6 +816,18 @@ class LifecycleRefusalTest(unittest.TestCase):
             with self.assertRaises(ContractError):
                 self.lifecycle._check_native_mappings()
 
+    def test_ambiguous_mapping_names_refuse_even_when_the_literal_file_exists(self):
+        # If stat merely failed, deleting the path refusal would go unnoticed.
+        with tempfile.TemporaryDirectory() as directory:
+            for name in ("native.so (deleted)", "native\\alias.so"):
+                library = Path(directory) / name
+                library.write_bytes(b"native canary")
+                with self.subTest(name=name), patch.object(
+                        Path, "read_text", return_value=self.native_mapping(library)), \
+                        patch.object(self.lifecycle, "_root_controlled"):
+                    with self.assertRaisesRegex(ContractError, "mapping has no fixed file"):
+                        self.lifecycle._check_native_mappings()
+
     def test_native_loader_overrides_and_preloads_refuse(self):
         with tempfile.TemporaryDirectory() as directory:
             cache, preload = Path(directory) / "cache", Path(directory) / "preload"
