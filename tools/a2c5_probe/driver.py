@@ -711,6 +711,8 @@ class Lab:
 
     def leftover(self, role: str = "worker") -> int | None:
         """Count processes holding the role's UID in any of real/effective/saved/fs."""
+        if role not in self.uids:
+            return 0  # setup stopped before this user existed; nothing can run as it
         uid = str(self.uids[role])
         count = 0
         try:

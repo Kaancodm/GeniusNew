@@ -550,6 +550,14 @@ class JudgementTest(unittest.TestCase):
         self.assertEqual(driver.judge_cleanup({**state, "users_gone": False}), HOLD)
 
 
+class TeardownTest(unittest.TestCase):
+    def test_a_role_that_was_never_created_has_no_processes(self):
+        lab = driver.Lab("00000000", sys.executable, {})
+        lab.uids = {"core": 1}  # setup stopped before the worker user existed
+        self.assertEqual(lab.leftover("worker"), 0)
+        self.assertEqual(lab.leftover("foreign"), 0)
+
+
 class ReportTest(unittest.TestCase):
     def report(self, observations):
         finding = driver.Finding("C1.example", "1", PASS, observations)
