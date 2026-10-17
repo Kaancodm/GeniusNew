@@ -106,6 +106,7 @@ class Refusal:
     kind: str = "condition"
 
     def label(self) -> str:
+        """Return the `path:line` identifier used to report this refusal."""
         return f"{self.path}:{self.line}"
 
 

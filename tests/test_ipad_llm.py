@@ -22,6 +22,7 @@ KEY = "TEST-ONLY-OPAQUE-KEY-1234567890123456"
 
 
 def status(*, online=True, peer_online=True, peer_os="iOS", peer_ip=HOST):
+    """Build a minimal `tailscale status --json` payload for the given peer state."""
     return {
         "BackendState": "Running" if online else "Stopped",
         "Self": {"Online": online},
@@ -31,16 +32,21 @@ def status(*, online=True, peer_online=True, peer_os="iOS", peer_ip=HOST):
 
 
 class ApiHandler(BaseHTTPRequestHandler):
+    """Stand-in iPad API server recording requests and replaying a configurable response."""
+
     def do_GET(self):
+        """Record the GET and reply with the configured status, headers and body."""
         self.server.requests.append(("GET", self.path, self.headers, None))
         self.reply()
 
     def do_POST(self):
+        """Record the POST body and reply with the configured status, headers and body."""
         body = self.rfile.read(int(self.headers["Content-Length"]))
         self.server.requests.append(("POST", self.path, self.headers, body))
         self.reply()
 
     def reply(self):
+        """Send the configured status and body, optionally a redirect or a slow trickle."""
         self.send_response(self.server.response_status)
         if self.server.redirect:
             self.send_header("Location", "http://127.0.0.1:9/leak")
@@ -58,11 +64,15 @@ class ApiHandler(BaseHTTPRequestHandler):
             self.wfile.write(self.server.response_body)
 
     def log_message(self, *_args):
+        """Silence the default per-request access log."""
         pass
 
 
 class IpadModelTest(unittest.TestCase):
+    """Exercises tools/ipad_llm.py against a local stand-in server and direct unit calls."""
+
     def setUp(self):
+        """Start a local HTTP stand-in server and a private, correctly-permissioned key file."""
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.key_file = Path(self.temp.name) / "api-key"
@@ -89,6 +99,7 @@ class IpadModelTest(unittest.TestCase):
         self.interface_patch = mock.patch.object(ipad_llm, "_INTERFACE", "lo")
 
     def connected(self):
+        """Patch endpoint, tailnet status and route checks so calls reach the stand-in server."""
         self.endpoint_patch.start()
         self.status_patch.start()
         self.route_patch.start()
@@ -99,6 +110,7 @@ class IpadModelTest(unittest.TestCase):
         self.addCleanup(self.endpoint_patch.stop)
 
     def test_endpoint_accepts_only_exact_tailscale_ipv4_and_valid_port(self):
+        """`_endpoint` refuses non-Tailscale, non-exact, or out-of-range host/port input."""
         self.assertEqual(ipad_llm._endpoint(HOST, 8080), f"http://{HOST}:8080")
         for host, port in (("127.0.0.1", 8080), ("192.168.1.2", 8080),
                            ("example.com", 8080), ("100.100.101.102/extra", 8080),
@@ -108,6 +120,7 @@ class IpadModelTest(unittest.TestCase):
                     ipad_llm._endpoint(host, port)
 
     def test_peer_must_be_online_ios_device_with_exact_address(self):
+        """`_require_ipad_peer` refuses an offline tailnet, offline peer, wrong OS, or wrong IP."""
         ipad_llm._require_ipad_peer(HOST, status())
         for state in (status(online=False), status(peer_online=False),
                       status(peer_os="linux"), status(peer_ip="100.100.101.103"),
@@ -117,6 +130,7 @@ class IpadModelTest(unittest.TestCase):
                     ipad_llm._require_ipad_peer(HOST, state)
 
     def test_tailnet_status_refuses_unavailable_or_invalid_data(self):
+        """`_tailnet_status` refuses a non-zero `tailscale status` exit or a non-dict payload."""
         with mock.patch.object(ipad_llm.subprocess, "run",
                                return_value=mock.Mock(returncode=1,
                                                       stdout=json.dumps(status()))):
@@ -128,6 +142,7 @@ class IpadModelTest(unittest.TestCase):
                 ipad_llm._tailnet_status()
 
     def test_route_must_use_tailscale_interface(self):
+        """`_require_tailnet_route` refuses any route that is missing or not via `tailscale0`."""
         for route, accepted in (([{"dev": "tailscale0"}], True),
                                 ([{"dev": "eth0"}], False), ([], False)):
             with self.subTest(route=route):
@@ -146,6 +161,7 @@ class IpadModelTest(unittest.TestCase):
                 ipad_llm._require_tailnet_route(HOST)
 
     def test_api_key_file_is_private_and_no_symlink(self):
+        """`_api_key` refuses a non-`Path`, world/group-readable, symlinked, wrong-sized, or non-regular key file."""
         self.assertEqual(ipad_llm._api_key(self.key_file), KEY)
         with self.assertRaises(ContractError):
             ipad_llm._api_key(str(self.key_file))
@@ -175,6 +191,7 @@ class IpadModelTest(unittest.TestCase):
             ipad_llm._api_key(fifo)
 
     def test_models_and_chat_send_only_bounded_text_to_the_verified_peer(self):
+        """`models` and `chat` succeed against a verified peer and send no tool-call payload."""
         self.connected()
         self.assertEqual(ipad_llm.models(HOST, 8080, self.key_file), ("local-gemma",))
         self.server.response_body = json.dumps({
@@ -197,6 +214,7 @@ class IpadModelTest(unittest.TestCase):
         self.assertNotIn(b"tools", post[3])
 
     def test_no_request_is_sent_to_an_unverified_peer(self):
+        """`chat` refuses before sending any HTTP request once the peer check fails."""
         self.connected()
         with mock.patch.object(ipad_llm, "_tailnet_status", return_value=status(peer_online=False)):
             with self.assertRaises(ContractError):
@@ -204,6 +222,7 @@ class IpadModelTest(unittest.TestCase):
         self.assertEqual(self.server.requests, [])
 
     def test_no_request_is_sent_for_bad_input(self):
+        """`chat` refuses invalid prompt, model, max_tokens, or timeout before any request."""
         self.connected()
         for kwargs in ({"prompt": ""}, {"prompt": None},
                        {"prompt": "x" * 8193}, {"prompt": "\ud800"},
@@ -216,6 +235,7 @@ class IpadModelTest(unittest.TestCase):
         self.assertEqual(self.server.requests, [])
 
     def test_tool_calls_and_wrong_roles_are_refused_as_untrusted_output(self):
+        """`chat` refuses a tool call, a non-stop finish reason, a wrong role, or bad content."""
         self.connected()
         for message, reason in (
             ({"role": "assistant", "content": "Done", "tool_calls": [{"id": "x"}]}, "stop"),
@@ -236,6 +256,7 @@ class IpadModelTest(unittest.TestCase):
                     ipad_llm.chat(HOST, 8080, self.key_file, "local-gemma", "Hello?")
 
     def test_invalid_model_list_and_completion_are_refused(self):
+        """`models` and `chat` refuse malformed, empty, duplicated, or mismatched-model responses."""
         self.connected()
         for body in (b"{}", b'{"data":[]}', b'{"data":[7]}',
                      b'{"data":[{"id":"x","score":NaN}]}',
@@ -261,6 +282,7 @@ class IpadModelTest(unittest.TestCase):
             ipad_llm.chat(HOST, 8080, self.key_file, "local-gemma", "Hello?")
 
     def test_redirect_error_and_oversized_response_are_refused(self):
+        """`models` refuses a redirect, a non-200 status, an oversized body, or invalid JSON."""
         self.connected()
         self.server.response_status = 302
         self.server.redirect = True
@@ -287,6 +309,7 @@ class IpadModelTest(unittest.TestCase):
             ipad_llm.models(HOST, 8080, self.key_file)
 
     def test_direct_boundary_rejects_oversized_wire_and_invalid_model_type(self):
+        """`_request_json` refuses an oversized request body; `_model` refuses invalid IDs."""
         self.connected()
         with self.assertRaises(ContractError):
             ipad_llm._request_json(
@@ -304,6 +327,7 @@ class IpadModelTest(unittest.TestCase):
                     ipad_llm._model(value)
 
     def test_cli_requires_model_before_reading_prompt(self):
+        """The CLI's `chat` command refuses a missing `--model` before touching stdin."""
         output = io.StringIO()
         with contextlib.redirect_stderr(output):
             code = ipad_llm.main(["chat", "--host", HOST, "--port", "8080",
@@ -312,6 +336,7 @@ class IpadModelTest(unittest.TestCase):
         self.assertIn("chat requires an exact model ID", output.getvalue())
 
     def test_models_command_refuses_chat_options_before_any_request(self):
+        """The CLI's `models` command refuses `--model`/`--max-tokens` before any HTTP request."""
         self.connected()
         for option in (("--model", "local-gemma"), ("--max-tokens", "0")):
             with self.subTest(option=option):
@@ -324,6 +349,7 @@ class IpadModelTest(unittest.TestCase):
         self.assertEqual(self.server.requests, [])
 
     def test_proxy_environment_is_ignored(self):
+        """`models` reaches the server directly even when proxy environment variables are set."""
         self.connected()
         with mock.patch.dict(os.environ, {"HTTP_PROXY": "http://127.0.0.1:9",
                                            "http_proxy": "http://127.0.0.1:9",
@@ -332,6 +358,7 @@ class IpadModelTest(unittest.TestCase):
                              ("local-gemma",))
 
     def test_socket_must_bind_to_the_tailscale_interface(self):
+        """`models` refuses when `SO_BINDTODEVICE` fails for a nonexistent interface."""
         self.connected()
         with mock.patch.object(ipad_llm, "_INTERFACE", "no-such-interface"):
             with self.assertRaisesRegex(ContractError, "socket binding failed"):
@@ -339,12 +366,14 @@ class IpadModelTest(unittest.TestCase):
         self.assertEqual(self.server.requests, [])
 
     def test_expired_socket_deadline_refuses_before_reading(self):
+        """`_DeadlineSocket._arm` refuses once the overall deadline has already passed."""
         connection = ipad_llm._DeadlineSocket(time.monotonic() - 1)
         self.addCleanup(connection.close)
         with self.assertRaisesRegex(ContractError, "deadline expired"):
             connection._arm()
 
     def test_response_has_one_overall_deadline(self):
+        """`models` refuses promptly on a short deadline even while the server trickles bytes."""
         self.connected()
         self.server.response_chunk_delay = 0.08
         start = time.monotonic()

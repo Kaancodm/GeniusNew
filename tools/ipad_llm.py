@@ -32,10 +32,12 @@ _INTERFACE = "tailscale0"
 
 
 def _fail(message: str) -> None:
+    """Refuse with a ContractError; the single choke point for every check below."""
     raise ContractError(message)
 
 
 def _endpoint(host: str, port: int) -> str:
+    """Build the base URL, refusing anything but an exact Tailscale IPv4 host and valid port."""
     if type(host) is not str or type(port) is not int or not 1 <= port <= 65535:
         _fail("iPad endpoint must have an IPv4 address and a valid port")
     try:
@@ -48,6 +50,7 @@ def _endpoint(host: str, port: int) -> str:
 
 
 def _tailnet_status() -> dict:
+    """Return the local `tailscale status --json` output, or refuse if it is unavailable."""
     try:
         result = subprocess.run(
             ["tailscale", "status", "--json"], capture_output=True, text=True,
@@ -64,6 +67,7 @@ def _tailnet_status() -> dict:
 
 
 def _require_ipad_peer(host: str, status: dict) -> None:
+    """Refuse unless the tailnet is online and `host` is an online iOS/iPadOS peer."""
     if (status.get("BackendState") != "Running"
             or type(status.get("Self")) is not dict
             or status["Self"].get("Online") is not True):
@@ -99,6 +103,7 @@ def _require_tailnet_route(host: str) -> None:
 
 
 def _api_key(path: Path) -> str:
+    """Read the opaque API key from a private, non-symlinked, owned-by-us regular file."""
     if not isinstance(path, Path):
         _fail("API key file path is invalid")
     try:
@@ -121,7 +126,10 @@ def _api_key(path: Path) -> str:
 
 
 class _NoRedirect(request.HTTPRedirectHandler):
+    """Refuse any HTTP redirect so the API key is never replayed to another host."""
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Refuse the redirect instead of following it."""
         _fail("iPad API redirects are forbidden")
 
 
@@ -129,28 +137,34 @@ class _DeadlineSocket(socket.socket):
     """Apply one wall-clock deadline to every socket operation, including reads."""
 
     def __init__(self, deadline: float) -> None:
+        """Create a plain TCP socket that enforces the given monotonic deadline."""
         super().__init__(socket.AF_INET, socket.SOCK_STREAM)
         self._deadline = deadline
 
     def _arm(self) -> None:
+        """Set the per-call timeout to the time left before the deadline, or refuse."""
         remaining = self._deadline - time.monotonic()
         if remaining <= 0:
             _fail("iPad API deadline expired")
         self.settimeout(remaining)
 
     def connect(self, address) -> None:
+        """Connect, after re-arming the timeout against the overall deadline."""
         self._arm()
         return super().connect(address)
 
     def sendall(self, data, flags=0) -> None:
+        """Send, after re-arming the timeout against the overall deadline."""
         self._arm()
         return super().sendall(data, flags)
 
     def recv(self, size, flags=0) -> bytes:
+        """Receive, after re-arming the timeout against the overall deadline."""
         self._arm()
         return super().recv(size, flags)
 
     def recv_into(self, buffer, nbytes=0, flags=0) -> int:
+        """Receive into a buffer, after re-arming the timeout against the overall deadline."""
         self._arm()
         return super().recv_into(buffer, nbytes, flags)
 
@@ -159,10 +173,12 @@ class _BoundHTTPConnection(http.client.HTTPConnection):
     """Prevent a route change from sending the API key outside Tailscale."""
 
     def __init__(self, host, timeout=120, **kwargs):
+        """Record the absolute deadline derived from `timeout` for the eventual connect."""
         super().__init__(host, timeout=timeout, **kwargs)
         self._deadline = time.monotonic() + float(timeout)
 
     def connect(self) -> None:
+        """Open a deadline-bound socket pinned to the Tailscale interface, or refuse."""
         connection = _DeadlineSocket(self._deadline)
         try:
             try:
@@ -178,11 +194,15 @@ class _BoundHTTPConnection(http.client.HTTPConnection):
 
 
 class _BoundHTTPHandler(request.HTTPHandler):
+    """Route plain HTTP requests through the interface-bound connection class."""
+
     def http_open(self, req):
+        """Open the request using `_BoundHTTPConnection` instead of the default connection."""
         return self.do_open(_BoundHTTPConnection, req)
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict:
+    """JSON object hook that refuses a response with duplicate keys at any level."""
     result = {}
     for name, value in pairs:
         if name in result:
@@ -192,11 +212,13 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict:
 
 
 def _reject_constant(_value: str) -> None:
+    """JSON parse-constant hook that refuses NaN/Infinity instead of silently accepting them."""
     _fail("iPad API response contains a non-JSON number")
 
 
 def _request_json(url: str, key: str, *, payload: dict | None,
                   timeout: float) -> object:
+    """Send a size-bounded GET or POST with the bearer key and return parsed, bounded JSON."""
     wire = None if payload is None else json.dumps(
         payload, ensure_ascii=False, separators=(",", ":"),
     ).encode("utf-8")
@@ -229,6 +251,7 @@ def _request_json(url: str, key: str, *, payload: dict | None,
 
 
 def _model(value: str) -> str:
+    """Validate a model ID: non-empty, bounded UTF-8 size, no control or separator characters."""
     if type(value) is not str:
         _fail("model ID is invalid")
     try:
@@ -242,12 +265,14 @@ def _model(value: str) -> str:
 
 
 def _timeout(value: float) -> float:
+    """Validate that the overall request deadline is a number within 0.1 to 300 seconds."""
     if type(value) not in (int, float) or not 0.1 <= value <= 300:
         _fail("timeout must be between 0.1 and 300 seconds")
     return float(value)
 
 
 def models(host: str, port: int, key_file: Path, *, timeout: float = 10) -> tuple[str, ...]:
+    """List the verified iPad's model IDs, refusing an empty, duplicated, or oversized list."""
     base = _endpoint(host, port)
     _require_ipad_peer(host, _tailnet_status())
     _require_tailnet_route(host)
@@ -268,6 +293,12 @@ def models(host: str, port: int, key_file: Path, *, timeout: float = 10) -> tupl
 
 def chat(host: str, port: int, key_file: Path, model: str, prompt: str,
          *, timeout: float = 120, max_tokens: int = 256) -> str:
+    """Send one bounded prompt to the verified iPad and return its plain-text reply.
+
+    The reply is untrusted model output: a requested tool call, a non-stop finish
+    reason, a wrong role, a mismatched model, or unprintable control characters are
+    all refused rather than returned, since nothing here may authorize an action.
+    """
     base = _endpoint(host, port)
     _require_ipad_peer(host, _tailnet_status())
     _require_tailnet_route(host)
@@ -315,6 +346,7 @@ def chat(host: str, port: int, key_file: Path, model: str, prompt: str,
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point: run `models` or `chat` and print a refusal message on `ContractError`."""
     parser = argparse.ArgumentParser(description="Query an iPad model over Tailscale")
     parser.add_argument("command", choices=("models", "chat"))
     parser.add_argument("--host", required=True, help="iPad Tailscale IPv4 address")
