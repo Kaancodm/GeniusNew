@@ -53,6 +53,29 @@ class RefusalScannerTest(unittest.TestCase):
             self.assertIs(type(caught.exception), expected)
             self.assertEqual(str(caught.exception), "fixed message")
 
+    def test_each_seccomp_kill_rule_is_removed_independently(self):
+        """Check that each syscall mutation removes only its selected kill-table entry."""
+        source = '_FILTER_ARCHES = {"x86_64": {"kill": (105, 113, 114)}}\n'
+        found = self.find(source)
+        self.assertEqual([item.condition for item in found], ["105", "113", "114"])
+        for refusal in found:
+            namespace = {}
+            exec(refusals._disable(source, refusal), namespace)
+            self.assertEqual(namespace["_FILTER_ARCHES"]["x86_64"]["kill"],
+                             tuple(value for value in (105, 113, 114)
+                                   if value != int(refusal.condition)))
+
+    def test_seccomp_thread_name_refusal_is_replaced_by_allow(self):
+        """Check that the thread-name mutation replaces its refusal with ALLOW."""
+        source = ('_SECCOMP_RET_ERRNO = 0x00050000\n'
+                  '_SECCOMP_RET_ALLOW = 0x7fff0000\n'
+                  '_THREAD_NAME_ACTION = _SECCOMP_RET_ERRNO | 1\n')
+        found = self.find(source)
+        self.assertEqual(len(found), 1)
+        namespace = {}
+        exec(refusals._disable(source, found[0]), namespace)
+        self.assertEqual(namespace['_THREAD_NAME_ACTION'], 0x7fff0000)
+
     def test_all_except_wrappers_are_discovered_and_mutated_one_at_a_time(self):
         source = textwrap.dedent('''\
             try:

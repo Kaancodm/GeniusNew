@@ -72,6 +72,9 @@ class _WorkerResourceExhausted(Exception):
     """The isolated worker exceeded a wall-clock or process resource limit."""
 
 
+class WorkerBoundaryError(ContractError):
+    """Trusted transport or lifecycle failed; there is no signable worker outcome."""
+
 
 def _fail(message: str) -> None:
     raise ContractError(message)
@@ -162,6 +165,8 @@ class WorkerRunner:
         failure = None
         try:
             output = self._run_worker(dict(handoff.payload))
+        except WorkerBoundaryError:
+            raise
         except _WorkerIsolationViolation:
             failure = _ISOLATION_VIOLATED
         except _WorkerResourceExhausted:
