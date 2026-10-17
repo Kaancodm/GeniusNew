@@ -211,6 +211,7 @@ def _exchange(config: dict[str, Any], scenario: str, late_passcred: bool,
     fds_before = _open_fds()
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     bound: dict[str, str] | None = None
+    received_at: float | None = None
     try:
         try:
             sock.settimeout(deadlines["handshake"])
@@ -253,7 +254,12 @@ def _exchange(config: dict[str, Any], scenario: str, late_passcred: bool,
             value = decode_body(stream.read_frame(BODY_MAX, result_deadline),
                                 "result", RESULT_FIELDS)
             output = check_result(value, nonce, digest(frame[4:]))
+            received_at = time.monotonic()
+            notify("result_received")
+            # With Accept=yes systemd keeps its own copy of the connection until
+            # the instance is dead, so this EOF also waits for the whole cgroup.
             stream.expect_eof(result_deadline)
+            out["eof_wait_ms"] = int((time.monotonic() - received_at) * 1000)
         except ProbeRefused as exc:
             return {"outcome": "no_valid_result", "reason": str(exc),
                     "result_chunks": stream.chunks}
@@ -267,6 +273,8 @@ def _exchange(config: dict[str, Any], scenario: str, late_passcred: bool,
         out["descriptors_leaked"] = _open_fds() - fds_before
         if out["connected"]:
             out.update(wait_for_end(config, bound))
+        if received_at is not None:
+            out["result_to_end_ms"] = int((time.monotonic() - received_at) * 1000)
 
 
 def summarize(output: dict[str, Any]) -> dict[str, Any]:

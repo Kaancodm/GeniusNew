@@ -208,9 +208,14 @@ def judge_linger(first: Mapping[str, Any] | None, second: Mapping[str, Any] | No
         return FAIL
     if first is None or second is None or max_instances is None or leftover is None:
         return HOLD
-    if first.get("outcome") != "completed" or first.get("end_confirmed") is not True:
+    # A result without EOF in time is refused by the core; either way the slot
+    # must stay closed until the lingering instance has ended.
+    if first.get("outcome") not in ("completed", "no_valid_result"):
         return HOLD
-    if not isinstance(first.get("end_wait_ms"), int) or first["end_wait_ms"] < LINGER_MIN_MS:
+    if first.get("result_received") is not True or first.get("end_confirmed") is not True:
+        return HOLD
+    held = first.get("result_to_end_ms")
+    if not isinstance(held, int) or held < LINGER_MIN_MS:
         return HOLD
     if second.get("outcome") != "refused_lease_busy":
         return HOLD
@@ -864,6 +869,7 @@ class Lab:
             "reason": (outcome or {}).get("reason"),
             "end_confirmed": (outcome or {}).get("end_confirmed"),
             "end_wait_ms": (outcome or {}).get("end_wait_ms"),
+            "eof_wait_ms": (outcome or {}).get("eof_wait_ms"),
             "end_reason": (outcome or {}).get("end_reason"),
             "worker_processes_after_end": leftover, **window})]
 
@@ -879,7 +885,7 @@ class Lab:
     def c3_linger(self) -> list[Finding]:
         settled = self.begin("linger", "ok")
         first = self.core("dispatch", "linger")
-        reached = first.wait_event("eof", 30)
+        reached = first.wait_event("result_received", 30)
         second = self.run_core("dispatch", "ok") if reached else None
         first_outcome = first.result(timeout=60)
         leftover = self.leftover()
@@ -889,7 +895,9 @@ class Lab:
         return [Finding("C3.early_close_then_linger", "3",
                         verdict if settled or verdict == FAIL else HOLD, {
                             "settled": settled, "first": (first_outcome or {}).get("outcome"),
-                            "first_end_wait_ms": (first_outcome or {}).get("end_wait_ms"),
+                            "first_reason": (first_outcome or {}).get("reason"),
+                            "first_eof_wait_ms": (first_outcome or {}).get("eof_wait_ms"),
+                            "first_result_to_end_ms": (first_outcome or {}).get("result_to_end_ms"),
                             "second_during_linger": (second or {}).get("outcome"),
                             "worker_processes_after_end": leftover, **window})]
 

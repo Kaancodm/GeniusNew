@@ -467,11 +467,17 @@ class JudgementTest(unittest.TestCase):
                                           jobs_seen=1, leftover=0), HOLD)
 
     def test_linger_and_core_restart_keep_the_slot_closed(self):
-        first = {"outcome": "completed", "end_confirmed": True, "end_wait_ms": 4000}
+        first = {"outcome": "completed", "end_confirmed": True, "result_received": True,
+                 "result_to_end_ms": 4000}
         busy = {"outcome": "refused_lease_busy"}
         self.assertEqual(driver.judge_linger(first, busy, max_instances=1, leftover=0), PASS)
-        self.assertEqual(driver.judge_linger({**first, "end_wait_ms": 10}, busy,
+        self.assertEqual(driver.judge_linger({**first, "outcome": "no_valid_result"}, busy,
+                                             max_instances=1, leftover=0), PASS)
+        self.assertEqual(driver.judge_linger({**first, "result_to_end_ms": 10}, busy,
                                              max_instances=1, leftover=0), HOLD)
+        self.assertEqual(driver.judge_linger({**first, "result_received": False}, busy,
+                                             max_instances=1, leftover=0), HOLD)
+        self.assertEqual(driver.judge_linger(first, busy, max_instances=1, leftover=1), FAIL)
         self.assertEqual(driver.judge_linger(first, {"outcome": "completed"},
                                              max_instances=2, leftover=0), FAIL)
 
