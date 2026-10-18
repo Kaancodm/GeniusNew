@@ -324,8 +324,8 @@ class AgentControlTest(unittest.TestCase):
 
     def test_clipboard_success_is_only_reported_after_success(self):
         html = (Path(__file__).parents[1] / "tools/control_deck/static/index.html").read_text()
-        self.assertIn("if(await copyCommand(b.dataset.resumeCmd)){", html)
-        self.assertNotIn("await copyCommand(b.dataset.resumeCmd);const old=b.textContent", html)
+        self.assertIn("if(await copyText(b.dataset.resumeCmd)){", html)
+        self.assertNotIn("await copyText(b.dataset.resumeCmd);const old=b.textContent", html)
 
     def test_control_deck_docs_list_agents_route_and_action_commas(self):
         text = (Path(__file__).parents[1] / "docs/CONTROL-DECK.md").read_text()
