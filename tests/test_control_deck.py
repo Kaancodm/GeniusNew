@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import http.client
 import json
 import os
+import re
 import runpy
 import shlex
 import tempfile
@@ -68,11 +70,10 @@ class ControlDeckTest(unittest.TestCase):
     def test_merged_code_keeps_missing_review_and_operational_evidence_open(self, _tools, _run):
         snapshot = checks.snapshot(checks.DEFAULT_REPO)
         gates = {gate["id"]: gate for gate in snapshot["gates"]}
-        for gate in ("B4", "B5", "A2", "C2", "C5"):
+        for gate in ("B4", "B5", "A2", "C2", "C3", "C5"):
             self.assertEqual(gates[gate]["status"], "yellow")
             self.assertIn("HOLD", gates[gate]["detail"])
-        for gate in ("C3", "E1"):
-            self.assertEqual(gates[gate]["status"], "green")
+        self.assertEqual(gates["E1"]["status"], "green")
         self.assertEqual(gates["C5"]["implementation_status"], "green")
         for gate in ("B4", "B5"):
             self.assertIn("erforderlicher Claude-DB-Review am PR-Head nicht nachgewiesen", gates[gate]["detail"])
@@ -84,6 +85,25 @@ class ControlDeckTest(unittest.TestCase):
         self.assertEqual(state["focus"], "B4 – Pending Jobs + Approvals")
         self.assertTrue(state["resume"][0]["value"].endswith("/pull/94"))
         self.assertFalse(any(step["title"].startswith("B1 ") for step in state["resume"]))
+
+
+    @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
+    @patch("tools.control_deck.checks.tool_status", return_value={"status": "green"})
+    def test_merged_c3_stays_on_hold_until_its_head_review_is_evidenced(self, _tools, _run):
+        gates = checks.snapshot(checks.DEFAULT_REPO)["gates"]
+        c3 = next(gate for gate in gates if gate["id"] == "C3")
+        self.assertEqual(c3["implementation_status"], "green")
+        self.assertEqual(c3["status"], "yellow")
+        self.assertIn("PR #111", c3["detail"])
+        self.assertIn("HOLD", c3["detail"])
+        self.assertIn("Claude-DB-Review am PR-Head nicht nachgewiesen", c3["detail"])
+        self.assertNotIn("7f81e24", c3["detail"])
+        tools = {name: {"status": "green"} for name in ("codex", "gh", "gemini")}
+        project = checks.project_resume([c3], tools, checks.DEFAULT_REPO)
+        self.assertEqual(project["focus"], "C3 – Approver-HTTP-Route")
+        self.assertEqual(project["resume"][0]["type"], "url")
+        self.assertEqual(project["resume"][0]["value"],
+                         "https://github.com/Kaancodm/GeniusNew/pull/111")
 
 
     @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
@@ -499,21 +519,21 @@ class ControlDeckInterfaceTest(unittest.TestCase):
         handler = self.html.split("$('runAll').onclick=async()=>{", 1)[1].split(
             "notesLoad();load();", 1)[0]
         for required in ("if($('runAll').disabled)return", "$('runAll').disabled=true",
-                         "try{", "finally{", "$('runAll').disabled=false"):
+                         "try{", "finally{", "$('runAll').disabled=!state"):
             self.assertIn(required, handler)
         guard = handler.index("if($('runAll').disabled)return")
         lock = handler.index("$('runAll').disabled=true")
         protected = handler.index("try{")
         dispatch = handler.index("await fetch('/api/action'")
         cleanup = handler.index("finally{")
-        unlock = handler.index("$('runAll').disabled=false")
+        unlock = handler.index("$('runAll').disabled=!state")
         self.assertLess(guard, lock)
         self.assertLess(lock, protected)
         self.assertLess(protected, handler.index("for(const a of acts)"))
         self.assertLess(protected, dispatch)
         self.assertLess(dispatch, cleanup)
         self.assertLess(cleanup, unlock)
-        self.assertIn("$('runAll').disabled=false", handler[cleanup:].split("}", 1)[0])
+        self.assertIn("$('runAll').disabled=!state", handler[cleanup:].split("}", 1)[0])
 
     def test_mail_and_status_load_independently_and_report_failures(self):
         self.assertIn("async function loadStatus(){", self.html)
@@ -533,6 +553,27 @@ class ControlDeckInterfaceTest(unittest.TestCase):
         rendering = self.html.split("function renderMail(){", 1)[1].split("async function", 1)[0]
         self.assertIn("Mail-Snapshot nicht synchronisiert", rendering)
 
+    def test_status_failure_invalidates_every_rendered_status_field_and_action(self):
+        status = self.html.split("async function loadStatus(){", 1)[1].split(
+            "async function load(){", 1)[0]
+        success, failure = status.split("}catch(e){", 1)
+        reports = self.html.split("function renderReports(){", 1)[1].split(
+            "function mailRows(", 1)[0]
+        rendered = set(re.findall(
+            r"\$\('([^']+)'\)\.(?:innerHTML|textContent)=", success + reports))
+        cleared = re.search(
+            r"for\(const id of (\[[^]]+\])\)\$\(id\)\.textContent=''", failure)
+        self.assertIsNotNone(cleared, "Status failure must clear the rendered snapshot")
+        cleared_ids = set(ast.literal_eval(cleared.group(1)))
+        self.assertFalse(rendered - {"stamp", "focus"} - cleared_ids,
+                         "Every status-derived field, including reports, must be invalidated")
+        self.assertLessEqual({"ptitle", "pbody"}, cleared_ids)
+        for required in ("state=null", "$('runAll').dataset.actions=''",
+                         "$('runAll').disabled=true", "$('prun').dataset.action=''",
+                         "$('prun').hidden=true"):
+            self.assertIn(required, failure)
+        self.assertIn("$('runAll').disabled=runAllRunning", success)
+
     def test_action_buttons_show_failures_unlock_and_refresh_after_errors(self):
         single = self.html.split("async function runAction(name){", 1)[1].split("function itemRow", 1)[0]
         all_actions = self.html.split("$('runAll').onclick=async()=>{", 1)[1].split(
@@ -547,9 +588,10 @@ class ControlDeckInterfaceTest(unittest.TestCase):
                 self.assertIn("'FAIL\\n'", error)
                 self.assertIn("e?.message", error)
                 cleanup = handler.split("finally{", 1)[1].split("}", 1)[0]
-                self.assertIn(f"$('{button}').disabled=false", cleanup)
+                disabled = "!state" if button == "runAll" else "false"
+                self.assertIn(f"$('{button}').disabled={disabled}", cleanup)
                 self.assertIn("load()", cleanup)
-                self.assertLess(cleanup.index("disabled=false"), cleanup.index("load()"))
+                self.assertLess(cleanup.index("disabled="), cleanup.index("load()"))
 
 
 class AgentControlTest(unittest.TestCase):

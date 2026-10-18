@@ -36,7 +36,7 @@ BETA_GATES = [
 ]
 
 # The required DB reviews have not been evidenced at the current head.
-PENDING_REVIEWS = {"B4": 94, "B5": 95}
+PENDING_REVIEWS = {"B4": 94, "B5": 95, "C3": 111}
 PENDING_OPERATIONS = {
     "C5": "Restore-Probe-Code gemergt; HOLD: produktiver Backup-/Restore-Betrieb nicht nachgewiesen",
     "A2": "Landlock implementiert; HOLD: eigener Worker-OS-Nutzer im Betrieb nicht nachgewiesen",
@@ -312,8 +312,9 @@ def snapshot(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
             status = "yellow"
         if implementation_status == "green" and review_pr:
             detail = (f"PR #{review_pr} gemergt; "
-                      "HOLD: erforderlicher Claude-DB-Review am PR-Head nicht nachgewiesen; "
-                      "Nachprüfung auf main 7f81e24 dokumentiert, ersetzt dieses Gate nicht")
+                      "HOLD: erforderlicher Claude-DB-Review am PR-Head nicht nachgewiesen")
+            if gate in {"B4", "B5"}:
+                detail += "; Nachprüfung auf main 7f81e24 dokumentiert, ersetzt dieses Gate nicht"
         elif implementation_status == "green" and gate in PENDING_OPERATIONS:
             detail = PENDING_OPERATIONS[gate]
         else:

@@ -60,7 +60,7 @@ textarea{width:100%;min-height:86px;resize:vertical;background:#080d1a;color:var
 </main>
 <script>
 const $=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const labels={green:'PASS',yellow:'ACTION',red:'OPEN'},actionFor={Git:'git_status',Docker:'docker_status'};let state=null,mail=null,agentsLoading=false;
+const labels={green:'PASS',yellow:'ACTION',red:'OPEN'},actionFor={Git:'git_status',Docker:'docker_status'};let state=null,mail=null,agentsLoading=false,runAllRunning=false;
 const badge=s=>'<span class="badge '+esc(s)+'">'+(labels[s]||'UNKNOWN')+'</span>';
 function openPanel(t,b,a){$('ptitle').textContent=t;$('pbody').textContent=b;$('poutput').hidden=true;$('prun').hidden=!a;$('prun').dataset.action=a||'';$('panel').classList.add('open')}
 async function copyText(v){try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(v);return true}const box=document.createElement('textarea');box.value=v;box.style.position='fixed';box.style.opacity='0';document.body.appendChild(box);box.select();box.setSelectionRange(0,v.length);const ok=document.execCommand('copy');box.remove();if(ok)return true}catch(e){}openPanel('TERM-Befehl',v,null);return false}
@@ -115,7 +115,13 @@ async function loadStatus(){
  $('gates').innerHTML=state.gates.map(g=>'<button class="gate click" data-gate="'+esc(g.id)+'" data-name="'+esc(g.name)+'" data-detail="'+esc(g.detail||'Nachweis ungeprüft')+'">'+badge(g.status)+' <b>'+esc(g.id)+'</b><div>'+esc(g.name)+'</div></button>').join('');
  $('commands').innerHTML=Object.entries(state.commands).map(([k,v])=>'<div class="item"><b>'+esc(k)+'</b><code>'+esc(v)+'</code><div class="actions"><button data-cmd="'+esc(v)+'">Kopieren</button></div></div>').join('');
  renderReports();wire();
- }catch(e){state=null;$('stamp').textContent='Status nicht verfügbar';$('focus').textContent='Status nicht verfügbar: '+String(e?.message||e||'Unbekannter Fehler')}
+ $('runAll').disabled=runAllRunning;
+ }catch(e){
+ state=null;$('stamp').textContent='Status nicht verfügbar';$('focus').textContent='Status nicht verfügbar: '+String(e?.message||e||'Unbekannter Fehler');
+ for(const id of ['projectMeta','evidence','resume','priorities','research','system','tools','gates','commands','reportMeta','dailyReport','weeklyReport','ptitle','pbody'])$(id).textContent='';
+ $('runAll').dataset.actions='';$('runAll').disabled=true;$('prun').dataset.action='';$('prun').hidden=true;
+ if($('poutput').hidden)$('panel').classList.remove('open');
+ }
 }
 async function load(){await Promise.all([loadStatus(),loadMail()])}
 function wire(){document.querySelectorAll('[data-item]').forEach(b=>b.onclick=()=>openPanel(b.dataset.item,'Statusdetails und sichere Aktion für '+b.dataset.item,actionFor[b.dataset.item]));document.querySelectorAll('[data-gate]').forEach(b=>b.onclick=()=>openPanel(b.dataset.gate+' '+b.dataset.name,b.dataset.detail,null));document.querySelectorAll('[data-research]').forEach(b=>b.onclick=()=>openPanel(b.dataset.research,b.dataset.reason+'\nQuelle: '+b.dataset.source,null));document.querySelectorAll('[data-cmd]').forEach(b=>b.onclick=async()=>{if(await copyText(b.dataset.cmd)){const old=b.textContent;b.textContent='✓ Kopiert';setTimeout(()=>b.textContent=old,1200)}});document.querySelectorAll('[data-resume-cmd]').forEach(b=>b.onclick=async()=>{if(await copyText(b.dataset.resumeCmd)){const old=b.textContent;b.textContent='✓ Kopiert';setTimeout(()=>b.textContent=old,1200)}});document.querySelectorAll('[data-resume-action]').forEach(b=>b.onclick=()=>openPanel('Wiedereinstieg','Sichere Prüfung starten.',b.dataset.resumeAction))}
@@ -125,10 +131,10 @@ $('pclose').onclick=()=>$('panel').classList.remove('open');$('panel').onclick=e
 $('runAll').onclick=async()=>{
  if($('runAll').disabled)return;
  const acts=JSON.parse($('runAll').dataset.actions||'[]');if(!acts.length){openPanel('Nächste Schritte','Keine automatisch ausführbare Prüfung in den Top-Prioritäten.',null);return}openPanel('Checks','Allowlist-Prüfungen werden nacheinander ausgeführt.',null);$('poutput').hidden=false;$('poutput').textContent='';
- $('runAll').disabled=true;
+ $('runAll').disabled=true;runAllRunning=true;
  try{for(const a of acts){const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a})});if(!r.ok)throw Error('HTTP '+r.status);const d=await r.json();$('poutput').textContent+=a+': '+(d.ok?'PASS':'FAIL')+'\n'+(d.output||'')+'\n\n';if(!d.ok)break}}
  catch(e){$('poutput').textContent+='FAIL\n'+String(e?.message||e||'Unbekannter Fehler')}
- finally{$('runAll').disabled=false;load()}
+ finally{runAllRunning=false;$('runAll').disabled=!state;load()}
 };
 notesLoad();load();loadAgents();setInterval(load,30000);setInterval(loadAgents,30000);
 </script></body></html>
