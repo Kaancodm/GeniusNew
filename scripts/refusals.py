@@ -88,6 +88,16 @@ GUARDED_TOOL_TESTS = {"tools/ipad_llm.py": "test_ipad_llm.py"}
 # survive. A missing refusal test is therefore still a failure of this guard.
 GUARDED_PYTHON = {
     "geniusnew/portal_session_tokens.py": ("test_portal_session_tokens.py",),
+    "geniusnew/results.py": ("test_results.py",),
+    "geniusnew/orchestrator.py": ("test_orchestrator.py",),
+    "geniusnew/database.py": (
+        "test_database.py", "test_acceptance_ledger.py", "test_pending_database.py",
+        "test_c3_durable_approvers.py", "test_approval_recovery_validation.py",
+        "test_b6_reconciliation.py", "test_ledger_audit_boundary.py",
+        "test_postgres_audit.py", "test_audit_store.py",
+        "test_persistent_audit_wiring.py", "test_b7_crash_recovery.py",
+        "test_orchestrator.py",
+    ),
     "geniusnew/worker_service.py": ("test_worker_service.py",),
     "geniusnew/isolation.py": ("test_isolation.py",),
     "geniusnew/workers.py": ("test_workers.py", "test_isolation.py", "test_ttl.py"),
