@@ -50,7 +50,9 @@ def _read_json(wire: bytes, limit: int) -> Any:
         value = json.loads(wire.decode("ascii"), object_pairs_hook=_pairs,
                            parse_int=_bounded_int, parse_float=_forbid_number,
                            parse_constant=_forbid_number)
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+    except ContractError:
+        raise
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise ContractError("invalid ASCII JSON") from exc
     return value
 

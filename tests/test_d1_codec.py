@@ -67,6 +67,9 @@ class D1CodecTest(unittest.TestCase):
         with patch("geniusnew.d1_codec.json.loads", side_effect=RecursionError):
             with self.assertRaisesRegex(ContractError, "invalid ASCII JSON"):
                 parse_body(self.body)
+        with patch("geniusnew.d1_codec.json.loads", side_effect=ValueError):
+            with self.assertRaisesRegex(ContractError, "invalid ASCII JSON"):
+                parse_body(self.body)
         with self.assertRaisesRegex(ContractError, "invalid JSON byte length"):
             parse_body(b'{"text":"' + b'a' * 16384 + b'"}')
         with self.assertRaisesRegex(ContractError, "body exceeds D1 limit"):
