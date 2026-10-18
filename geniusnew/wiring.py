@@ -61,6 +61,7 @@ from .isolation import IsolatedWorkerRunner
 from .keys import ServiceKeys, derive_keys
 from .orchestrator import Denied, DispatchAttempted, JobLedger, Orchestrator, WorkerEndpoint
 from .results import WorkerAuthority, handoff_digest
+from .worker_service import ServiceWorkerRunner, WorkerServiceProfile
 from .verifier import AcceptanceLedger, Rejected, ResultVerifier
 from .workers import Worker, WorkerRunner
 
@@ -296,6 +297,7 @@ def build(*, root_secret: bytes, policy: Policy,
           gateway_id: str = "gateway-1", verifier_id: str = "verifier-1",
           job_ids: Callable[[], str] | None = None,
           runner_factory: Callable[..., WorkerRunner] | None = None,
+          worker_service_profile: WorkerServiceProfile | None = None,
           anchor: AuditAnchor | None = None,
           anchor_state: str | None = None,
           limits: HttpLimits | None = None,
@@ -335,6 +337,11 @@ def build(*, root_secret: bytes, policy: Policy,
         _fail("anchor_state configures the default anchor; pass one or the other")
     if limits is not None and not isinstance(limits, HttpLimits):
         _fail("limits must be HttpLimits")
+    if worker_service_profile is not None and not isinstance(
+            worker_service_profile, WorkerServiceProfile):
+        _fail("worker_service_profile must be a WorkerServiceProfile")
+    if runner_factory is not None and worker_service_profile is not None:
+        _fail("worker service profile cannot be combined with a runner factory")
     limits = limits or HttpLimits()
     if not isinstance(policy, Policy):
         _fail("policy is invalid")
@@ -401,18 +408,23 @@ def build(*, root_secret: bytes, policy: Policy,
                 _fail("acceptance_ledger must be an AcceptanceLedger")
             acceptance_ledger.check(policy=policy, handoff_verifier=handoff_verifier,
                                     worker_verifier=worker_authority.verifier())
-        # The production/default path is fail-closed isolated execution. Tests may
-        # inject a runner_factory deliberately, but a host without the required
-        # POSIX isolation primitives must fail here rather than silently fall back
-        # to same-process worker execution.
-        make_runner = runner_factory or (
-            lambda worker: IsolatedWorkerRunner(worker, authority=worker_authority))
+        # The serving entry provides a worker service profile. Direct build()
+        # callers retain isolated execution, and tests can inject a runner.
+        # Neither path may degrade to same-process worker execution.
+        if worker_service_profile is not None:
+            make_runner = lambda worker: ServiceWorkerRunner(
+                worker, authority=worker_authority, profile=worker_service_profile)
+        else:
+            make_runner = runner_factory or (
+                lambda worker: IsolatedWorkerRunner(worker, authority=worker_authority))
 
         endpoints = []
         for worker in tuple(workers):
             runner = make_runner(worker)
             if not isinstance(runner, WorkerRunner):
                 _fail("runner_factory must return a WorkerRunner")
+            if isinstance(runner, ServiceWorkerRunner):
+                runner.preflight()
             # The grant names which agent may run a subject's jobs, so a worker is
             # registered under the agent id its grant carries. Taking the first of
             # several would leave the other agents' subjects unroutable, found only
