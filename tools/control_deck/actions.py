@@ -27,6 +27,11 @@ def allowed_actions() -> tuple[str, ...]:
 
 
 def run_action(name: str, repo: Path = DEFAULT_REPO) -> dict[str, object]:
+    """Run an allowlisted check and return its bounded output and exit status.
+
+    Tests use the checkout's Python interpreter. Unknown actions raise
+    ValueError; unavailable programs and timeouts return a failed result.
+    """
     if name not in allowed_actions():
         raise ValueError("action is not allowlisted")
     if name == "hermes_status":

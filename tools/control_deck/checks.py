@@ -135,6 +135,11 @@ def docker_status() -> dict[str, str]:
 
 
 def tool_status(name: str) -> dict[str, str]:
+    """Probe CLI availability and supported login status without model calls.
+
+    Gemini prefers Antigravity's model listing; a standalone Gemini CLI
+    is reported as installed with authentication unverified.
+    """
     if name == "gemini":
         agy = _which("agy")
         if agy:
@@ -176,6 +181,11 @@ def tool_status(name: str) -> dict[str, str]:
 
 
 def gate_status(repo: Path, ref: str | None) -> str:
+    """Rate a commit or remote ref against the local origin/main history.
+
+    Return red for absent evidence, green for an ancestor of origin/main,
+    and yellow for available evidence whose ancestry check did not pass.
+    """
     if ref is None:
         return "red"
     proof = ref if len(ref) == 40 and all(c in "0123456789abcdef" for c in ref) else None
@@ -191,11 +201,13 @@ def gate_status(repo: Path, ref: str | None) -> str:
 
 
 def python_for(repo: Path) -> str:
+    """Use an absolute checkout venv path, preserving its Python symlink, or python3."""
     python = repo.resolve() / ".venv/bin/python3"
     return str(python) if python.exists() else "python3"
 
 
 def commands_for(repo: Path) -> dict[str, str]:
+    """Build copyable shell commands with quoted checkout and interpreter paths."""
     root = shlex.quote(str(repo))
     executable = shlex.quote(python_for(repo))
     return {
@@ -208,12 +220,14 @@ def commands_for(repo: Path) -> dict[str, str]:
 
 
 def _login_needs_action(state: dict[str, str]) -> bool:
+    """Require login action for non-green states except unverified authentication."""
     return state["status"] != "green" and not (
         state["status"] == "yellow" and state.get("auth_status") == "unverified"
     )
 
 
 def _priorities(gates: list[dict[str, str]], tools: dict[str, dict[str, str]]) -> list[dict[str, str | None]]:
+    """Return up to three priorities, placing required logins before open gates."""
     steps: list[dict[str, str | None]] = []
     for tool in ("codex", "gh", "gemini"):
         if _login_needs_action(tools[tool]):
@@ -229,6 +243,11 @@ def _priorities(gates: list[dict[str, str]], tools: dict[str, dict[str, str]]) -
 def project_resume(
     gates: list[dict[str, str]], tools: dict[str, dict[str, str]], repo: Path
 ) -> dict[str, Any]:
+    """Build a project focus and up to five steps from local gate and CLI evidence.
+
+    Report the locally cached origin/main head without querying live CI
+    or granting release approval.
+    """
     missing = [name for name in ("codex", "gh", "gemini") if _login_needs_action(tools[name])]
     if missing:
         focus = "Gate 0 – Entwicklungsumgebung fertigstellen"
@@ -303,6 +322,11 @@ def research_items() -> list[dict[str, str]]:
 
 
 def snapshot(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
+    """Collect local project, service, CLI, research, and command status.
+
+    Keep implementation ancestry separate from pending review and
+    operational evidence so merged code can still remain on hold.
+    """
     gates = []
     for gate, name, ref in BETA_GATES:
         status = gate_status(repo, ref)

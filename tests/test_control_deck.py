@@ -20,6 +20,7 @@ from scripts import refusals
 
 class ControlDeckTest(unittest.TestCase):
     def test_default_repo_follows_the_checkout_without_an_environment_override(self):
+        """Resolve the default checkout from the module rather than the working directory."""
         with tempfile.TemporaryDirectory() as tmp:
             checkout = Path(tmp).resolve() / "another checkout"
             module = checkout / "tools/control_deck/checks.py"
@@ -33,6 +34,7 @@ class ControlDeckTest(unittest.TestCase):
             self.assertEqual(loaded["DEFAULT_REPO"], checkout)
 
     def test_explicit_repo_override_is_preserved_even_when_missing(self):
+        """Keep an explicit missing checkout visible as a red repository status."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / "configured checkout"
             with patch.dict(os.environ, {"GENIUSNEW_REPO": str(repo)}):
@@ -42,6 +44,7 @@ class ControlDeckTest(unittest.TestCase):
                              {"status": "red", "detail": "repo missing"})
 
     def test_fresh_host_probe_precedes_the_portal(self):
+        """Place the fresh-host gate before portal work and select it as the next focus."""
         order = [gate for gate, _, _ in checks.BETA_GATES]
         self.assertLess(order.index("C5"), order.index("E3"))
         for gate in ("D1", "D2", "D3"):
@@ -58,6 +61,7 @@ class ControlDeckTest(unittest.TestCase):
 
     @patch("tools.control_deck.checks._run", return_value=(0, ""))
     def test_merged_gate_proof_is_checked_against_origin_main(self, run):
+        """Use the locally cached origin/main ref to verify merged gate evidence."""
         proof = next(ref for gate, _, ref in checks.BETA_GATES if gate == "B2")
         self.assertEqual(checks.gate_status(checks.DEFAULT_REPO, proof), "green")
         self.assertEqual(run.call_args_list[-1].args[0],
@@ -68,6 +72,7 @@ class ControlDeckTest(unittest.TestCase):
     @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
     @patch("tools.control_deck.checks.tool_status", return_value={"status": "green"})
     def test_merged_code_keeps_missing_review_and_operational_evidence_open(self, _tools, _run):
+        """Keep review and operational holds open despite merged implementations."""
         snapshot = checks.snapshot(checks.DEFAULT_REPO)
         gates = {gate["id"]: gate for gate in snapshot["gates"]}
         for gate in ("B4", "B5", "A2", "C2", "C3", "C5"):
@@ -90,6 +95,7 @@ class ControlDeckTest(unittest.TestCase):
     @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
     @patch("tools.control_deck.checks.tool_status", return_value={"status": "green"})
     def test_merged_c3_stays_on_hold_until_its_head_review_is_evidenced(self, _tools, _run):
+        """Keep C3 on hold and link its PR while the required head review is missing."""
         gates = checks.snapshot(checks.DEFAULT_REPO)["gates"]
         c3 = next(gate for gate in gates if gate["id"] == "C3")
         self.assertEqual(c3["implementation_status"], "green")
@@ -109,6 +115,7 @@ class ControlDeckTest(unittest.TestCase):
     @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
     @patch("tools.control_deck.checks.tool_status", return_value={"status": "green"})
     def test_local_snapshot_never_claims_live_ci_or_release_approval(self, _tools, _run):
+        """Label local evidence explicitly and withhold CI and release approval."""
         project = checks.snapshot(checks.DEFAULT_REPO)["project"]
         self.assertFalse(project["release_ready"])
         self.assertEqual(project["ci"]["status"], "yellow")
@@ -118,6 +125,7 @@ class ControlDeckTest(unittest.TestCase):
 
 
     def test_commands_follow_selected_checkout_including_spaces(self):
+        """Quote the selected checkout and its virtualenv in copied commands."""
         import shlex
         with tempfile.TemporaryDirectory(prefix="deck checkout ") as tmp:
             root = Path(tmp)
@@ -132,6 +140,7 @@ class ControlDeckTest(unittest.TestCase):
 
     @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
     def test_gemini_resume_uses_the_available_cli_without_probing_a_model(self, run):
+        """Choose an available Gemini launcher for manual authentication checks."""
         gates = [{"id": gate, "name": name, "status": "green", "detail": "merged"}
                  for gate, name, _ in checks.BETA_GATES]
         tools = {name: {"status": "green"} for name in ("codex", "gh", "gemini")}
@@ -146,6 +155,7 @@ class ControlDeckTest(unittest.TestCase):
 
     @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
     def test_unverified_gemini_login_does_not_hide_the_next_gate(self, run):
+        """Keep gates actionable when Gemini is installed with unverified authentication."""
         gates = [{"id": gate, "name": name, "status": "green", "detail": "merged"}
                  for gate, name, _ in checks.BETA_GATES]
         next(gate for gate in gates if gate["id"] == "B4")["status"] = "yellow"
@@ -165,6 +175,7 @@ class ControlDeckTest(unittest.TestCase):
                 self.assertEqual(checks._priorities(gates, tools)[0]["title"], "gemini anmelden")
 
     def test_relative_checkout_keeps_an_absolute_virtualenv_symlink_path(self):
+        """Make a relative checkout's venv path absolute without resolving its Python link."""
         import sys
         with tempfile.TemporaryDirectory(dir=Path.cwd(), prefix="deck relative ") as tmp:
             root = Path(tmp)
@@ -178,6 +189,7 @@ class ControlDeckTest(unittest.TestCase):
             self.assertNotEqual(command[3], str(executable.resolve()))
 
     def test_beta_gate_count_is_fixed(self):
+        """Preserve the 21-gate roadmap with A1 first and the final security review last."""
         self.assertEqual(len(checks.BETA_GATES), 21)
         self.assertEqual(checks.BETA_GATES[0][0], "A1")
         self.assertEqual(checks.BETA_GATES[-1][0], "E2")
@@ -211,6 +223,7 @@ class ControlDeckTest(unittest.TestCase):
     @patch("tools.control_deck.checks.subprocess.run")
     @patch("tools.control_deck.checks._which")
     def test_gemini_cli_status_never_starts_a_process(self, which, run):
+        """Report standalone Gemini authentication as unverified without spawning a process."""
         which.side_effect = lambda name: "/x/gemini" if name == "gemini" else None
         run.return_value.returncode = 0
         run.return_value.stdout = '{"response":"OK"}'
@@ -226,6 +239,7 @@ class ControlDeckTest(unittest.TestCase):
     @patch("tools.control_deck.checks.subprocess.run")
     @patch("tools.control_deck.checks._which", return_value=None)
     def test_missing_gemini_cli_does_not_start_a_process(self, which, run):
+        """Report a missing Gemini installation without spawning a process."""
         self.assertEqual(checks.tool_status("gemini"),
                          {"status": "red", "detail": "missing"})
         self.assertEqual(run.call_count, 0, "Missing clients must not start a process")
@@ -250,6 +264,7 @@ class ControlDeckTest(unittest.TestCase):
 
     @patch("tools.control_deck.actions.subprocess.run")
     def test_tests_action_uses_the_same_interpreter_as_terminal_commands(self, run):
+        """Use the same checkout interpreter for HTTP test actions and copied commands."""
         run.return_value.returncode = 0
         run.return_value.stdout = "OK"
         with tempfile.TemporaryDirectory() as tmp:
@@ -275,6 +290,7 @@ class ControlDeckTest(unittest.TestCase):
 
     @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
     def test_project_resume_starts_at_gate_zero_when_logins_are_missing(self, _run):
+        """Prioritize missing tool logins while retaining the next open gate."""
         gates = [{"id": gate, "name": name, "status": "yellow" if ref else "red", "detail": "review pending"}
                  for gate, name, ref in checks.BETA_GATES]
         tools = {
@@ -474,10 +490,12 @@ class ControlDeckInterfaceTest(unittest.TestCase):
     """Keep the dashboard's safety context wired into its rendered interface."""
 
     def setUp(self):
+        """Load the dashboard source for interface contract assertions."""
         self.html = (Path(__file__).parents[1] /
                      "tools/control_deck/static/index.html").read_text(encoding="utf-8")
 
     def test_four_tabs_dark_mobile_layout_and_all_copy_controls_remain(self):
+        """Preserve the four tabs, dark mobile layout, and guarded copy confirmations."""
         self.assertEqual(self.html.count('class="tab'), 5)  # four buttons and their container
         for view in ("project", "dev", "market", "reports"):
             self.assertIn('data-tab="' + view + '"', self.html)
@@ -488,11 +506,13 @@ class ControlDeckInterfaceTest(unittest.TestCase):
             self.assertIn("if(await copyText(b.dataset." + dataset + ")){", self.html)
 
     def test_research_source_is_escaped_in_cards_and_visible_in_details(self):
+        """Escape research sources in cards and include them in the detail panel."""
         self.assertIn("data-source=", self.html)
         self.assertIn("esc(x.source||'Quelle ungeprüft')", self.html)
         self.assertIn("Quelle: '+b.dataset.source", self.html)
 
     def test_mail_renders_all_categories_and_escapes_message_metadata(self):
+        """Render every mail category with escaped subject and sender metadata."""
         rendering = self.html.split("function mailRows(", 1)[1].split("function wire()", 1)[0]
         for category, target in (("sales", "salesMail"), ("sponsoring", "sponsorMail"),
                                  ("general", "generalMail"), ("system", "systemMail")):
@@ -504,6 +524,7 @@ class ControlDeckInterfaceTest(unittest.TestCase):
         self.assertIn("esc(x.sender||'')", rows)
 
     def test_agent_cards_render_escaped_limits_status_and_model_check_dates(self):
+        """Retain escaped agent caveats, availability labels, and model verification dates."""
         agents = self.html.split("async function loadAgents(){", 1)[1].split(
             "document.querySelectorAll('.tab')", 1)[0]
         card = agents.split("return '<article", 1)[1].split("</article>", 1)[0]
@@ -516,6 +537,7 @@ class ControlDeckInterfaceTest(unittest.TestCase):
         self.assertIn("esc(m.verified_on||'ungeprüft')", models)
 
     def test_run_all_locks_before_dispatch_and_releases_in_finally(self):
+        """Guard batch actions against duplicate dispatch and always restore button state."""
         handler = self.html.split("$('runAll').onclick=async()=>{", 1)[1].split(
             "notesLoad();load();", 1)[0]
         for required in ("if($('runAll').disabled)return", "$('runAll').disabled=true",
@@ -536,6 +558,7 @@ class ControlDeckInterfaceTest(unittest.TestCase):
         self.assertIn("$('runAll').disabled=!state", handler[cleanup:].split("}", 1)[0])
 
     def test_mail_and_status_load_independently_and_report_failures(self):
+        """Load status and mail independently and expose each request's failure state."""
         self.assertIn("async function loadStatus(){", self.html)
         self.assertIn("async function loadMail(){", self.html)
         load = self.html.split("async function load(){", 1)[1].split("function wire()", 1)[0]
@@ -554,6 +577,7 @@ class ControlDeckInterfaceTest(unittest.TestCase):
         self.assertIn("Mail-Snapshot nicht synchronisiert", rendering)
 
     def test_status_failure_invalidates_every_rendered_status_field_and_action(self):
+        """Clear stale status fields and disable their actions after a failed refresh."""
         status = self.html.split("async function loadStatus(){", 1)[1].split(
             "async function load(){", 1)[0]
         success, failure = status.split("}catch(e){", 1)
@@ -575,6 +599,7 @@ class ControlDeckInterfaceTest(unittest.TestCase):
         self.assertIn("$('runAll').disabled=runAllRunning", success)
 
     def test_action_buttons_show_failures_unlock_and_refresh_after_errors(self):
+        """Show action errors and restore buttons before refreshing the dashboard."""
         single = self.html.split("async function runAction(name){", 1)[1].split("function itemRow", 1)[0]
         all_actions = self.html.split("$('runAll').onclick=async()=>{", 1)[1].split(
             "notesLoad();load();", 1)[0]
@@ -657,11 +682,13 @@ class AgentControlTest(unittest.TestCase):
         self.assertIn("kein unterstützter", cards[1]["detail"])
 
     def test_clipboard_success_is_only_reported_after_success(self):
+        """Confirm a copied resume command only after the clipboard helper succeeds."""
         html = (Path(__file__).parents[1] / "tools/control_deck/static/index.html").read_text()
         self.assertIn("if(await copyText(b.dataset.resumeCmd)){", html)
         self.assertNotIn("await copyText(b.dataset.resumeCmd);const old=b.textContent", html)
 
     def test_clipboard_falls_back_to_a_selection_copy_on_private_http(self):
+        """Use selection copying on private HTTP and show a panel if copying fails."""
         html = (Path(__file__).parents[1] / "tools/control_deck/static/index.html").read_text()
         start = html.index("async function copyText(")
         body = html[start:html.index("async function", start + 10)]
