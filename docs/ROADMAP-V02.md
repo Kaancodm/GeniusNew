@@ -64,8 +64,8 @@ anpassen.
 | B1 | `0001_core_foundation`: PostgreSQL-Dienst in der CI, `psycopg` hash-gepinnt, Migrationen mit Checksum, Start verweigert bei fehlender DB oder falscher Migration | Start-Refusal-Tests gegen echtes PostgreSQL | erledigt: #78 (Codex) gemergt `706e76d`, Claude DB Review APPROVED an `99ef6e3`; Auflagen für B2 im Review auf #78 |
 | B2 | Job-Ledger persistent: Tests A–C aus Konflikt 4, Runtime ohne DELETE, nur Vorwärtsübergänge | Ledger-Grenztest in `test_orchestrator.py` umgekehrt | erledigt: #90 (Codex, auf Claudes Übergabe #83) gemergt (`9a797b1`), Claude DB Review APPROVED an `ec64894`; Runtime-Rechteprüfung E1/E2 beim Start |
 | B3 | Annahme-Ledger persistent, Annahme nur aus `EXECUTION_COMMITTED` | Ledger-Grenztest in `test_verifier.py` umgekehrt | erledigt: #93 (Codex) gemergt `3b81265`, Claude DB Review APPROVED an `0ac9e10`, Merge-OK Kaan 30.09.2026; der Gemini-Sicherheitsreview lag zum Merge nicht vor (Merge-Nachweis in #93) |
-| B4 | Wartende Jobs und Approval-Speicher persistent, append-only, verzweigungsfrei | Neustart verliert keinen wartenden Job; verbrauchter Token bleibt verbraucht | gemergt: #94 (Codex) `18381c2`, Head `0fd43b6`. Im PR ist **kein** `Claude DB Review: APPROVED` und kein Gemini-Sicherheitsreview auffindbar; nachzuholen (offene Entscheidung 6) |
-| B5 | Audit-Kette persistent; signierter Kopf in derselben Transaktion; Neustart verankert nur bereits signierte Köpfe nach | Per SQL angehängtes Event → Start verweigert | gemergt: #95 (Codex) `a3f2a3c`, Head `937fa44`; nur frische Installation (Kaan). Die PR-Beschreibung führt Claude DB Review und Gemini-Sicherheitsreview als ausstehend; eine Freigabe ist im PR nicht auffindbar, nachzuholen (offene Entscheidung 6) |
+| B4 | Wartende Jobs und Approval-Speicher persistent, append-only, verzweigungsfrei | Neustart verliert keinen wartenden Job; verbrauchter Token bleibt verbraucht | gemergt: #94 (Codex) `18381c2`, Head `0fd43b6`. Im PR ist **kein** `Claude DB Review: APPROVED` und kein Gemini-Sicherheitsreview auffindbar; nicht separat nachzuholen: E2 deckt es ab (Entscheidung 6, `docs/DECISIONS.md` 18.10.2026) |
+| B5 | Audit-Kette persistent; signierter Kopf in derselben Transaktion; Neustart verankert nur bereits signierte Köpfe nach | Per SQL angehängtes Event → Start verweigert | gemergt: #95 (Codex) `a3f2a3c`, Head `937fa44`; nur frische Installation (Kaan). Die PR-Beschreibung führt Claude DB Review und Gemini-Sicherheitsreview als ausstehend; eine Freigabe ist im PR nicht auffindbar; nicht separat nachzuholen, E2 deckt es ab (Entscheidung 6, `docs/DECISIONS.md` 18.10.2026) |
 | B6 | Ledger und Approval-Speicher **manipulationssichtbar**: jede sicherheitsrelevante Zeile und ihr Audit-Event in derselben Transaktion; die Startprüfung gleicht beide Richtungen gegen die verankerte Kette ab (`acceptance_ledger` ↔ `RESULT_ACCEPTED`, `job_ledger` ↔ `HANDOFF_ADMITTED`, Approval-Records ↔ `approval_record_hash`) | Per SQL gelöschte Ledger-Zeile oder eingefügter `GRANTED`-Record → Start verweigert | erledigt: #97 (Codex, mit Claudes Anteil aus #98) gemergt `a9705d1`, Claude DB Review APPROVED an `a0f4bb1`, Gemini-Sicherheitsreview A–C über die Antigravity-CLI, Merge-OK Kaan 04.10.2026 |
 | B7 | Absturztest: Dienst wird an jeder Zustandsgrenze hart beendet (`SIGKILL`) und neu gestartet | kein Doppellauf, keine Doppelannahme, Kette verifiziert | `tests/test_b7_crash_recovery.py` (Claude), Beschreibung in `docs/POSTGRES-B1.md` B7; gemergt: #106 (Claude), Merge `dfbc50b` (04.10.2026); der Review durch ein unabhängiges Werkzeug (Codex, Kiro oder Gemini) für diesen Code-PR ist hier nicht belegt (UNKNOWN) |
 
@@ -75,7 +75,7 @@ anpassen.
 | --- | --- | --- | --- |
 | C1 | **Server-Einstieg** statt nur Demo: `python -m geniusnew serve` liest Root-Secret, Policy, DB- und Anker-Verbindung ausschließlich aus serverseitiger Konfiguration; das Demo-Secret wird außerhalb der Demo abgelehnt | Refusal-Tests für jede fehlende/ungültige Einstellung | erledigt: #61 gemergt; DB-Verbindung mit B1 (#78) |
 | C2 | Anker als eigener Dienst unter eigenem OS-Nutzer, Lebenszyklus außerhalb des Kerns, signierte Anker-Antworten mit Nonce (Teile aus #32, neu auf `main` gebaut) | Anker-Rückschnitt-Grenztest umgekehrt oder neu begründet | erledigt: #62 gemergt (`24f521b`): Anker-Dienst mit signierten Antworten, `serve` bindet ihn über `anchor_socket`/`anchor_reply_public_key` an; Grenztest neu begründet. Offen im Betriebsmodell (C5): eigener OS-Nutzer auf dem Server |
-| C3 | Rolle „Freigebende“ mit eigener HTTP-Route; keine Selbstfreigabe | Refusal-Tests für fremde Rolle, eigene Aufträge, Doppelentscheidung | gemergt: #111 (Codex), Merge `b047798` (04.10.2026), `docs/APPROVER-C3.md`; Claude DB Review am Head ist hier nicht belegt (UNKNOWN) |
+| C3 | Rolle „Freigebende“ mit eigener HTTP-Route; keine Selbstfreigabe | Refusal-Tests für fremde Rolle, eigene Aufträge, Doppelentscheidung | gemergt: #111 (Codex), Merge `b047798` (04.10.2026), `docs/APPROVER-C3.md`; Claude DB Review am Head ist hier nicht belegt (UNKNOWN); nicht separat nachzuholen, E2 deckt es ab (`docs/DECISIONS.md` 18.10.2026) |
 | C4 | HTTP-Härtung: Body-Limit, Timeouts, Rate-Limit pro API-Key; TLS über Reverse-Proxy mit Beispielkonfiguration in `docs/` | Tests für Limits; Doku | Body-Limit und Socket-Timeout auf `main`; Rate-Limit, Job- und Verbindungsgrenze sowie geprüfte nginx-Vorlage: #71 gemergt (`080f1f4`); Limits in `[service.limits]` der TOML einstellbar: dieser PR (Claude) |
 | C5 | Betriebsanleitung: systemd-Units (Kern, Anker, Nutzer getrennt), Backup und Restore von DB und Anker-Zustand, Ablauf der Schlüsselrotation. Ein Backup, das hinter dem Anker liegt, startet nicht (richtig so); der auditierte Weg zurück in den Betrieb ohne stilles Zurücksetzen des Ankers braucht Kaans Entscheidung | Doku + einmal durchgespielter Restore gegen die CI-Datenbank | Restore-Probe gegen den unabhängigen Anker: #119 (Codex), Merge `3497e69` (05.10.2026, `scripts/demo_restore.py`, in der CI). **Offen:** systemd-Units (Kern, Anker, Nutzer getrennt), Schlüsselrotation, Entscheidung zum auditierten Weg nach Restore |
 
@@ -124,14 +124,13 @@ Implementierer.
 3. Zielplattform des Servers: laut Server-Evidenz in #57 Debian 13, Kernel 6.12, x86_64
    (reicht für Landlock ABI 4). Offen: ob Landlock dort aktiv ist (Einzeiler in
    `docs/ISOLATION-A2.md`).
-4. Gehört das Portal (D1–D3) zur Beta, oder ist die Beta zunächst die Kern-API und das
-   Portal ein eigener Meilenstein danach (Vorschlag aus #60)?
+4. **Entschieden (Kaan, 18.10.2026, `docs/DECISIONS.md`):** Das Portal (D1–D3) gehört zur Beta.
 5. Abgelaufene wartende Jobs: Ein auditierter Sweep (`REFUSED` und
    `PENDING_APPROVAL_EXPIRED` in derselben Transaktion, `docs/DATABASE.md` §4.4) noch in
    B6 oder als eigener PR danach? Bis dahin bleiben abgelaufene Zeilen liegen und
    belegen nur keinen Platz mehr (Mindestfix aus #98).
-6. B4 (#94) und B5 (#95) sind ohne `Claude DB Review: APPROVED` am Head gemergt. Wird
-   das Review am gemergten Stand gesondert nachgeholt oder in E2 aufgenommen?
+6. **Entschieden (Kaan, 18.10.2026, `docs/DECISIONS.md`):** B4 (#94), B5 (#95) und C3 (#111) sind ohne
+   `Claude DB Review: APPROVED` am Head gemergt; das Review wird nicht gesondert nachgeholt, E2 deckt es ab.
 7. Gespeicherte Annahmen sind an die aktuelle Policy und die aktuellen Schlüssel
    gebunden (`SECURITY.md`, Review auf #93: (a) nur Integrität prüfen, (b)
    Policy-Historie, (c) so lassen). Mit der Principal-Bindung aus Audit v2 (B6) wird (a)
