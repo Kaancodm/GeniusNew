@@ -26,6 +26,10 @@ Alarmstatus für Verkauf, Sponsoring, Allgemein und System. TERM-Befehle werden 
 die Zwischenablage kopiert. Wiedereinstiegspunkte öffnen PRs, kopieren Login-Befehle
 oder starten eine allowlistete Prüfung.
 
+Einzelprüfungen und „Ausführbare Checks starten“ sperren ihren jeweiligen Button
+während des Laufs. HTTP-, Netzwerk- und Antwortfehler erscheinen mit `FAIL` und Grund
+im Panel. Danach wird der Button wieder freigegeben und der Status neu geladen.
+
 Für Gemini wird bei vorhandenem Antigravity weiterhin `agy models` abgefragt.
 Ohne `agy` prüft das Deck ausschließlich, ob die Gemini-CLI im Suchpfad vorhanden
 ist. Es startet sie nicht und zeigt Gelb mit „CLI installiert · Anmeldung ungeprüft“.
@@ -53,12 +57,22 @@ TERM-Kommandos zeigen auf den Checkout aus `--repo`, nicht auf ein zweites,
 möglicherweise veraltetes `~/GeniusNew`. Vorhandene lokale venv-Pythonpfade werden
 verwendet. Statusabfragen führen diese TERM-Kommandos nicht aus.
 
+Auch die HTTP-Aktion `tests` verwendet `repo/.venv/bin/python3`, wenn dieser Pfad
+vorhanden ist, sonst `python3`. Sie teilt diese Auswahl mit den TERM-Befehlen und
+behält die feste Argumentliste und Aktions-Allowlist bei.
+
 ## Mail Center
 
 Das Control Deck liest ausschließlich einen normalisierten lokalen Mail-Snapshot. Der
 Standardpfad ist `~/.local/state/genius-control-deck/mail.json`; alternativ kann
 `GENIUSNEW_MAIL_SNAPSHOT` auf einen anderen lokalen Pfad zeigen. Der Snapshot ist
 Runtime-State und darf nicht in Git committed werden.
+
+Mail- und Projektstatus werden unabhängig geladen. Ein fehlgeschlagener Mail-Abruf
+oder eine ungültige JSON-Antwort zeigt „Mail-Snapshot nicht synchronisiert“, während
+der Projektstatus weiter gerendert wird. Fehler beim Statusabruf werden sichtbar
+im Projektkopf angezeigt. Alle vier Mail-Kategorien zeigen Betreff und Absender
+als maskierten Text im bestehenden Kartenlayout.
 
 Der Provider-Bridge — zunächst Superhuman — bleibt außerhalb des Control-Deck-Prozesses
 und schreibt nur die minimal nötigen Metadaten: Thread-ID, Kategorie, Betreff, Absender,

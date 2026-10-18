@@ -5,6 +5,7 @@ import http.client
 import json
 import os
 import runpy
+import shlex
 import tempfile
 import threading
 import unittest
@@ -107,6 +108,31 @@ class ControlDeckTest(unittest.TestCase):
     def test_unknown_action_is_rejected_before_shell(self):
         with self.assertRaisesRegex(ValueError, "allowlisted"):
             actions.run_action("rm_everything")
+
+    @patch("tools.control_deck.actions.subprocess.run")
+    def test_tests_action_uses_the_same_interpreter_as_terminal_commands(self, run):
+        run.return_value.returncode = 0
+        run.return_value.stdout = "OK"
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "checkout with spaces"
+            venv_python = repo / ".venv/bin/python3"
+            venv_python.parent.mkdir(parents=True)
+            for has_venv in (True, False):
+                with self.subTest(has_venv=has_venv):
+                    if has_venv:
+                        venv_python.touch()
+                    else:
+                        venv_python.unlink()
+                    expected = str(venv_python) if has_venv else "python3"
+                    result = actions.run_action("tests", repo)
+                    self.assertTrue(result["ok"])
+                    argv = run.call_args.args[0]
+                    self.assertEqual(argv, [expected, "-m", "unittest", "discover",
+                                            "-s", "tests", "-q"])
+                    self.assertEqual(shlex.split(checks.commands_for(repo)["tests"])[3:], argv)
+                    self.assertEqual(run.call_args.kwargs["cwd"], repo)
+                    self.assertEqual(run.call_args.kwargs["timeout"], 30.0)
+                    self.assertNotIn("shell", run.call_args.kwargs)
 
     @patch("tools.control_deck.checks.repo_status", return_value={"head": "abc123"})
     def test_project_resume_starts_at_gate_zero_when_logins_are_missing(self, _repo):
@@ -303,6 +329,93 @@ class HostCheckTest(unittest.TestCase):
         self.assertLessEqual({"127.0.0.1", "localhost", "127.0.0.1:80"}, deck.allowed_hosts())
         deck.server_address = ("127.0.0.1", 8787)
         self.assertNotIn("127.0.0.1", deck.allowed_hosts())
+
+
+class ControlDeckInterfaceTest(unittest.TestCase):
+    """Keep the dashboard's safety context wired into its rendered interface."""
+
+    def setUp(self):
+        self.html = (Path(__file__).parents[1] /
+                     "tools/control_deck/static/index.html").read_text(encoding="utf-8")
+
+    def test_mail_renders_all_categories_and_escapes_message_metadata(self):
+        rendering = self.html.split("function mailRows(", 1)[1].split("function wire()", 1)[0]
+        for category, target in (("sales", "salesMail"), ("sponsoring", "sponsorMail"),
+                                 ("general", "generalMail"), ("system", "systemMail")):
+            with self.subTest(category=category):
+                self.assertIn(f'id="{target}"', self.html)
+                self.assertIn(f"mailRows('{category}',$('{target}'))", rendering)
+        rows = rendering.split("function renderMail()", 1)[0]
+        self.assertIn("esc(x.subject||'(ohne Betreff)')", rows)
+        self.assertIn("esc(x.sender||'')", rows)
+
+    def test_agent_cards_render_escaped_limits_status_and_model_check_dates(self):
+        agents = self.html.split("async function loadAgents(){", 1)[1].split(
+            "document.querySelectorAll('.tab')", 1)[0]
+        card = agents.split("return '<article", 1)[1].split("</article>", 1)[0]
+        self.assertIn("esc(a.note||'')", card)
+        self.assertIn("esc(a.status_label||'')", card)
+        self.assertIn("+disabled+", card)
+        self.assertIn("'<button disabled>'+esc(a.disabled_label)+'</button>'", agents)
+        models = agents.split(".map(m=>", 1)[1].split(".join('')", 1)[0]
+        self.assertIn("Geprüft: ", models)
+        self.assertIn("esc(m.verified_on||'ungeprüft')", models)
+
+    def test_run_all_locks_before_dispatch_and_releases_in_finally(self):
+        handler = self.html.split("$('runAll').onclick=async()=>{", 1)[1].split(
+            "notesLoad();load();", 1)[0]
+        for required in ("if($('runAll').disabled)return", "$('runAll').disabled=true",
+                         "try{", "finally{", "$('runAll').disabled=false"):
+            self.assertIn(required, handler)
+        guard = handler.index("if($('runAll').disabled)return")
+        lock = handler.index("$('runAll').disabled=true")
+        protected = handler.index("try{")
+        dispatch = handler.index("await fetch('/api/action'")
+        cleanup = handler.index("finally{")
+        unlock = handler.index("$('runAll').disabled=false")
+        self.assertLess(guard, lock)
+        self.assertLess(lock, protected)
+        self.assertLess(protected, handler.index("for(const a of acts)"))
+        self.assertLess(protected, dispatch)
+        self.assertLess(dispatch, cleanup)
+        self.assertLess(cleanup, unlock)
+        self.assertIn("$('runAll').disabled=false", handler[cleanup:].split("}", 1)[0])
+
+    def test_mail_and_status_load_independently_and_report_failures(self):
+        self.assertIn("async function loadStatus(){", self.html)
+        self.assertIn("async function loadMail(){", self.html)
+        load = self.html.split("async function load(){", 1)[1].split("function wire()", 1)[0]
+        self.assertIn("Promise.all([loadStatus(),loadMail()])", load)
+        mail = self.html.split("async function loadMail(){", 1)[1].split("async function", 1)[0]
+        status = self.html.split("async function loadStatus(){", 1)[1].split("async function", 1)[0]
+        for handler, endpoint in ((mail, "/api/mail"), (status, "/api/status")):
+            self.assertIn(f"fetch('{endpoint}'", handler)
+            self.assertIn("if(!r.ok)throw Error('HTTP '+r.status)", handler)
+            self.assertIn("catch(e)", handler)
+        self.assertNotIn("/api/mail", status)
+        self.assertNotIn("/api/status", mail)
+        self.assertIn("mail=null;renderMail()", mail.split("catch(e)", 1)[1])
+        self.assertIn("$('focus').textContent='Status nicht verfügbar: '", status)
+        rendering = self.html.split("function renderMail(){", 1)[1].split("async function", 1)[0]
+        self.assertIn("Mail-Snapshot nicht synchronisiert", rendering)
+
+    def test_action_buttons_show_failures_unlock_and_refresh_after_errors(self):
+        single = self.html.split("async function runAction(name){", 1)[1].split("function itemRow", 1)[0]
+        all_actions = self.html.split("$('runAll').onclick=async()=>{", 1)[1].split(
+            "notesLoad();load();", 1)[0]
+        for handler, button in ((single, "prun"), (all_actions, "runAll")):
+            with self.subTest(button=button):
+                for required in ("try{", "catch(e){", "finally{",
+                                 "if(!r.ok)throw Error('HTTP '+r.status)"):
+                    self.assertIn(required, handler)
+                error = handler.split("catch(e){", 1)[1].split("finally{", 1)[0]
+                self.assertIn("$('poutput').textContent", error)
+                self.assertIn("'FAIL\\n'", error)
+                self.assertIn("e?.message", error)
+                cleanup = handler.split("finally{", 1)[1].split("}", 1)[0]
+                self.assertIn(f"$('{button}').disabled=false", cleanup)
+                self.assertIn("load()", cleanup)
+                self.assertLess(cleanup.index("disabled=false"), cleanup.index("load()"))
 
 
 class AgentControlTest(unittest.TestCase):

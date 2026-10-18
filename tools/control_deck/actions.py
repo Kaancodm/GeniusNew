@@ -6,7 +6,7 @@ import fcntl
 import subprocess
 from pathlib import Path
 
-from .checks import DEFAULT_REPO, _which, agent_socket, agent_session, tool_status
+from .checks import DEFAULT_REPO, _which, agent_socket, agent_session, python_for, tool_status
 
 _MAX_OUTPUT = 24_000
 
@@ -36,6 +36,8 @@ def run_action(name: str, repo: Path = DEFAULT_REPO) -> dict[str, object]:
         return {"action": name, "ok": ok, "exit_code": 0 if ok else 1,
                 "output": installed["detail"] + "\n" + session["detail"]}
     argv, timeout = _ACTIONS[name]
+    if name == "tests":
+        argv = [python_for(repo), *argv[1:]]
     env = {
         **os.environ,
         "LC_ALL": "C",

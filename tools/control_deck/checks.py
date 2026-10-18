@@ -207,10 +207,14 @@ def gate_records(repo: Path) -> list[dict[str, str]]:
     return records
 
 
+def python_for(repo: Path) -> str:
+    python = repo / ".venv/bin/python3"
+    return str(python) if python.exists() else "python3"
+
+
 def commands_for(repo: Path) -> dict[str, str]:
     root = shlex.quote(str(repo))
-    python = repo / ".venv/bin/python3"
-    executable = shlex.quote(str(python)) if python.exists() else "python3"
+    executable = shlex.quote(python_for(repo))
     return {
         "tmux": COMMANDS["tmux"], "docker": COMMANDS["docker"],
         "git": f"cd {root} && git status --short --branch",
