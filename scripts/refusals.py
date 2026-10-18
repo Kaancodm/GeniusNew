@@ -75,6 +75,7 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/anchor_process.py", "geniusnew/config.py",
            "geniusnew/__main__.py", "geniusnew/database.py",
            "geniusnew/audit_store.py", "tools/control_deck/actions.py",
+           "tools/control_deck/harpa_inbox.py", "tools/control_deck/server.py",
            "tools/ipad_llm.py",
            "ops/server/genius-server")
 
@@ -99,6 +100,8 @@ GUARDED_PYTHON = {
     ),
     "geniusnew/config.py": ("test_config.py", "test_approver_config.py"),
     "geniusnew/__main__.py": ("test_persistent_audit_wiring.py", "test_serve.py"),
+    "tools/control_deck/harpa_inbox.py": ("test_control_deck.py",),
+    "tools/control_deck/server.py": ("test_control_deck.py",),
 }
 
 
@@ -124,8 +127,11 @@ _SHELL_DIE = re.compile(r'(?<![\w-])die(\s+")')
 # The pattern is explicit: whatever a guarded module refuses with belongs here
 # the same day the module joins GUARDED.
 _REFUSAL_CALLS = {"_fail", "_deny"}
-_REFUSAL_RAISES = {"ContractError", "Rejected", "GatewayRejected", "AgentStartRefused",
-                   "WorkerBoundaryError", "_OccupiedCgroup"}
+_REFUSAL_RAISES = {
+    "ContractError", "Rejected", "GatewayRejected", "AgentStartRefused",
+    "WorkerBoundaryError", "_OccupiedCgroup", "HarpaPayloadError",
+    "HarpaStorageError", "TimeoutError",
+}
 _REFUSAL_RETURNS = {"_refusal"}
 
 
