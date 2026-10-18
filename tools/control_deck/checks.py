@@ -167,7 +167,8 @@ def tool_status(name: str) -> dict[str, str]:
         code, _ = _run([exe, "auth", "status"], cwd=Path.home())
         return _simple("green" if code == 0 else "yellow", "logged in" if code == 0 else "login required")
     if name == "gemini":
-        return _simple("yellow", "CLI installiert · Anmeldung ungeprüft")
+        return {"status": "yellow", "detail": "CLI installiert · Anmeldung ungeprüft",
+                "auth_status": "unverified"}
 
     code, out = _run([exe, "--version"], cwd=Path.home())
     version = out.splitlines()[0] if out else "installed"
@@ -190,7 +191,7 @@ def gate_status(repo: Path, ref: str | None) -> str:
 
 
 def python_for(repo: Path) -> str:
-    python = repo / ".venv/bin/python3"
+    python = repo.resolve() / ".venv/bin/python3"
     return str(python) if python.exists() else "python3"
 
 
@@ -206,10 +207,16 @@ def commands_for(repo: Path) -> dict[str, str]:
     }
 
 
+def _login_needs_action(state: dict[str, str]) -> bool:
+    return state["status"] != "green" and not (
+        state["status"] == "yellow" and state.get("auth_status") == "unverified"
+    )
+
+
 def _priorities(gates: list[dict[str, str]], tools: dict[str, dict[str, str]]) -> list[dict[str, str | None]]:
     steps: list[dict[str, str | None]] = []
     for tool in ("codex", "gh", "gemini"):
-        if tools[tool]["status"] != "green":
+        if _login_needs_action(tools[tool]):
             steps.append({"title": f"{tool} anmelden", "detail": tools[tool]["detail"], "action": None})
     for gate in gates:
         if gate["status"] != "green":
@@ -222,7 +229,7 @@ def _priorities(gates: list[dict[str, str]], tools: dict[str, dict[str, str]]) -
 def project_resume(
     gates: list[dict[str, str]], tools: dict[str, dict[str, str]], repo: Path
 ) -> dict[str, Any]:
-    missing = [name for name in ("codex", "gh", "gemini") if tools[name]["status"] != "green"]
+    missing = [name for name in ("codex", "gh", "gemini") if _login_needs_action(tools[name])]
     if missing:
         focus = "Gate 0 – Entwicklungsumgebung fertigstellen"
         stopped = "Agent-/GitHub-Logins"
@@ -245,6 +252,13 @@ def project_resume(
             "type": "command",
             "value": login_commands[name],
             "detail": "Lokale Prüfung bestätigt keine Anmeldung; CLI öffnen und Anmeldung manuell prüfen",
+        })
+    if tools["gemini"].get("auth_status") == "unverified":
+        steps.append({
+            "title": "gemini Anmeldung ungeprüft",
+            "type": "command",
+            "value": login_commands["gemini"],
+            "detail": "Optionale manuelle Prüfung; lokale Installation belegt keine Anmeldung",
         })
     for gate in gates:
         if gate["status"] == "green":

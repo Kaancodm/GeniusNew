@@ -124,6 +124,39 @@ class ControlDeckTest(unittest.TestCase):
                 self.assertIn("keine Anmeldung", step["detail"])
         self.assertFalse(any("Reply only OK" in str(call) for call in run.call_args_list))
 
+    @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
+    def test_unverified_gemini_login_does_not_hide_the_next_gate(self, run):
+        gates = [{"id": gate, "name": name, "status": "green", "detail": "merged"}
+                 for gate, name, _ in checks.BETA_GATES]
+        next(gate for gate in gates if gate["id"] == "B4")["status"] = "yellow"
+        tools = {name: {"status": "green"} for name in ("codex", "gh", "gemini")}
+        with patch.object(checks, "_which", side_effect=lambda name: "/x/gemini" if name == "gemini" else None):
+            tools["gemini"] = checks.tool_status("gemini")
+            self.assertEqual(tools["gemini"]["status"], "yellow")
+            state = checks.project_resume(gates, tools, checks.DEFAULT_REPO)
+            self.assertEqual(state["focus"], "B4 – Pending Jobs + Approvals")
+            self.assertTrue(checks._priorities(gates, tools)[0]["title"].startswith("B4 "))
+            manual = next(step for step in state["resume"] if step["value"] == "gemini")
+            self.assertIn("ungeprüft", manual["title"])
+            self.assertFalse(state["release_ready"])
+            for status, detail in (("red", "missing"), ("yellow", "login required")):
+                tools["gemini"] = {"status": status, "detail": detail}
+                self.assertIn("Gate 0", checks.project_resume(gates, tools, checks.DEFAULT_REPO)["focus"])
+                self.assertEqual(checks._priorities(gates, tools)[0]["title"], "gemini anmelden")
+
+    def test_relative_checkout_keeps_an_absolute_virtualenv_symlink_path(self):
+        import sys
+        with tempfile.TemporaryDirectory(dir=Path.cwd(), prefix="deck relative ") as tmp:
+            root = Path(tmp)
+            executable = root / ".venv/bin/python3"
+            executable.parent.mkdir(parents=True)
+            executable.symlink_to(sys.executable)
+            relative = root.relative_to(Path.cwd())
+            self.assertEqual(checks.python_for(relative), str(executable))
+            command = shlex.split(checks.commands_for(relative)["tests"])
+            self.assertEqual(command[3], str(executable))
+            self.assertNotEqual(command[3], str(executable.resolve()))
+
     def test_beta_gate_count_is_fixed(self):
         self.assertEqual(len(checks.BETA_GATES), 21)
         self.assertEqual(checks.BETA_GATES[0][0], "A1")
@@ -167,6 +200,7 @@ class ControlDeckTest(unittest.TestCase):
             self.assertEqual(state, {
                 "status": "yellow",
                 "detail": "CLI installiert · Anmeldung ungeprüft",
+                "auth_status": "unverified",
             })
 
     @patch("tools.control_deck.checks.subprocess.run")
