@@ -364,7 +364,8 @@ create table d1_replay_reservations (
     domain text collate "C" not null
         check (domain = 'geniusnew.portal-core.request.d1'),
     issuer text collate "C" not null
-        check (issuer ~ '^[A-Za-z0-9._-]{1,64}$'),
+        check (length(issuer) between 1 and 64
+               and issuer !~ '[^A-Za-z0-9._-]'),
     nonce bytea not null check (octet_length(nonce) = 32),
     expires_at bigint not null
         check (expires_at > 0 and expires_at < 4102444800),
