@@ -1,6 +1,6 @@
 # GeniusNew — Projektstand
 
-**Stand: 18.10.2026, `main` `9b11f7a89fe948d65d6b2eb3337111a5b11d3a57`.** Teil der
+**Stand: 18.10.2026, `main` `c656ea56046f32a564c926f4fa5f614088392fda`.** Teil der
 Wissensdatenbank, geführt von Claude Code (`docs/COLLABORATION.md`); NotebookLM gibt
 Auskunft. Entscheidungen stehen in `docs/DECISIONS.md`. Dieses Dokument ist in sich
 geschlossen gedacht: als Quelle für NotebookLM, Microsoft 365 Copilot oder jeden anderen
@@ -71,7 +71,7 @@ A2 und C5 nennen #140 noch nicht (getrennter Worker-Dienst mit Unit-Vorlagen gem
 Betriebsabnahme HOLD). Das korrigiert ein eigener Docs-PR.
 
 **Messbar (am 18.10.2026 auf dem Code von `main` `9b11f7a` ausgeführt, Python 3.13.16,
-lokales PostgreSQL 16):**
+lokales PostgreSQL 16; `c656ea5` fügt nur Doku hinzu):**
 - 1213 Tests laufen in etwa 106 Sekunden, Ergebnis `OK`.
 - Die Demo endet mit „PASS“, dabei werden **15 von 15 Angriffe** abgelehnt.
 - Der Refusal-Guard führt 23 Einträge in `GUARDED`: 20 Kernmodule unter `geniusnew/`
@@ -164,23 +164,29 @@ Kaans OK ohne Merge geschlossen:
 | #134 | `cbf32f6` | Regeländerung ohne belegte Kaan-Entscheidung und ohne die nötigen Reviews; schwächt Schutzregeln ab (Entscheidung 07.10.2026) |
 | #118 | `8ab7fca` | Überholt durch #129 und #130; die C3-Entscheidung steht jetzt in `docs/DECISIONS.md` |
 
-Nach diesen Schließungen waren 16 PRs offen. Am 18.10.2026 um 01:10 UTC sind 21 PRs
+Nach diesen Schließungen waren 16 PRs offen. Am 18.10.2026 um 02:10 UTC sind 22 PRs
 offen; #140 wurde am 17.10.2026 um 21:33:51 UTC als
 `9b11f7a89fe948d65d6b2eb3337111a5b11d3a57` gemergt. Die Betriebsabnahme
 bleibt laut #140 auf HOLD; #144 ist noch offen. Offene Fragen:
 
 - **Pause:** Die Entscheidung vom 09.10.2026 gilt als dokumentierte Reihenfolge:
   erst PRs, Konflikte und Merge-Gates bereinigen, dann pausieren. Die Bereinigung ist
-  bei 21 offenen PRs noch nicht abgeschlossen; die Pause steht daher noch aus. Bis
+  bei 22 offenen PRs noch nicht abgeschlossen; die Pause steht daher noch aus. Bis
   dahin starten laut derselben Entscheidung keine neuen Features. Am 18.10.2026 wurden
-  dennoch #147 (D1-Codec, in keinen aktiven Pfad eingebunden), #148 (D3-Vertragsentwurf)
-  und #149 (Kimi und Grok im Laya-Shadow-Vergleich) geöffnet, dazu #150 (Crash- und
-  Neustartprüfungen für den Worker-Dienst aus #140, Draft, Abnahme HOLD). Ob sie als
-  Aufräumarbeit gelten oder bis zum Master-Prompt warten, entscheidet Kaan.
+  dennoch geöffnet: #147 (D1-Codec, in keinen aktiven Pfad eingebunden), #148
+  (D3-Vertragsentwurf, nur Doku, um 01:49 UTC als `c656ea5` gemergt), #149 (Kimi und
+  Grok im Laya-Shadow-Vergleich), #150 (Crash- und Neustartprüfungen für den
+  Worker-Dienst aus #140, Draft, Abnahme HOLD), #151 (D2-Passwortgrenze mit Argon2id)
+  und #152 (D2-Session- und CSRF-Token). Ob die offenen davon als Aufräumarbeit gelten
+  oder bis zum Master-Prompt warten, entscheidet Kaan. #151 fügt `argon2-cffi` und
+  `argon2-cffi-bindings` zu `requirements.txt` hinzu; die Wahl von `argon2-cffi` ist
+  am 26.09.2026 entschieden, der Merge einer neuen Abhängigkeit braucht aber als
+  Ausnahme Kaans OK und vorher ein Gemini-Pro-Sicherheitsreview im PR.
 - **Entscheidung vom 18.10.2026 laut #148:** administrierte Core-Personenbindung für
   v0.2 und eine neue Envelope-Version statt einer zweiten Signatur. Sie ist bisher nur
-  als Chat-Angabe in der PR-Beschreibung belegt und deshalb nicht in
-  `docs/DECISIONS.md` eingetragen; Claude Code trägt sie ein, sobald Kaan sie bestätigt.
+  als Chat-Angabe in der Beschreibung des gemergten Entwurfs belegt und deshalb nicht
+  in `docs/DECISIONS.md` eingetragen; Claude Code trägt sie ein, sobald Kaan sie
+  bestätigt.
 - **Copilot-Review:** warten oder für die Dauer des Engpasses einen Ersatz festlegen.
 - **Regelfassung:** Die weiterhin offenen #139 und #141 berufen sich auf zwei
   verschiedene, nicht eingetragene Kaan-Entscheidungen (08.10. und 06.10.2026) und
