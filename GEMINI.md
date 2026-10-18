@@ -13,7 +13,7 @@ Gemini Pro ist **Prüfer** und ändert keine Datei. Umsetzer ist Codex. Seit 04.
 die **Abacus-CLI** oder die Gemini CLI, weil die GitHub-App Gemini Code Assist hier nie ein Review
 abgegeben hat. Seit 27.09.2026 (Kaan) entscheidet **Kaan** Ziele und Architektur der
 Datenbank, **ChatGPT erstellt und pflegt `docs/DATABASE.md`** in seinem Auftrag, und
-**Claude Code** besitzt `docs/COLLABORATION.md`, `docs/DECISIONS.md` und
+**Claude Code** besitzt `docs/COLLABORATION.md`, `docs/DECISIONS.md` (samt `docs/decisions/`) und
 `docs/STATUS.md` und reviewt den DB-Entwurf sicherheitstechnisch. **Claude Code** löst
 außerdem Konflikte zwischen den Plattformen und hat dabei Überschreibrecht. Widersprichst
 du Codex und kommt ihr nicht überein, meldest du einen KONFLIKT-Block
