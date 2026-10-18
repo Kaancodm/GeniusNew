@@ -544,7 +544,8 @@ class HostCheckTest(unittest.TestCase):
 
     def test_harpa_persistence_failures_are_503_without_exception_details(self):
         for error in (OSError("private-storage-canary"),
-                      harpa_inbox.HarpaStorageError("private-corruption-canary")):
+                      harpa_inbox.HarpaStorageError("private-corruption-canary"),
+                      TimeoutError("private-storage-timeout-canary")):
             with self.subTest(error=error):
                 with patch.object(server, "store_harpa", side_effect=error):
                     status, body = self.post_harpa()

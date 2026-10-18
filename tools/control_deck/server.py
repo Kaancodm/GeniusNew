@@ -151,11 +151,19 @@ class Handler(BaseHTTPRequestHandler):
             _deny(self, 413)
             return
         try:
-            payload = json.loads(self._read_harpa_body(size))
-            result = store_harpa(payload, self.server.harpa_inbox)
+            body = self._read_harpa_body(size)
         except TimeoutError:
             _deny(self, 408)
             return
+        except HarpaPayloadError:
+            _deny(self, 400)
+            return
+        except OSError:
+            _deny(self, 503)
+            return
+        try:
+            payload = json.loads(body)
+            result = store_harpa(payload, self.server.harpa_inbox)
         except (ValueError, UnicodeDecodeError, RecursionError):
             _deny(self, 400)
             return
