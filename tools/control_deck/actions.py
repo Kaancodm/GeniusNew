@@ -29,8 +29,11 @@ def allowed_actions() -> tuple[str, ...]:
 def run_action(name: str, repo: Path = DEFAULT_REPO) -> dict[str, object]:
     """Run an allowlisted check and return its bounded output and exit status.
 
-    Tests use the checkout's Python interpreter. Unknown actions raise
-    ValueError; unavailable programs and timeouts return a failed result.
+    Commands run in repo and retain the last 24,000 output characters.
+    Tests prefer repo/.venv/bin/python3, falling back to python3 on PATH.
+    Hermes status succeeds when installed, even if its session is inactive.
+    Unknown actions raise ValueError. OS launch errors and timeouts return
+    ok=False and exit_code=None; output decoding errors propagate.
     """
     if name not in allowed_actions():
         raise ValueError("action is not allowlisted")
