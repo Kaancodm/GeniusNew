@@ -1,6 +1,6 @@
 # D1: Portal–Kern-Vertrag (Entwurf zur unabhängigen Prüfung)
 
-**Status: HOLD.** Grundlage ist [Issue #92](https://github.com/Kaancodm/GeniusNew/issues/92).
+**Status: HOLD.** Entwurf gemäß Entscheidung vom 18.10.2026, Issue #159; D1 bleibt bis zu unabhängigem Review, DB-Abgleich und Betriebsfreigabe deaktiviert. Grundlage ist [Issue #92](https://github.com/Kaancodm/GeniusNew/issues/92).
 Dieser Text aktiviert keine Route. Die offenen Entscheidungen und Security-Gates am
 Ende sperren aktiven D1-Code.
 
@@ -48,13 +48,23 @@ neue Envelope-Version oder einen gesonderten signierten Nutzerkanal mit eigener
 Core-Prüfung; er darf nicht still in das unten geschlossene D1-Envelope eingefügt
 werden. Dieses enthält **keine** Nutzer-Aussage. D1 begründet bis dahin keine
 nutzergetrennten Jobs oder Freigaben. C3 bleibt
-unverändert. Bis dieser D3-Vertrag freigegeben und Core-seitig durchgesetzt ist,
-darf die D1-Route **keinen Job annehmen oder erzeugen**. Der gemeinsame
-Service-Principal darf weder als `user_id` eines Handoffs noch als Auftraggeber
-eines approval-pflichtigen Jobs eingesetzt werden. Eine Beschränkung auf
-einzelne Tiers ersetzt die eindeutige Personenbindung nicht. So kann kein
-Portal-Auftrag über einen anderen direkten Approver-Key derselben Person die
-bestehende C3-Selbstfreigabeprüfung umgehen.
+unverändert. Bis zur D3-Freigabe bleibt die oben ausdrücklich begrenzte D1-Ein-Nutzer-Beta zulässig; zusätzliche Portal-Nutzer und jeder freigabepflichtige D1-Job bleiben gesperrt. Der Dienst-Principal wird nicht als individuelle Nutzeridentität ausgegeben. Die C3-Selbstfreigabegrenze wird dadurch nicht für andere Auftragswege verändert.
+
+### D1-Dienstprofil: Start-Ablehnungen (H1)
+
+Vor Aktivierung des HTTP-Listeners muss der Kern für den dedizierten D1-Service-Principal drei unabhängige, fail-closed Prüfungen durchführen:
+
+| Fehlerhafte Konfiguration | Abnahme |
+| --- | --- |
+| Sein Policy-Grant hat `requires_approval=true` | REFUSE beim Dienststart; eigener Negativtest |
+| Sein Subject steht in `[approvers]` | REFUSE beim Dienststart; eigener Negativtest |
+| In `[principals]` existiert ein Bearer/API-Key für dieses Subject | REFUSE beim Dienststart; eigener Negativtest |
+
+Zusätzlich sind ausschließlich ausdrücklich freigegebene risikoarme Tools zulässig. Ein Positivtest weist nach, dass ein korrektes Profil nach Bestehen aller übrigen Gates starten kann. Der Service-Principal darf keine Approval-Freigabe erteilen. Jeder Refusal-Test muss das Entfernen der Ablehnung bemerken.
+
+**Ein-Nutzer-Betriebsgrenze, Entscheidung Kaan 18.10.2026:** D1 darf *vor* D3 signierte Jobs über einen dedizierten Dienst-Principal annehmen, **nur solange Kaan der einzige Portal-Nutzer ist**, ausschließlich ohne Freigabepflicht. Dieser Principal ist technisch eine Dienst- und keine verifizierte Personenidentität: Alle so angenommenen Jobs teilen seinen Job-Namensraum und seine Quote. Vor Zulassung eines zweiten Portal-Nutzers sind D3-Personenbindung, Portal-Identitätsvertrag und die Trennung von Aufträgen und Freigaben zwingend. Unbekannter Portal-Nutzerzustand, weitere Nutzer oder Freigabepflicht sind REFUSE, nicht etwa ein Fallback auf D1. Diese Einschränkung ist als Betriebsbedingung durchzusetzen und zu testen, nicht allein durch Text oder einen Browserwert.
+
+**Schlüsseltrennung (L2):** Das Portal erzeugt seinen privaten Ed25519-Schlüssel unabhängig vom Core-Root-Secret. Der Kern besitzt nur die öffentliche Hälfte. Ein D1-Verifier muss die Übergabe eines privaten Schlüssels ablehnen; dazu gehört ein eigener Negativtest.
 
 ## Bytegenaues Signaturprofil
 
@@ -179,11 +189,7 @@ bei gleichen Werten. Kommagetrennt zusammengeführte Werte ersetzen diese Prüfu
 Obs-fold, Whitespace vor dem Doppelpunkt und nicht-ASCII-Headernamen werden vor der
 Listenbildung verweigert.
 
-Diese Prüfung gilt bereits am **ersten HTTP-Hop** auf dessen unveränderter Headerliste,
-einschließlich eines TLS-terminierenden Proxys und vor jeder HTTP/2-zu-HTTP/1.1-
-Übersetzung. Jeder weitere Hop und der Core-Adapter prüfen erneut vor eigener
-Zusammenführung oder Mapping-Bildung. Schon der erste Hop ordnet den Request anhand
-des rohen Pfads und der rohen Headerliste einem Authentisierungspfad zu und verweigert
+**Gate 4, Entscheidung 18.10.2026:** Die zwingende Duplikatprüfung liegt am Kern auf seiner rohen Headerliste **vor** Dictionary-Bildung und Body-Lesen. Der Proxy darf problematische Requests bereits vorher vollständig ablehnen, muss aber alle D1-relevanten Header-Instanzen unverändert weitergeben und darf sie weder zusammenführen noch entfernen. Der Kern verweigert
 die gleichzeitige Präsenz von `Authorization` und `X-GeniusNew-D1-Envelope`, auch
 wenn einer der Werte ungültig ist. Jeder weitere Hop wiederholt diese Prüfung. Ein
 Proxy darf diese beiden Header weder entfernen, hinzufügen, umbenennen noch ihre Werte
@@ -195,8 +201,7 @@ nicht unverändert weitergeben, verweigert er den Request. Bei HTTP/2 sind `:met
 Werten REFUSE. Die Grenze von 8192 Oktetten gilt für die dekomprimierte Headerliste
 an jedem Hop, einschließlich Pseudo-Headern. Der Core ist nur über diesen geprüften
 Ingress erreichbar und prüft die bei ihm empfangene rohe HTTP/1.1-Liste nochmals.
-Kann der erste Hop diese Ablehnungen nicht vor Normalisierung belegen, bleibt D1
-deaktiviert (**Betriebsgate**).
+Die nginx-Vorlage benötigt reproduzierbare Tests für unveränderte Weitergabe oder frühe Ablehnung von Duplikaten und Misch-Auth unter HTTP/1.1 und HTTP/2. Solange dies nicht belegt ist, bleibt das Proxy-Betriebsgate offen.
 
 | Eingang | D1-Regel |
 | --- | --- |
@@ -245,28 +250,18 @@ issued_at - 5 <= now < expires_at
 
 `now` ist bei jeder Prüfung die ganzzahlige Unix-Sekunde der Core-UTC-Uhr
 (`floor` des tatsächlichen Sekundenwerts); Gleitkomma-Rundung darf die
-Akzeptanzgrenzen nicht verschieben. Die gesonderte Pflicht zum unabhängigen
-Uhr-Rollback-Nachweis bleibt bestehen.
+Akzeptanzgrenzen nicht verschieben. Uhr-Rücksprung ist gemäß Entscheidung vom 18.10.2026 eine dokumentierte **Betriebsgrenze** statt eines unabhängigen kryptografischen Zeitnachweises: NTP ist Pflicht, Rücksprünge gegen die im Prozess beobachtete Maximalzeit sind REFUSE, und eine in PostgreSQL gemeinsam atomar fortgeschriebene Höchstzeit ist beim Start sowie bei D1-Prüfungen zu kontrollieren. Fehlende, nicht lesbare oder widersprüchliche Werte sperren D1. Die DB-Höchstzeit ist selbst kein unabhängiger Zeitzeuge und kann bei gemeinsamem Restore zurückfallen; dieser Rest wird in einem eigenen `SECURITY.md`-PR dokumentiert.
 
 Kaan hat am 05.10.2026 [im PR #120](https://github.com/Kaancodm/GeniusNew/pull/120#issuecomment-5999610879)
 **JA** zu diesem Fünf-Sekunden-Profil entschieden. Die fünf
 Sekunden gelten ausschließlich vor `issued_at`; nach `expires_at` gibt es keine
-Nachfrist. Der unabhängige Nachweis gegen Core-Uhr-Rücksprünge bleibt ein separates
-Security-Gate vor aktivem D1-Code.
+Nachfrist. Die Betriebsprüfungen für Uhr-Rücksprung bleiben vor aktivem D1-Code erforderlich.
 
-Der Kern liest `now` erstmals nach vollständiger HTTP-/Body-/Envelope-Prüfung und
-unmittelbar vor der Signaturprüfung. Nach verifizierter Signatur und vorgelagerten
-Last-/Policy-Gates liest er `now` erneut unmittelbar vor dem Replay-INSERT. Nach jeder
-DB-/Lock-Wartezeit und vor COMMIT wird neu gelesen; bei Ablauf wird die Transaktion
-zurückgerollt. Nach bestätigtem COMMIT und **vor** Erzeugen der Job-ID wird nochmals
-gelesen; bei Ablauf bleibt der Nonce verbraucht und es entsteht kein Job. Ein Request
-wird so nicht wegen langer DB-Wartezeit nach Ablauf angenommen.
+### Gate 3: Start-Quarantäne
 
-Ein Rücksprung der Core-Uhr unter einen zuvor beobachteten Zeitpunkt stoppt D1-Aufnahmen
-fail closed. Die Rollback-Erkennung muss auch über Neustarts und alle Core-Instanzen
-hinweg funktionieren. Dafür ist noch kein freigegebener unabhängiger Zeitnachweis
-definiert: **Security-Gate vor aktivem Code**. Nonces werden durch Uhr-Rücksprung
-niemals freigegeben.
+Nach **jedem** Dienststart, Crash-Restart, Restore oder Wechsel des autoritativen Replay-Primary nimmt D1 **65 Sekunden lang** keine Requests an und erzeugt weder Job noch Reservation. Die Schranke nutzt eine monotone Laufzeituhr und darf bei Rücksprung der Core-Uhr nicht vorzeitig freigeben. 60 Sekunden maximale Signaturgültigkeit plus 5 Sekunden Vorlauf gewährleisten, dass vor einem Restore angenommene Signaturen nach der Quarantäne abgelaufen sind. Der Zustand wird erst bei gültigem Startabgleich von Job-Ledger, Audit-Kette und getrenntem Anker wieder freigegeben; Ankerreset und unbekannter Restore-Stand bleiben verboten.
+
+Abgelaufene Reservationen dürfen über eine **eigene, getrennt berechtigte Bereinigungsrolle** erst bei `expires_at < now - 65` entfernt werden. Löschung und versioniertes Bereinigungs-Audit werden atomar gespeichert, mit Bezug auf ursprünglichen Replay-Schlüssel, Job, Annahmeevent, Ablauf und Löschzeit; die Runtime selbst hat auf der Replay-Tabelle nur `SELECT`/`INSERT` und keine Löschrechte. Der Startabgleich unterscheidet passende auditierte Bereinigung von fehlenden/unerwarteten Reservationen. Eine neue D1-Startprüfung für tatsächlichen Primary Key, Zeilenform und effektive Rechte ist ausdrücklich zulässig (Gate 7); sie ist kein allgemeiner Schema-Fingerprint. Ein beschädigter, fehlender oder widersprüchlicher DB-/Audit-Zustand bleibt fail closed.
 
 Der bestehende Connection-Limit-Gate greift bereits beim Annehmen der Verbindung;
 Header- und Body-Limits greifen vor teurer JSON-/Signaturarbeit. Verbindliche
@@ -296,25 +291,17 @@ Reihenfolge eines D1-Requests:
    `body_sha256` mit den Body-Bytes vergleichen; keine Job-/Audit-Mutation.
 2. Erste Zeitprüfung mit der Core-Uhr.
 3. Den konfigurierten Ed25519-Schlüssel wählen und Signatur prüfen.
-4. Service-Identität **und vor jeder Jobannahme zwingend die freigegebene
-   Core-Nutzerbindung aus D3**, Rate Limits, Token-Buckets, Quoten,
-   `max_in_flight` und Policy-Grants am bestehenden Eingang prüfen; die
-   Kapazitätsgrenze vor der Reservation erwerben. Ohne eindeutige D3-Bindung
-   enden die Schritte hier mit REFUSE; Schritte 5–8 sind dann gesperrt. Kein
-   Aufruf von `_dispatch()` unter Umgehung dieser Gates.
-5. Unmittelbar vor der Replay-Reservation Zeit erneut prüfen, dann den Schlüssel
-   `(domain, issuer, nonce)` in der gemeinsamen autoritativen
-   Core-PostgreSQL-Tabelle einzufügen versuchen.
-6. Nur wenn **diese** Transaktion exakt einen neuen Datensatz eingefügt hat
-   (`ON CONFLICT (domain, issuer, nonce) DO NOTHING RETURNING domain, issuer,
-   nonce`: genau eine Zeile, deren Werte den Insert-Werten entsprechen), Zeit
-   nach Wartezeit erneut prüfen und dauerhaften COMMIT bestätigen. Null Zeilen,
-   abweichende Rückgabe oder SQL-/Serialisierungsfehler sind REFUSE ohne
-   automatischen Retry, auch falls ein COMMIT erfolgreich wäre.
-7. Nach bestätigtem COMMIT und letzter Zeitprüfung erst die Job-ID erzeugen.
-8. Danach erst Handoff, Job-Ledger und Audit verändern, über die bestehenden Approval-,
-   Audit- und PostgreSQL-Gates. Kein Worker läuft in der Replay-Transaktion. Die
-   erworbene `max_in_flight`-Kapazität wird auf jedem Ausgang wieder freigegeben.
+4. Die verifizierte Service-Identität, **Ein-Nutzer-Betriebsbedingung**, H1-Startprofil, Rate Limits, Dienst-Bucket, `max_in_flight` und Policy-Grants prüfen. Vor D3 kein individuelles Nutzerrecht und keine Nutzerquote aus dem gemeinsamen Principal ableiten. Weitere Nutzer oder Approval-Pflicht sind REFUSE. Die Kapazitätsgrenze vor der Reservation erwerben. Kein Aufruf von `_dispatch()` unter Umgehung der Gates.
+5. Zeit unmittelbar vor dem Replay-INSERT prüfen und **eine gemeinsame PostgreSQL-Annahmetransaktion** beginnen. Den Schlüssel `(domain, issuer, nonce)` mit `ON CONFLICT (domain, issuer, nonce) DO NOTHING RETURNING domain, issuer, nonce` reservieren; nur exakt eine passende Zeile gilt als Gewinner. Null Zeilen oder eine abweichende Rückgabe sind REFUSE ohne Job.
+6. Die **zufällige Job-ID vor COMMIT** erzeugen. Handoff, Job-Ledger, Replay-Reservation sowie das neue versionierte Annahme-Audit-Event mit `SHA256(envelope_bytes)`, Principal-Digest und Replay-Bindung **in derselben Transaktion** speichern. Bereits signierter Audit-Kopf und die bestehenden Anker-/B6-Gates bleiben Pflicht. Nach jeder DB-/Lock-Wartezeit und unmittelbar vor COMMIT Zeit neu lesen; bei Ablauf alles zurückrollen.
+7. Den synchronen dauerhaften COMMIT bestätigen und Audit-/Anker-Abgleich erfüllen. Unbekannter COMMIT-Ausgang bleibt **UNKNOWN**: Ein vollständiger Job samt Reservation und Audit kann bereits bestehen; weder neuer Job noch automatischer Retry noch Workerstart sind erlaubt. Wird ein bereits verbindlich angenommener Job vor Ausführung abgelaufen, erfolgt ein separater atomarer Ledger-/Audit-Refusal **für dieselbe Job-ID**, nicht die Behauptung, es habe nie einen Job gegeben.
+8. Erst danach den Worker **außerhalb** der Annahmetransaktion starten. `max_in_flight` ist auf allen Ausgängen freizugeben. Kein Worker läuft in einer Replay-/Ablehnungstransaktion.
+
+**Signaturgeprüfte Ablehnungen ohne Reservation (Gate 9):** Für einen verbrauchten Nonce oder Ablauf nach gültiger Signatur wird eine begonnene Annahmetransaktion vollständig zurückgerollt; es darf kein neuer Job entstehen. Eine **separate dauerhafte Audit-Transaktion** schreibt ein versioniertes `D1_REQUEST_REFUSED`-Event mit unabhängiger zufälliger `attempt_id` (kein Job-Identifier), `SHA256(envelope_bytes)`, Digest des verifizierten Service-Principals, Digest des kanonischen Replay-Schlüssels `(domain,issuer,nonce)`, `expires_at`, geprüfter Core-Zeit und festem Grund `NONCE_CONFLICT` oder `REQUEST_EXPIRED`, zusammen mit signiertem Audit-Kopf; Ankerprüfung bleibt bestehen. Body, Signatur und Secrets erscheinen nicht im Audit. Abbruch, Crash, unbekannter Commit oder Ankerfehler verhindern eine als bestätigt ausgegebene Audit-Ablehnung und jeden Workerstart. Der B6-Startabgleich prüft die Bindungen beidseitig: jede nicht bereinigte Reservation genau zu Annahme und Job, jede Annahme zu Reservation oder exakt passendem auditiertem Bereinigungsnachweis; nur versionierte Ablehnungs-Events dürfen ohne Job/Reservation existieren. Unbekannte Event-Typen, Bindungen oder fehlende Zeilen sind REFUSE. Damit ist Gate 9 als **Entwurfsvertrag erledigt**, nicht als implementierte Freigabe.
+
+**Gate 8, Buchung:** Ablehnungen vor erfolgreicher Ed25519-Prüfung einschließlich erster Zeitprüfung belasten ausschließlich das Quellbudget am Proxy und das globale Core-Vorab-Budget, **nicht** den gemeinsamen Dienst-Bucket und niemals eine Nutzerquote. Bei gültiger Signatur wird der Dienst-Bucket vor weiterer Zeit-/Replay-Prüfung genau einmal belastet; signaturgeprüfte Replay-/Zeitablehnungen erstatten ihn nicht zurück. Unsignierte Requests dürfen über frei behauptete `issuer`-Werte nicht den Dienst-Bucket erschöpfen.
+
+**Gate 5, Lastschutz:** Ein Proxy-Limit **pro Quelle** und ein globales authentisierungsunabhängiges D1-Eingangslimit über alle Core-Instanzen greifen vor JSON und Ed25519; zusätzlich begrenzt das Portal seine Signierversuche instanzübergreifend pro verifizierter Portal-Referenz und insgesamt (Gate 10). Zahlen, Bursts, Parallelität und Replay-/Audit-Speicherschwellen sind vor Aktivierung durch Kaan zu genehmigen und unter Last zu testen. Der D1-Eingang muss vor dem globalen Vorab-Budget durch einen geschützten Ingress (etwa mTLS oder streng geschütztes Proxy-Secret) auf das Portal-Backend beschränkt sein, auch bei Vercel ohne feste Egress-IP. Eine anonyme öffentlich erreichbare D1-Route ist verboten; fehlende Sicherung ist HOLD.
 
 Alle gleichzeitig annehmenden Core-Instanzen für dasselbe `(issuer, audience)`
 verwenden denselben schreibbaren PostgreSQL-Primary und dieselbe Replay-Tabelle.
@@ -331,7 +318,7 @@ ist ein **Betriebsgate**. Bei DB-Ausfall, vollem Speicher, Konflikt,
 unbekanntem COMMIT-Ausgang oder Verbindungsabbruch während COMMIT:
 kein Job, kein Erfolg, kein automatischer Retry desselben Requests.
 
-Die Replay-Transaktion begrenzt `lock_timeout`, `statement_timeout` und
+Die gemeinsame Annahmetransaktion begrenzt `lock_timeout`, `statement_timeout` und
 `idle_in_transaction_session_timeout` jeweils auf höchstens die unmittelbar
 vor dem Replay-INSERT gemessene verbleibende Request-Gültigkeit und zusätzlich
 auf einen konfigurierten Maximalwert zwischen 1 ms und 60 Sekunden.
@@ -348,17 +335,10 @@ und Betriebsnachweis muss außerdem D1 vor Erschöpfung des gemeinsamen Core-
 Speichers sperren, damit Job-Ledger und Audit nicht durch Replay-Wachstum
 ausfallen; Schwelle und Überwachung sind vor Code festzulegen.
 
-Nach bestätigter Reservation, aber vor Job-Erzeugung, bleibt der Nonce bei Crash
-verbraucht; kein Job wird rückwirkend erzeugt. Diese Verfügbarkeitseinbuße schützt die
-Replay-Grenze. Ein Worker läuft niemals innerhalb der Replay-Transaktion.
+Nach bestätigtem Annahme-COMMIT überstehen **Reservation, Job und Audit gemeinsam** jeden Crash. Eine isoliert verbrauchte Reservation ohne Job ist kein erlaubter erfolgreicher Annahmezustand. Ein Worker läuft niemals innerhalb der Transaktion.
 
 Der dauerhafte Speichervertrag und die Rechte stehen als D1-Entwurfszusatz in
-[docs/DATABASE.md](DATABASE.md). Ein älteres Restore darf nicht still als gültiger
-Replay-Stand starten. Die vorhandene Audit-/Anchor-Prüfung beweist keine
-Replay-Vollständigkeit, solange keine geprüfte Bindung der Replay-Historie an einen
-unabhängigen Rollback-Nachweis existiert. Dieser Nachweis ist ein **separates
-Security-Gate**; leere Ersatz-Tabelle, automatische Neuinitialisierung, History-Löschung
-und Anchor-Reset sind verboten.
+[docs/DATABASE.md](DATABASE.md). Ein Restore sperrt D1 bis zum erfolgreichen vollständigen Audit-/Ledger-/Anker-Startabgleich und der erneuten **65-s-Quarantäne**. Ein unabhängiger kryptografischer Replay-Fortschrittsnachweis ist nicht mehr gefordert. Leere Ersatz-Tabelle, automatische Neuinitialisierung, unautorisierte History-Löschung und Anchor-Reset bleiben verboten.
 
 ## Portal-Retry und Abnahme
 
@@ -380,21 +360,8 @@ Test, der ihr Fehlen bemerkt, und das Modul gehört in `scripts/refusals.py::GUA
 Ein DB-Code-PR benötigt zusätzlich `Claude DB Review: APPROVED` am exakten Head und
 grüne `contracts`.
 
-**Offene Gates (HOLD):** (1) D3-Nachweis und Lifecycle für Alias-/Key-Bindungen
-an die von Core vergebene Personen-ID; (2) unabhängiger, restart- und instanzfester
-Zeit-Rollback-Nachweis; (3) unabhängiger Replay-Restore-/Rollback-Nachweis mit
-freigegebenem DB-Design und Betriebsprofil; (4) Nachweis der Header-Ablehnung am
-ersten Proxy-Hop; (5) festgelegte und geprüfte Core- und Portal-Lastbudgets samt
-Replay-Speicherschwelle; (6) erneuter
-unabhängiger Review am neuen Head; (7) Kaans Klärung, ob die D1-spezifische
-Startprüfung von PK, Schemaform und Rechten trotz des Beschlusses gegen einen allgemeinen
-Schema-Fingerprint zulässig ist; (8) Entscheidung und Testvertrag, ob abgelehnte
-Replay-/Zeitversuche die authentifizierten Rate-/Quota-Budgets aus Schritt 4
-verbrauchen oder zurückerhalten. Bis dahin darf diese Buchung nicht still eine
-Nutzerquote erschöpfen oder die bestehenden Last-Gates umgehen. (9) Ein
-Audit-/Recovery-Vertrag für authentifizierte Replay-Ablehnung, Ablauf nach
-bestätigtem Nonce-COMMIT und Crash zwischen COMMIT und Job-Erzeugung, ohne die
-vorgeschriebene Commit-Reihenfolge oder bestehende Audit-Gates zu verletzen.
+**Gate-Status – D1 bleibt HOLD:** (1) D1 vor D3 **ausschließlich für Kaan als einzigen Portalnutzer**, nur risikoarme Jobs ohne Approval; H1-Start-Ablehnungen als Entwurfsvertrag entschieden, D3-Personenbindung vor einem zweiten Nutzer erforderlich. (2) NTP, Prozess-Monotonie und PostgreSQL-Höchstzeit als Betriebsgrenze, eigener SECURITY.md-PR ausstehend. (3) **ERLEDIGT im Entwurf:** 65-s-Quarantäne statt Replay-Fortschrittsnachweis; Nachweis im Betrieb offen. (4) Proxy erhält Header, Core prüft Rohduplikate; nginx-Tests offen. (5) Lastbudgets, konkrete Zahlen, Replay-/Audit-Speicherschwelle und Kaans Freigabe offen. (6) **OFFEN:** erneuter unabhängiger Claude-Review am exakten Head. (7) Spezifische D1-Startprüfung von PK, Zeilenform und Rechten ist freigegeben; Umsetzung offen. (8) Signierte Ablehnungen belasten den Dienst-Bucket, unsignierte ausschließlich Vorabbudgets; Nutzerquote nie. (9) **ERLEDIGT im Entwurf:** atomare Annahme plus separate auditierte Ablehnung und B6-Abgleich; Review und DB-Vertrag stehen aus. (10) Geschützter Ingress und vor dem Signieren wirksame instanzfeste Portal-Limits als Betriebsgate.
+
 (10) Nachweis eines vor dem Vorab-Budget wirksamen geschützten Ingress, der
 anonyme öffentliche Last auf die D1-Route ausschließt, und der instanz- und
 neustartfesten Portal-Budgets pro Nutzerreferenz und insgesamt vor dem Signieren.
