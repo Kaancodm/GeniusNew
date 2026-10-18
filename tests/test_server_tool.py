@@ -24,7 +24,7 @@ REAL_TOOLS = (
     "bash", "env", "cat", "cut", "head", "tail", "sed", "awk", "grep", "mktemp", "rm",
     "install", "stat", "touch", "chmod", "chown", "dirname", "basename", "tr", "wc",
     "sleep", "timeout", "python3", "hostname", "uptime", "df", "ps", "who", "free",
-    "clear", "true", "date", "mkdir", "ls", "sort", "test", "realpath",
+    "clear", "true", "date", "mkdir", "ls", "sort", "test", "realpath", "tee",
 )
 
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIfakefakefake termius-ipad"
@@ -1144,6 +1144,7 @@ class DeckTest(ServerToolTestCase):
         result = self.sb.run("deck", "--apply", TMPDIR=str(scratch))
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(list(scratch.iterdir()), [])
+        self.assertEqual(list(self.sb.harpa_credential.parent.iterdir()), [])
         self.assertFalse(self.sb.harpa_credential.exists())
         self.assertFalse(self.sb.deck_unit.exists())
         self.assertFalse(self.sb.called("systemctl enable"))
@@ -1161,10 +1162,29 @@ class DeckTest(ServerToolTestCase):
         result = self.sb.run("deck", "--apply", TMPDIR=str(scratch))
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(list(scratch.iterdir()), [])
+        self.assertEqual(list(self.sb.harpa_credential.parent.iterdir()), [])
         self.assertFalse(self.sb.harpa_credential.exists())
         self.assertFalse(self.sb.deck_unit.exists())
         self.assertFalse(self.sb.called("systemctl enable"))
         self.assertFalse(self.sb.called("ufw allow"))
+
+    def test_harpa_token_never_enters_repository_tmpdir(self):
+        """The generator must not write a credential to an in-repository TMPDIR."""
+        python = self.sb.bin / "python3"
+        python.unlink()
+        readlink = shutil.which("readlink")
+        self.assertIsNotNone(readlink)
+        python.write_text(
+            f'#!/bin/bash\n{readlink} /proc/self/fd/1 >"$STATE/token_sink"\n'
+            "printf 'fake-generated-token\\n'\n"
+        )
+        python.chmod(0o700)
+        result = self.sb.run("deck", "--apply", TMPDIR=str(self.sb.repo))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.sb.harpa_credential.read_text(), "fake-generated-token\n")
+        sink = (self.sb.state / "token_sink").read_text().strip()
+        self.assertFalse(sink.startswith(str(self.sb.repo)), sink)
+        self.assertEqual(self.sb.harpa_credential.stat().st_mode & 0o777, 0o600)
 
     def test_unsafe_harpa_credential_paths_are_refused(self):
         """Reject relative or unsafe credential paths before writing the service unit."""
