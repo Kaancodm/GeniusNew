@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
+import os
+import runpy
 import tempfile
 import threading
 import unittest
@@ -14,6 +16,28 @@ from scripts import refusals
 
 
 class ControlDeckTest(unittest.TestCase):
+    def test_default_repo_follows_the_checkout_without_an_environment_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            checkout = Path(tmp).resolve() / "another checkout"
+            module = checkout / "tools/control_deck/checks.py"
+            module.parent.mkdir(parents=True)
+            module.write_text(Path(checks.__file__).read_text(encoding="utf-8"),
+                              encoding="utf-8")
+            with patch.dict(os.environ):
+                os.environ.pop("GENIUSNEW_REPO", None)
+                loaded = runpy.run_path(str(module))
+            self.assertNotEqual(checkout, Path.cwd())
+            self.assertEqual(loaded["DEFAULT_REPO"], checkout)
+
+    def test_explicit_repo_override_is_preserved_even_when_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "configured checkout"
+            with patch.dict(os.environ, {"GENIUSNEW_REPO": str(repo)}):
+                loaded = runpy.run_path(checks.__file__)
+            self.assertEqual(loaded["DEFAULT_REPO"], repo)
+            self.assertEqual(loaded["repo_status"](),
+                             {"status": "red", "detail": "repo missing"})
+
     def test_beta_gate_count_is_fixed(self):
         self.assertEqual(len(checks.BETA_GATES), 21)
         self.assertEqual(checks.BETA_GATES[0][0], "A1")
@@ -44,6 +68,27 @@ class ControlDeckTest(unittest.TestCase):
         run.assert_called_once_with(
             ["/x/agy", "models"], cwd=checks.Path.home(), timeout=8.0
         )
+
+    @patch("tools.control_deck.checks.subprocess.run")
+    @patch("tools.control_deck.checks._which")
+    def test_gemini_cli_status_never_starts_a_process(self, which, run):
+        which.side_effect = lambda name: "/x/gemini" if name == "gemini" else None
+        run.return_value.returncode = 0
+        run.return_value.stdout = '{"response":"OK"}'
+        for _ in range(2):
+            state = checks.tool_status("gemini")
+            self.assertEqual(run.call_count, 0, "Status probes must not start a process")
+            self.assertEqual(state, {
+                "status": "yellow",
+                "detail": "CLI installiert · Anmeldung ungeprüft",
+            })
+
+    @patch("tools.control_deck.checks.subprocess.run")
+    @patch("tools.control_deck.checks._which", return_value=None)
+    def test_missing_gemini_cli_does_not_start_a_process(self, which, run):
+        self.assertEqual(checks.tool_status("gemini"),
+                         {"status": "red", "detail": "missing"})
+        self.assertEqual(run.call_count, 0, "Missing clients must not start a process")
 
     @patch("tools.control_deck.checks._run")
     def test_missing_gate_branch_is_red(self, run):

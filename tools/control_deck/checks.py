@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-DEFAULT_REPO = Path(os.environ.get("GENIUSNEW_REPO", "/home/kaan/GeniusNew"))
+DEFAULT_REPO = Path(os.environ.get("GENIUSNEW_REPO", Path(__file__).resolve().parents[2]))
 
 BETA_GATES = [
     ("A1", "Worker-Seccomp", "8a358d1aa620c664c1f073eb87febdddf81f130a"),
@@ -173,16 +173,7 @@ def tool_status(name: str) -> dict[str, str]:
         code, _ = _run([exe, "auth", "status"], cwd=Path.home())
         return _simple("green" if code == 0 else "yellow", "logged in" if code == 0 else "login required")
     if name == "gemini":
-        code, out = _run(
-            [exe, "-p", "Reply only OK", "--output-format", "json"],
-            cwd=Path.home(),
-            timeout=8.0,
-        )
-        logged_in = code == 0 and '"error"' not in out
-        return _simple(
-            "green" if logged_in else "yellow",
-            "logged in" if logged_in else "login required",
-        )
+        return _simple("yellow", "CLI installiert · Anmeldung ungeprüft")
 
     code, out = _run([exe, "--version"], cwd=Path.home())
     version = out.splitlines()[0] if out else "installed"

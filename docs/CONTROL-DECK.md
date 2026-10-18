@@ -13,12 +13,24 @@ Vom Repository-Root:
 python3 -m tools.control_deck --host 127.0.0.1 --port 8787
 ```
 
+Ohne explizite Konfiguration verwendet das Deck den Checkout, aus dem sein eigenes
+Modul geladen wurde; ein bestimmter Benutzerpfad oder das aktuelle Arbeitsverzeichnis
+ist dafür nicht erforderlich. `GENIUSNEW_REPO` überschreibt diesen Standard beim
+Start, `--repo` hat Vorrang vor beiden. Ein ausdrücklich gewählter fehlender Checkout
+bleibt als `repo missing` sichtbar; es gibt keinen stillen Wechsel auf den Standard.
+
 Das Dashboard zeigt Git, Tailscale, Desktop Commander, Docker, tmux, Agent-Logins und
 die 21 Beta-Gates. Oben stehen Projektstand/Wiedereinstieg, die drei nächsten Schritte
 sowie Research- und Ideenbewertungen. Ein read-only Mail Center zeigt einen kompakten
 Alarmstatus für Verkauf, Sponsoring, Allgemein und System. TERM-Befehle werden nur in
 die Zwischenablage kopiert. Wiedereinstiegspunkte öffnen PRs, kopieren Login-Befehle
 oder starten eine allowlistete Prüfung.
+
+Für Gemini wird bei vorhandenem Antigravity weiterhin `agy models` abgefragt.
+Ohne `agy` prüft das Deck ausschließlich, ob die Gemini-CLI im Suchpfad vorhanden
+ist. Es startet sie nicht und zeigt Gelb mit „CLI installiert · Anmeldung ungeprüft“.
+Fehlt auch `gemini`, bleibt der Status Rot (`missing`). Wiederholte Statusabfragen
+starten keinen Gemini-Modellauftrag und belegen weder Anmeldung noch Kontingent.
 
 ## Projektstand und Wiedereinstieg
 
