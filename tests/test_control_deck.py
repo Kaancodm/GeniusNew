@@ -125,6 +125,28 @@ class ControlDeckTest(unittest.TestCase):
         self.assertFalse(any(step["title"].startswith("B1 ") for step in state["resume"]))
 
 
+    @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
+    @patch("tools.control_deck.checks.tool_status", return_value={"status": "green"})
+    def test_local_snapshot_never_claims_live_ci_or_release_approval(self, _tools, _run):
+        project = checks.snapshot(checks.DEFAULT_REPO)["project"]
+        self.assertFalse(project["release_ready"])
+        self.assertEqual(project["ci"]["status"], "yellow")
+        self.assertIn("nicht live abgefragt", project["ci"]["detail"])
+        self.assertIn("Lokaler origin/main-Stand", project["evidence_note"])
+        self.assertIn("keine Live-Abfrage", project["evidence_note"])
+
+    def test_commands_follow_selected_checkout_including_spaces(self):
+        import shlex
+        with tempfile.TemporaryDirectory(prefix="deck checkout ") as tmp:
+            root = Path(tmp)
+            executable = root / ".venv/bin/python3"
+            executable.parent.mkdir(parents=True)
+            executable.touch()
+            commands = checks.commands_for(root)
+            self.assertTrue(commands["tests"].startswith("cd " + shlex.quote(str(root)) + " && "))
+            self.assertIn(shlex.quote(str(executable)), commands["tests"])
+            self.assertTrue(all("~/GeniusNew" not in command for command in commands.values()))
+
     def test_mail_snapshot_missing_is_offline(self):
         with tempfile.TemporaryDirectory() as tmp:
             state = mail_center.snapshot(Path(tmp) / "missing.json")
@@ -366,6 +388,20 @@ class AgentControlTest(unittest.TestCase):
         self.assertIn("Browser", abacus["detail"])
         self.assertNotIn("command", cards[1])
         self.assertIn("kein unterstützter", cards[1]["detail"])
+
+    @patch("tools.control_deck.checks.agent_session", return_value={"status": "yellow", "detail": "stopped"})
+    @patch("tools.control_deck.checks.tool_status", return_value={"status": "green", "detail": "installed"})
+    def test_existing_abacus_copy_controls_survive_status_update(self, _tool, _session):
+        card = next(card for card in checks.agent_hub()["agents"] if card["id"] == "abacus")
+        self.assertEqual(len(card["models"]), 2)
+        for model in card["models"]:
+            self.assertEqual(model["verified_on"], "05.10.2026")
+            self.assertIn("start.sh", model["term_command"])
+        self.assertIn("ungeprüft", card["detail"])
+        self.assertNotIn("action", card)
+        html = (Path(__file__).parents[1] / "tools/control_deck/static/index.html").read_text()
+        for label in ("Marketing & Sales", "Reports", "genius-project-notes", "m.term_command"):
+            self.assertIn(label, html)
 
     def test_clipboard_success_is_only_reported_after_success(self):
         html = (Path(__file__).parents[1] / "tools/control_deck/static/index.html").read_text()

@@ -197,6 +197,19 @@ def gate_status(repo: Path, ref: str | None) -> str:
     return "green" if code == 0 else "yellow"
 
 
+def commands_for(repo: Path) -> dict[str, str]:
+    root = shlex.quote(str(repo))
+    python = repo / ".venv/bin/python3"
+    executable = shlex.quote(str(python)) if python.exists() else "python3"
+    return {
+        "tmux": COMMANDS["tmux"], "docker": COMMANDS["docker"],
+        "git": f"cd {root} && git status --short --branch",
+        "tests": f"cd {root} && {executable} -m unittest discover -s tests -q",
+        "demo": f"cd {root} && ./scripts/demo.sh",
+        "refusals": f"cd {root} && {executable} scripts/refusals.py",
+    }
+
+
 def _priorities(gates: list[dict[str, str]], tools: dict[str, dict[str, str]]) -> list[dict[str, str | None]]:
     steps: list[dict[str, str | None]] = []
     for tool in ("codex", "gh", "gemini"):
@@ -257,6 +270,10 @@ def project_resume(
         "stopped_at": stopped,
         "main_head": _run(["git", "rev-parse", "--short=12", "refs/remotes/origin/main"],
                           cwd=repo)[1],
+        "release_ready": False,
+        "ci": {"status": "yellow", "detail": "nicht live abgefragt"},
+        "evidence_note": ("Lokaler origin/main-Stand; keine Live-Abfrage von GitHub. "
+                          "Code auf main ist kein Beta-/Release-PASS."),
         "merged_gates": merged,
         "total_gates": len(gates),
         "resume": steps[:5],
@@ -318,7 +335,7 @@ def snapshot(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
             "genius session" if Path(f"/tmp/tmux-{os.getuid()}/default").exists() else "check from TERM",
         ),
         "gates": gates,
-        "commands": COMMANDS,
+        "commands": commands_for(repo),
     }
 
 def agent_socket() -> str:
@@ -350,9 +367,22 @@ def agent_hub(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
          "note": "Vorhandenen Bot auf deinem Gerät öffnen. SSH-Einrichtung allein ist kein Live-Nachweis.",
          "disabled_label": "Direktstart nicht verfügbar"},
         {"id": "abacus", "name": "Abacus.AI", "status": "yellow",
-         "detail": "ChatLLM im Browser · Anmeldung wird dort geprüft",
+         "status_label": "TEXT-REVIEW GEPRÜFT",
+         "detail": "Browser-Zugang und geprüfte CLI-Textreviews · Kontingent aktuell ungeprüft",
          "url": "https://apps.abacus.ai/chatllm/", "url_label": "Abacus.AI öffnen",
-         "note": "Vorläufiger Ersatz für Grok Build · kein Server-CLI-, Repo- oder Secret-Zugriff."},
+         "models": [
+             {"name": "Gemini 3.8 Flash", "purpose": "Kleine Textreviews",
+              "verified_on": "05.10.2026", "model_id": "GEMINI_3_8_FLASH_THINKING",
+              "term_command": shlex.quote(str(Path.home() / "src/geniusnew-abacus-setup-20260930/start.sh")) + " flash",
+              "button_label": "Flash · TERM kopieren"},
+             {"name": "Sonnet 5.5", "purpose": "Anspruchsvolle Textreviews",
+              "verified_on": "05.10.2026", "model_id": "CLAUDE_V5_5_SONNET",
+              "term_command": shlex.quote(str(Path.home() / "src/geniusnew-abacus-setup-20260930/start.sh")) + " sonnet",
+              "button_label": "Sonnet · TERM kopieren"},
+         ],
+         "note": "Testnachweis vom 05.10.2026: Antworten und Starter geprüft, Plan-Modus. "
+                 "Vor jedem Auftrag Kontingent prüfen. Repo-Automatik ungeprüft. "
+                 "Das Deck startet keine Abacus-Aufträge."},
     ]
     installed = tool_status("hermes")
     running = agent_session("hermes")

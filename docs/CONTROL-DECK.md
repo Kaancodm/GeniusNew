@@ -102,3 +102,25 @@ python3 -m tools.control_deck.actions --start-agent hermes
 Mit --detach wird nur gestartet. Mehrfacher Start verwendet dieselbe Sitzung;
 andere tmux-Sitzungen bleiben unberührt. Starts erfolgen ohne initialen Modellauftrag.
 Die Diensthärtung (u. a. NoNewPrivileges und schreibgeschütztes Home) bleibt erhalten.
+
+
+## Datenstand des Project Decks
+
+Die mobile Oberfläche mit Projekt, Dev Workflow, Marketing & Sales, Reports und lokalen
+Notizen bleibt erhalten. Die Abacus-Textreview-Knöpfe kopieren bestehende Starter;
+sie erzeugen keinen Modellauftrag. Ihr historischer Testnachweis vom 05.10.2026 ist
+kein aktueller Kontingentnachweis.
+
+Der Projektstatus liest den lokalen Git-Verweis `refs/remotes/origin/main`. Eine neue
+HTTP-Abfrage aktualisiert diesen Verweis nicht und fragt GitHub-CI nicht ab. Deshalb
+steht sichtbar „Lokaler origin/main-Stand; keine Live-Abfrage von GitHub“ und der
+CI-Status bleibt ungeprüft. Der Snapshot-Zeitstempel ist kein GitHub-Aktualitätsbeleg.
+Ein kontrolliertes Update muss den Git-Verweis vorab mit dem tatsächlichen Main-SHA
+abgleichen. Der Zähler bedeutet ausschließlich nachgewiesene Implementierungen.
+
+Vor einem Deployment sind die Änderungen des installierten Decks mitzuprüfen: Ein
+blinder Checkout würde lokale Layout-/Agenten-Erweiterungen verlieren. Quellstand,
+Dateihashes und Status-Verweis müssen im Updateplan stehen. Die Sicherung und der
+Rückrollweg umfassen genau diese Dateien und den vorherigen Status-Verweis. Das
+Update benötigt Kaans gesonderte Deployment-Freigabe; Core, Datenbank, Secrets und
+Zugriffsregeln werden dadurch nicht verändert.
