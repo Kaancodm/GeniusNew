@@ -149,7 +149,7 @@ Jobs, Annahmen und Policy).
 10. E2: Security-Review des vollständigen Heads (Claude und Copilot).
 11. Roadmap: C3-Zelle auf den Beleg aus `docs/DECISIONS.md` korrigieren (eigener Docs-PR).
 
-## Aufräumen der offenen PRs (Stand 17.10.2026)
+## Aufräumen der offenen PRs (Stand 18.10.2026)
 
 Auftrag von Kaan vom 09.10.2026 (`docs/DECISIONS.md`). Am 17.10.2026 hat Claude Code mit
 Kaans OK ohne Merge geschlossen:
@@ -168,12 +168,21 @@ bleibt laut #140 auf HOLD; #144 ist noch offen. Offene Fragen:
 
 - **Pause:** Die Entscheidung vom 09.10.2026 gilt als dokumentierte Reihenfolge:
   erst PRs, Konflikte und Merge-Gates bereinigen, dann pausieren. Die Bereinigung ist
-  bei 20 offenen PRs noch nicht abgeschlossen; die Pause steht daher noch aus.
+  bei 20 offenen PRs noch nicht abgeschlossen; die Pause steht daher noch aus. Bis
+  dahin starten laut derselben Entscheidung keine neuen Features. Am 18.10.2026 wurden
+  dennoch #147 (D1-Codec, in keinen aktiven Pfad eingebunden), #148 (D3-Vertragsentwurf)
+  und #149 (Kimi und Grok im Laya-Shadow-Vergleich) geöffnet. Ob sie als Aufräumarbeit
+  gelten oder bis zum Master-Prompt warten, entscheidet Kaan.
+- **Entscheidung vom 18.10.2026 laut #148:** administrierte Core-Personenbindung für
+  v0.2 und eine neue Envelope-Version statt einer zweiten Signatur. Sie ist bisher nur
+  als Chat-Angabe in der PR-Beschreibung belegt und deshalb nicht in
+  `docs/DECISIONS.md` eingetragen; Claude Code trägt sie ein, sobald Kaan sie bestätigt.
 - **Copilot-Review:** warten oder für die Dauer des Engpasses einen Ersatz festlegen.
 - **Regelfassung:** Die weiterhin offenen #139 und #141 berufen sich auf zwei
-  verschiedene, nicht eingetragene Kaan-Entscheidungen (08.10. und 06.10.2026) und widersprechen sich in `AGENTS.md` und
-  `docs/COLLABORATION.md`; #128 berührt dieselben Regeldateien. Welche gilt, entscheidet
-  Kaan schriftlich; Claude Code trägt es in `docs/DECISIONS.md` ein.
+  verschiedene, nicht eingetragene Kaan-Entscheidungen (08.10. und 06.10.2026) und
+  widersprechen sich in `AGENTS.md` und `docs/COLLABORATION.md`; #128 berührt dieselben
+  Regeldateien. Welche gilt, entscheidet Kaan schriftlich; Claude Code trägt es in
+  `docs/DECISIONS.md` ein.
 
 ## Zusammenarbeit der Werkzeuge
 
