@@ -1,12 +1,13 @@
 """Real service sandbox and Core response tests, not systemd/UID acceptance.
 
-Only test-child identity/job-directory seams and the malicious payload factory are
+Only the test job-directory seam and malicious payload factory are
 substituted. No installed service or production security control is changed.
 """
 
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import socket
 import subprocess
@@ -148,24 +149,48 @@ class AdversarialServiceTest(unittest.TestCase):
         exchange = _CoreExchange(core, profile, lifecycle, {"text": "fixture"},
                                  time.monotonic() + 6)
         self.addCleanup(exchange.identity.close)
-        return exchange, lifecycle
+        return exchange, lifecycle, process
 
     def test_real_core_accepts_valid_kernel_authenticated_response(self):
-        exchange, lifecycle = self.exchange("valid")
+        exchange, lifecycle, process = self.exchange("valid")
         self.assertEqual(exchange.run(), {"text": "FIXTURE_OK"})
         self.assertTrue(lifecycle.bound)
+        self.assertEqual(process.wait(timeout=3), 0)
+
+    def assert_response_refused(self, mode, message):
+        exchange, lifecycle, process = self.exchange(mode)
+        with self.assertRaisesRegex(ContractError, "^" + re.escape(message) + "$"):
+            exchange.run()
+        self.assertTrue(lifecycle.bound, "fixture must reach actual request/result validation")
+        self.assertEqual(process.wait(timeout=3), 0, "fixture must send its intended response and exit cleanly")
 
     def test_real_core_refuses_ten_manipulated_response_variants(self):
-        for mode in ("nonce", "digest", "extra", "output", "error", "noncanonical",
-                     "duplicate", "oversized", "truncated", "trailing"):
+        expected = {
+            "nonce": "worker RESULT identity or digest is invalid",
+            "digest": "worker RESULT identity or digest is invalid",
+            "extra": "worker RESULT shape or error code is invalid",
+            "output": "worker RESULT output is invalid",
+            "error": "worker RESULT shape or error code is invalid",
+            "noncanonical": "worker frame is not canonical JSON",
+            "duplicate": "worker frame is not canonical JSON",
+            "oversized": "worker frame length is invalid",
+            "truncated": "worker frame was truncated",
+            "trailing": "worker sent bytes after its result",
+        }
+        for mode, message in expected.items():
             with self.subTest(mode=mode):
-                exchange, lifecycle = self.exchange(mode)
-                with self.assertRaises(ContractError):
-                    exchange.run()
-                self.assertTrue(lifecycle.bound, "fixture must reach actual request/result validation")
+                self.assert_response_refused(mode, message)
+
+    def test_crashed_fixture_cannot_count_as_a_named_response_refusal(self):
+        # The peer really consumes REQUEST/EOF and then exits 71 without RESULT.
+        # Even matching truncation must fail the independent clean-exit check.
+        for message in ("worker RESULT identity or digest is invalid",
+                        "worker frame was truncated"):
+            with self.subTest(message=message), self.assertRaises(AssertionError):
+                self.assert_response_refused("fixture_crash", message)
 
     def test_wrong_kernel_uid_refuses_before_lifecycle_binding(self):
-        exchange, lifecycle = self.exchange("valid", wrong_uid=True)
+        exchange, lifecycle, _process = self.exchange("valid", wrong_uid=True)
         with self.assertRaisesRegex(ContractError, "credentials changed"):
             exchange.run()
         self.assertFalse(lifecycle.bound)

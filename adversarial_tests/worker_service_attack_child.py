@@ -91,6 +91,8 @@ def response_fixture(connection, mode):
     service._plain_write(descriptor, {"kind": "READY", "version": 1, "nonce": nonce}, deadline)
     request = service._plain_frame(descriptor, limit=32768, deadline=deadline)
     service._plain_expect_eof(descriptor, deadline)
+    if mode == "fixture_crash":
+        raise SystemExit(71)
     result = {"kind": "RESULT", "version": 1, "nonce": nonce,
               "request_digest": hashlib.sha256(service.canonical(request)).hexdigest(),
               "output": {"text": "FIXTURE_OK"}}
@@ -133,9 +135,8 @@ def main():
             response_fixture(connection, mode)
             return 0
         attack = Attack(mode, target, int(port))
-        # Test seams only: no fixed UID/systemd evidence is claimed here.
-        # Sandbox, limits, nondumpability, descriptor and protocol checks are real.
-        service._assert_worker_identity = lambda *_: None
+        # Only the systemd directory and payload factory are fixture seams.
+        # The actual nonroot UID/group, NNP and every capability check stay active.
         service._worker_root = lambda *_: root
         service.DeterministicSummarizer = lambda: attack
         service._run_service_connection(connection, core_uid=os.geteuid(),

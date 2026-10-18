@@ -37,6 +37,17 @@ jobs:
         run: python -m pip install --require-hashes -r requirements.txt
       - name: Run contract tests
         run: python -W error::ResourceWarning -m unittest discover -s tests -v
+      - name: Run adversarial worker tests with production privilege state
+        run: |
+          adversarial_python="$(command -v python)"
+          adversarial_uid="$(id -u)"
+          adversarial_gid="$(id -g)"
+          sudo -- /usr/bin/setpriv \
+            --reuid="$adversarial_uid" --regid="$adversarial_gid" --clear-groups \
+            --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
+            --no-new-privs \
+            "$adversarial_python" -B -W error::ResourceWarning \
+            -m unittest discover -s adversarial_tests -v
       - name: Run demo after tests
         run: ./scripts/demo.sh
       - name: Refuse persistence attacks after the HTTP demo
