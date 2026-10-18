@@ -69,14 +69,14 @@ nennt `Claude DB Review` dort noch UNKNOWN; belegt ist APPROVED am Merge-Head
 `cc95586ca27e6f9d76fd737967d87cdb2e8a44d5`
 (`docs/DECISIONS.md`, 04.10.2026). Das korrigiert ein eigener Docs-PR.
 
-**Messbar (am 17.10.2026 auf `4627093` ausgeführt, Python 3.13.16, lokales PostgreSQL 16):**
-- 1100 Tests laufen in etwa 129 Sekunden, Ergebnis `OK`.
+**Messbar (am 18.10.2026 auf dem Code von `main` `9b11f7a` ausgeführt, Python 3.13.16,
+lokales PostgreSQL 16):**
+- 1213 Tests laufen in etwa 106 Sekunden, Ergebnis `OK`.
 - Die Demo endet mit „PASS“, dabei werden **15 von 15 Angriffe** abgelehnt.
-- Der Refusal-Guard führt 22 Einträge in `GUARDED`: 19 Kernmodule unter `geniusnew/`,
-  `tools/control_deck/actions.py`, `tools/ipad_llm.py` und `ops/server/genius-server`,
-  dazu eine Shell-Datei (`GUARDED_SHELL`). Er wurde in dieser Sitzung **nicht**
-  ausgeführt: UNKNOWN. Laut #137 und #142 lief er für `geniusnew/database.py` (66/66)
-  und `tools/ipad_llm.py` (34/34) grün.
+- Der Refusal-Guard führt 23 Einträge in `GUARDED`: 20 Kernmodule unter `geniusnew/`
+  (neu ist `geniusnew/worker_service.py` aus #140), `tools/control_deck/actions.py`,
+  `tools/ipad_llm.py` und das Shell-Skript `ops/server/genius-server` (sein Muster steht
+  in `GUARDED_SHELL`). Lokal wurde er in dieser Sitzung **nicht** ausgeführt: UNKNOWN.
 
 ## Bekannte Grenzen
 
