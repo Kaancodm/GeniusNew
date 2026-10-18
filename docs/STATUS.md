@@ -63,11 +63,12 @@ Audit-Kette festgehalten.
 **Noch offen:** C5 (Betriebsanleitung mit systemd, Rotation und Betriebsabnahme des
 Worker-Dienstes aus #140), E3 (frischer Klon auf einem echten Server), D1-Code, D2,
 D3 und E2 (Security-Review am Head). **D1-Code bleibt auf HOLD; D2 und D3 folgen
-erst nach einer neuen Entscheidung.** Die
-`ROADMAP-V02.md`-Spalte „Stand“ ist seit #130 (`c6a37bb`) angeglichen. Nur die C3-Zelle
-nennt `Claude DB Review` dort noch UNKNOWN; belegt ist APPROVED am Merge-Head
-`cc95586ca27e6f9d76fd737967d87cdb2e8a44d5`
-(`docs/DECISIONS.md`, 04.10.2026). Das korrigiert ein eigener Docs-PR.
+erst nach einer neuen Entscheidung.** Die `ROADMAP-V02.md`-Spalte „Stand“ wurde mit #130
+(`c6a37bb`) angeglichen; seitdem fehlen dort zwei Punkte. Die C3-Zelle nennt
+`Claude DB Review` noch UNKNOWN; belegt ist APPROVED am Merge-Head
+`cc95586ca27e6f9d76fd737967d87cdb2e8a44d5` (`docs/DECISIONS.md`, 04.10.2026). Die Zellen
+A2 und C5 nennen #140 noch nicht (getrennter Worker-Dienst mit Unit-Vorlagen gemergt,
+Betriebsabnahme HOLD). Das korrigiert ein eigener Docs-PR.
 
 **Messbar (am 18.10.2026 auf dem Code von `main` `9b11f7a` ausgeführt, Python 3.13.16,
 lokales PostgreSQL 16):**
@@ -102,10 +103,11 @@ Eine externe Bewertung von `7f81e24` hat Claude Code am Code nachgeprüft. Best�
   gespeicherte Kette (`_append` ruft `_read` in `geniusnew/audit_store.py`), und jeder
   Commit schickt die ganze Kette an den Anker. An der Größengrenze (64 MiB Anfrage,
   16 MiB Ankerzustand, `SECURITY.md`) verweigert der Dienst weitere Events (fail
-  closed). Gemessen in #137 (PostgreSQL 17): Bei voller Kette, 62 137 Records, dauern
-  ein Append etwa 18,3 s und die Audit-Startprüfung etwa 18,3 s; der 62 138. Kopf wird
-  abgelehnt. Für Dauerbetrieb braucht es ein inkrementelles Protokoll (Entwurf in #136,
-  Draft).
+  closed). Gemessen in #137 (PostgreSQL 17) an einer synthetisch befüllten Kette mit
+  62 137 Records, der rechnerischen Leseobergrenze: ein (abgelehnter) Append etwa 18,3 s,
+  die Audit-Startprüfung etwa 18,3 s. Im Betrieb lehnt die Zustandsprüfung laut #136
+  bereits den 61 231. Kopf ab; bei großen Events greift das 64-MiB-Limit früher. Für
+  Dauerbetrieb braucht es ein inkrementelles Protokoll (Entwurf in #136, Draft).
 - **Eine Datenbankverbindung für alles.** `python -m geniusnew serve` teilt eine
   Verbindung zwischen Job-Ledger, Annahme-Ledger und Audit-Kette
   (`geniusnew/__main__.py`), gewollt für die B6-Atomarität. Der Durchsatz ist damit
@@ -139,15 +141,16 @@ Jobs, Annahmen und Policy).
    Schlüsselrotation (Entwurf von ChatGPT in #117, Draft).
 6. E3: frischer Klon folgt der Anleitung wörtlich bis zum laufenden Dienst, Protokoll
    mit SHA.
-7. Audit-Append inkrementell machen: erst ein Messtest zum Wachstum (Codex), dann der
-   Entwurf in `docs/DATABASE.md` (ChatGPT im Auftrag von Kaan, Design-Vorprüfung durch
-   Gemini, Freigabe Kaan), dann die Umsetzung (Codex, `Claude DB Review`, Grenze aus
-   `SECURITY.md` mit Kaans OK).
+7. Audit-Append inkrementell machen: Der Entwurf für `docs/DATABASE.md` liegt als #136
+   vor (Draft, ChatGPT im Auftrag von Kaan). Offen sind die Design-Vorprüfung durch
+   Gemini, Claudes Sicherheitsreview und Kaans Freigabe; danach folgen Messtest und
+   Umsetzung (Codex, `Claude DB Review`, Grenze aus `SECURITY.md` mit Kaans OK).
 8. Quellenpaket für NotebookLM nach Verfahren (`docs/COLLABORATION.md`).
 9. D1-Code bleibt auf HOLD; D2 und D3 erst nach einer neuen Entscheidung zu D1
    einplanen. Der Vertrag aus #120 ist nur Dokumentation.
 10. E2: Security-Review des vollständigen Heads (Claude und Copilot).
-11. Roadmap: C3-Zelle auf den Beleg aus `docs/DECISIONS.md` korrigieren (eigener Docs-PR).
+11. Roadmap: C3-Zelle auf den Beleg aus `docs/DECISIONS.md` korrigieren und #140 in den
+    Zellen A2 und C5 nachtragen (eigener Docs-PR).
 
 ## Aufräumen der offenen PRs (Stand 18.10.2026)
 
@@ -161,18 +164,19 @@ Kaans OK ohne Merge geschlossen:
 | #134 | `cbf32f6` | Regeländerung ohne belegte Kaan-Entscheidung und ohne die nötigen Reviews; schwächt Schutzregeln ab (Entscheidung 07.10.2026) |
 | #118 | `8ab7fca` | Überholt durch #129 und #130; die C3-Entscheidung steht jetzt in `docs/DECISIONS.md` |
 
-Nach diesen Schließungen waren 16 PRs offen. Am 18.10.2026 sind 20 PRs offen;
-#140 wurde am 17.10.2026 um 21:33:51 UTC als
+Nach diesen Schließungen waren 16 PRs offen. Am 18.10.2026 um 01:10 UTC sind 21 PRs
+offen; #140 wurde am 17.10.2026 um 21:33:51 UTC als
 `9b11f7a89fe948d65d6b2eb3337111a5b11d3a57` gemergt. Die Betriebsabnahme
 bleibt laut #140 auf HOLD; #144 ist noch offen. Offene Fragen:
 
 - **Pause:** Die Entscheidung vom 09.10.2026 gilt als dokumentierte Reihenfolge:
   erst PRs, Konflikte und Merge-Gates bereinigen, dann pausieren. Die Bereinigung ist
-  bei 20 offenen PRs noch nicht abgeschlossen; die Pause steht daher noch aus. Bis
+  bei 21 offenen PRs noch nicht abgeschlossen; die Pause steht daher noch aus. Bis
   dahin starten laut derselben Entscheidung keine neuen Features. Am 18.10.2026 wurden
   dennoch #147 (D1-Codec, in keinen aktiven Pfad eingebunden), #148 (D3-Vertragsentwurf)
-  und #149 (Kimi und Grok im Laya-Shadow-Vergleich) geöffnet. Ob sie als Aufräumarbeit
-  gelten oder bis zum Master-Prompt warten, entscheidet Kaan.
+  und #149 (Kimi und Grok im Laya-Shadow-Vergleich) geöffnet, dazu #150 (Crash- und
+  Neustartprüfungen für den Worker-Dienst aus #140, Draft, Abnahme HOLD). Ob sie als
+  Aufräumarbeit gelten oder bis zum Master-Prompt warten, entscheidet Kaan.
 - **Entscheidung vom 18.10.2026 laut #148:** administrierte Core-Personenbindung für
   v0.2 und eine neue Envelope-Version statt einer zweiten Signatur. Sie ist bisher nur
   als Chat-Angabe in der PR-Beschreibung belegt und deshalb nicht in
