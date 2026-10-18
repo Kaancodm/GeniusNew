@@ -38,20 +38,16 @@ starten keinen Gemini-Modellauftrag und belegen weder Anmeldung noch Kontingent.
 
 ## Projektstand und Wiedereinstieg
 
-Die 21 Implementierungspunkte verwenden feste Merge-Commit-SHAs statt löschbarer
-Feature-Branch-Namen. Das Deck prüft die Commit-Existenz und die Zugehörigkeit zu
-lokalem `main`. „AUF MAIN“ bedeutet nur: Code gemergt, kein vollständiger Gate-PASS.
+Die Statuskorrekturen aus PR #115 sind übernommen: Nachweise verwenden den lokalen
+Verweis `refs/remotes/origin/main`; HTTP-Refresh führt weder Git-Fetch noch eine
+GitHub-CI-Abfrage aus. CI bleibt „nicht live abgefragt“. Gemergter Code zählt als
+Implementierung, fehlende Reviews (B4/B5) und Betriebsnachweise (A2/C2) bleiben HOLD.
+C5 zählt seinen gemergten Probe-Code, bleibt ohne Betriebsnachweis HOLD; E3 kommt vor den Portal-Schritten D1–D3.
+Das Deck erteilt keine Beta-/Release-Freigabe.
 
-Die Merge-Nachweise wurden am 05.10.2026 mit GitHub und lokalem `main` abgeglichen.
-Für `3497e699c3b42c51eb0d26742af7b3e6de042f58` wurde der GitHub-Check
-`contracts` als erfolgreich gelesen. Wechselt der main-SHA, wird diese historische
-CI-Evidenz als ungeprüft angezeigt.
-
-Der Wiedereinstieg folgt der Reihenfolge der offenen Punkte; E3 (frische Installation)
-kommt vor dem Portal. Bereits gemergte B1–B7 werden nicht erneut als „beginnen“
-angeboten. Offene Betriebs- und Reviewnachweise bleiben ausdrücklich sichtbar:
-eigene OS-Nutzer für Worker/Anker, produktiver Restore-Betrieb, aktuelle B4/B5-Reviews
-und unabhängiger Abschlussreview. Das Deck erteilt keine Beta-/Release-Freigabe.
+Ohne Antigravity kopiert der Gemini-Wiedereinstieg `gemini` statt `agy`. Die gelbe
+Anzeige bedeutet ungeprüfte Anmeldung; sie ist kein fehlgeschlagener Modelltest.
+Research-Karten und ihr Detailpanel zeigen die gespeicherte Quelle als Text.
 
 TERM-Kommandos zeigen auf den Checkout aus `--repo`, nicht auf ein zweites,
 möglicherweise veraltetes `~/GeniusNew`. Vorhandene lokale venv-Pythonpfade werden

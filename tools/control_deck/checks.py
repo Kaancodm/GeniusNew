@@ -26,27 +26,21 @@ BETA_GATES = [
     ("C3", "Approver-HTTP-Route", "b047798068f1d750f8c8ebf47c357fd7d771a53f"),
     ("C4", "HTTP-Härtung", "080f1f4e4460aa28b54ef3f9f698e598d8be03e5"),
     ("A2", "Landlock / Host-Dateien", "3297f939e99479249de352e96b2bb00aa9c67d8b"),
+    ("C5", "Betrieb + Restore", "3497e699c3b42c51eb0d26742af7b3e6de042f58"),
+    ("E3", "Fresh-host-Probe", None),
     ("D1", "Portal→Core-Vertrag", None),
     ("D2", "Portal-Identität", None),
     ("D3", "Portal-Ansichten", None),
-    ("C5", "Betrieb + Restore", "3497e699c3b42c51eb0d26742af7b3e6de042f58"),
     ("E1", "Persistenz-Angriffs-Demo", "122a6902fc8a88488dd9312b4803571fb85c8ab2"),
     ("E2", "Security-Review final", None),
-    ("E3", "Fresh-host-Probe", None),
 ]
 
-# Merge and CI evidence verified against GitHub and local main on 2026-10-05.
-VERIFIED_CI_SHA = "3497e699c3b42c51eb0d26742af7b3e6de042f58"
-GATE_ORDER = ("A1", "B0", "B1", "B2", "B3", "B4", "B5", "B6", "B7",
-              "C1", "C2", "C3", "C4", "A2", "C5", "E3", "D1", "D2", "D3", "E1", "E2")
-GATE_NOTES = {
-    "A2": "Eigener OS-Nutzer auf dem Server bleibt ungeprüft.",
-    "C2": "Anker-Dienst implementiert; produktive Nutzertrennung ungeprüft.",
-    "C5": "Restore-Probe-Code gemergt; produktiver Backup-/Restore-Betrieb ungeprüft.",
-    "B4": "Reviewnachweis am aktuellen Stand ungeprüft; Roadmap nennt Nachholbedarf.",
-    "B5": "Reviewnachweis am aktuellen Stand ungeprüft; Roadmap nennt Nachholbedarf.",
-    "E3": "Frische Installation vor Portal-Aufbau nachweisen; keinen Anker zurücksetzen.",
-    "E2": "Unabhängiges Gesamt-Review am exakten Release-Head erforderlich.",
+# The required DB reviews have not been evidenced at the current head.
+PENDING_REVIEWS = {"B4": 94, "B5": 95}
+PENDING_OPERATIONS = {
+    "C5": "Restore-Probe-Code gemergt; HOLD: produktiver Backup-/Restore-Betrieb nicht nachgewiesen",
+    "A2": "Landlock implementiert; HOLD: eigener Worker-OS-Nutzer im Betrieb nicht nachgewiesen",
+    "C2": "Ankerdienst implementiert; HOLD: eigener Anker-OS-Nutzer im Betrieb nicht nachgewiesen",
 }
 
 COMMANDS = {
@@ -183,28 +177,16 @@ def tool_status(name: str) -> dict[str, str]:
 def gate_status(repo: Path, ref: str | None) -> str:
     if ref is None:
         return "red"
-    is_commit = len(ref) == 40 and all(c in "0123456789abcdef" for c in ref)
-    target = ref if is_commit else (ref if ref.startswith("origin/") else f"origin/{ref}")
-    code, _ = _run(["git", "rev-parse", "--verify", f"{target}^{{commit}}"], cwd=repo)
+    proof = ref if len(ref) == 40 and all(c in "0123456789abcdef" for c in ref) else None
+    remote_ref = ref if ref.startswith("origin/") else f"origin/{ref}"
+    check = (["git", "cat-file", "-e", f"{proof}^{{commit}}"] if proof else
+             ["git", "show-ref", "--verify", "--quiet", f"refs/remotes/{remote_ref}"])
+    code, _ = _run(check, cwd=repo)
     if code != 0:
         return "red"
-    code, _ = _run(["git", "merge-base", "--is-ancestor", target, "main"], cwd=repo)
-    return "green" if code == 0 else ("yellow" if code == 1 else "red")
-
-
-def gate_records(repo: Path) -> list[dict[str, str]]:
-    records = []
-    for gate, name, ref in BETA_GATES:
-        state = gate_status(repo, ref)
-        detail = ("Merge-Commit auf main nachgewiesen; kein vollständiger Gate-PASS."
-                  if state == "green" else
-                  "Code vorhanden, aber nicht auf main." if state == "yellow" else
-                  "Kein Merge-Nachweis auf main verfügbar.")
-        if gate in GATE_NOTES:
-            detail += " " + GATE_NOTES[gate]
-        records.append({"id": gate, "name": name, "status": state,
-                        "detail": detail, "commit": ref or ""})
-    return records
+    code, _ = _run(["git", "merge-base", "--is-ancestor", proof or remote_ref,
+                    "refs/remotes/origin/main"], cwd=repo)
+    return "green" if code == 0 else "yellow"
 
 
 def python_for(repo: Path) -> str:
@@ -229,71 +211,68 @@ def _priorities(gates: list[dict[str, str]], tools: dict[str, dict[str, str]]) -
     for tool in ("codex", "gh", "gemini"):
         if tools[tool]["status"] != "green":
             steps.append({"title": f"{tool} anmelden", "detail": tools[tool]["detail"], "action": None})
-    by_id = {gate["id"]: gate for gate in gates}
-    for gate in (by_id[name] for name in GATE_ORDER if name in by_id):
+    for gate in gates:
         if gate["status"] != "green":
-            action = "tests" if gate["id"] in {"A1", "A2", "B0"} else None
-            steps.append({"title": f"{gate['id']} {gate['name']}", "detail": "nächstes offenes Beta-Gate", "action": action})
+            action = "tests" if gate["id"] in {"A1", "B0"} else None
+            steps.append({"title": f"{gate['id']} {gate['name']}",
+                          "detail": gate["detail"], "action": action})
     return steps[:3]
 
 
 def project_resume(
     gates: list[dict[str, str]], tools: dict[str, dict[str, str]], repo: Path
 ) -> dict[str, Any]:
-    by_id = {gate["id"]: gate for gate in gates}
     missing = [name for name in ("codex", "gh", "gemini") if tools[name]["status"] != "green"]
-    open_gates = [by_id[name] for name in GATE_ORDER
-                  if name in by_id and by_id[name]["status"] != "green"]
     if missing:
         focus = "Gate 0 – Entwicklungsumgebung fertigstellen"
-        stopped = "Agent-/GitHub-Logins prüfen; Modellkontingent separat prüfen"
-    elif open_gates:
-        focus = open_gates[0]["id"] + " – " + open_gates[0]["name"]
-        stopped = "Nächster offener Implementierungs-/Nachweisschritt"
+        stopped = "Agent-/GitHub-Logins"
     else:
-        focus = "Implementierungen auf main – Abschlussnachweise prüfen"
-        stopped = "Gesamtprüfung und ausdrückliche Release-Freigabe stehen separat"
+        next_gate = next((gate for gate in gates if gate["status"] != "green"), None)
+        focus = (f"{next_gate['id']} – {next_gate['name']}" if next_gate else
+                 "Implementierungen auf main nachgewiesen")
+        stopped = (next_gate["detail"] if next_gate else
+                   "Beta-Freigabe benötigt Betriebs- und Security-Nachweise am aktuellen Head")
 
     steps: list[dict[str, str | None]] = []
-    login_commands = {"codex": "codex login", "gh": "gh auth login", "gemini": "agy"}
+    login_commands = {
+        "codex": "codex login",
+        "gh": "gh auth login",
+        "gemini": "agy" if _which("agy") else "gemini",
+    }
     for name in missing:
-        steps.append({"title": f"{name} anmelden", "type": "command",
-                      "value": login_commands[name],
-                      "detail": "TERM-Befehl kopieren; Auth und Kontingent getrennt prüfen"})
-    if by_id["A1"]["status"] != "green":
-        steps.append({"title": "A1 Seccomp – PR #57", "type": "url",
-                      "value": "https://github.com/Kaancodm/GeniusNew/pull/57",
-                      "detail": "Aktuellen Merge-/Review-Nachweis prüfen"})
-    if by_id["B0"]["status"] != "green":
-        steps.append({"title": "B0 DB-Design – PR #70", "type": "url",
-                      "value": "https://github.com/Kaancodm/GeniusNew/pull/70",
-                      "detail": "Aktuellen Merge-/Review-Nachweis prüfen"})
-    for gate in open_gates:
-        if gate["id"] in {"A1", "B0"}:
+        steps.append({
+            "title": f"{name} Anmeldung prüfen",
+            "type": "command",
+            "value": login_commands[name],
+            "detail": "Lokale Prüfung bestätigt keine Anmeldung; CLI öffnen und Anmeldung manuell prüfen",
+        })
+    for gate in gates:
+        if gate["status"] == "green":
             continue
-        document = "docs/setup/SERVER-TOOL.md" if gate["id"] == "E3" else "docs/ROADMAP-V02.md"
-        steps.append({"title": gate["id"] + " " + gate["name"], "type": "url",
-                      "value": "https://github.com/Kaancodm/GeniusNew/blob/main/" + document,
-                      "detail": GATE_NOTES.get(gate["id"], "Nachweis am exakten Head prüfen")})
+        review_pr = PENDING_REVIEWS.get(gate["id"])
+        steps.append({
+            "title": f"{gate['id']} {gate['name']}",
+            "type": "url" if review_pr else "action" if gate["id"] in {"A1", "B0"} else "info",
+            "value": (f"https://github.com/Kaancodm/GeniusNew/pull/{review_pr}"
+                      if review_pr else "tests" if gate["id"] in {"A1", "B0"} else ""),
+            "detail": gate["detail"],
+        })
+        if len(steps) >= 5:
+            break
 
-    _, main_sha = _run(["git", "rev-parse", "main"], cwd=repo)
-    ci_matches = main_sha == VERIFIED_CI_SHA
+    merged = sum(1 for gate in gates if gate.get("implementation_status") == "green")
     return {
-        "focus": focus, "stopped_at": stopped,
-        "main_head": repo_status(repo).get("head", ""),
-        "main_sha": main_sha,
-        "merged_gates": sum(1 for gate in gates if gate["status"] == "green"),
-        "total_gates": len(gates), "resume": steps[:5],
+        "focus": focus,
+        "stopped_at": stopped,
+        "main_head": _run(["git", "rev-parse", "--short=12", "refs/remotes/origin/main"],
+                          cwd=repo)[1],
         "release_ready": False,
-        "evidence_note": "Code auf main ist kein Beta-/Release-PASS. Vollständige Gates am selben SHA bleiben zu prüfen.",
-        "ci": {"status": "green" if ci_matches else "yellow",
-               "detail": "contracts erfolgreich · geprüft 05.10.2026" if ci_matches else
-                         "Kein aktueller CI-Nachweis für diesen main-SHA"},
-        "pending_evidence": [
-            "E3: frische Installation auf sauberem Host nachweisen",
-            "A2/C2: eigene OS-Nutzer und produktives Betriebsmodell ungeprüft",
-            "B4/B5: aktuelle Review-Freigaben ungeprüft; Roadmap nennt Nachholbedarf",
-        ],
+        "ci": {"status": "yellow", "detail": "nicht live abgefragt"},
+        "evidence_note": ("Lokaler origin/main-Stand; keine Live-Abfrage von GitHub. "
+                          "Code auf main ist kein Beta-/Release-PASS."),
+        "merged_gates": merged,
+        "total_gates": len(gates),
+        "resume": steps[:5],
     }
 
 
@@ -310,7 +289,25 @@ def research_items() -> list[dict[str, str]]:
 
 
 def snapshot(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
-    gates = gate_records(repo)
+    gates = []
+    for gate, name, ref in BETA_GATES:
+        status = gate_status(repo, ref)
+        implementation_status = status
+        review_pr = PENDING_REVIEWS.get(gate)
+        if status == "green" and (review_pr or gate in PENDING_OPERATIONS):
+            status = "yellow"
+        if implementation_status == "green" and review_pr:
+            detail = (f"PR #{review_pr} gemergt; "
+                      "HOLD: erforderlicher Claude-DB-Review am PR-Head nicht nachgewiesen; "
+                      "Nachprüfung auf main 7f81e24 dokumentiert, ersetzt dieses Gate nicht")
+        elif implementation_status == "green" and gate in PENDING_OPERATIONS:
+            detail = PENDING_OPERATIONS[gate]
+        else:
+            detail = ("Implementierung auf origin/main nicht nachgewiesen" if status == "red" else
+                      "Implementierung auf origin/main nachgewiesen" if status == "green" else
+                      "Implementierungsnachweis noch nicht auf origin/main")
+        gates.append({"id": gate, "name": name, "status": status, "detail": detail,
+                      "implementation_status": implementation_status})
     tools = {
         "claude": tool_status("claude"),
         "codex": tool_status("codex"),
@@ -372,11 +369,11 @@ def agent_hub(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
          "models": [
              {"name": "Gemini 3.8 Flash", "purpose": "Kleine Textreviews",
               "verified_on": "05.10.2026", "model_id": "GEMINI_3_8_FLASH_THINKING",
-              "term_command": "/home/kaan/src/geniusnew-abacus-setup-20260930/start.sh flash",
+              "term_command": shlex.quote(str(Path.home() / "src/geniusnew-abacus-setup-20260930/start.sh")) + " flash",
               "button_label": "Flash · TERM kopieren"},
              {"name": "Sonnet 5.5", "purpose": "Anspruchsvolle Textreviews",
               "verified_on": "05.10.2026", "model_id": "CLAUDE_V5_5_SONNET",
-              "term_command": "/home/kaan/src/geniusnew-abacus-setup-20260930/start.sh sonnet",
+              "term_command": shlex.quote(str(Path.home() / "src/geniusnew-abacus-setup-20260930/start.sh")) + " sonnet",
               "button_label": "Sonnet · TERM kopieren"},
          ],
          "note": "Testnachweis vom 05.10.2026: Antworten und Starter geprüft, Plan-Modus. "
