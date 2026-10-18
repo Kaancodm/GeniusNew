@@ -39,8 +39,8 @@ def new_session_token() -> str:
     """Mint an opaque token whose raw value must only reach the browser."""
     try:
         raw = secrets.token_bytes(_TOKEN_BYTES)
-    except OSError as exc:
-        raise ContractError("session entropy unavailable") from exc
+    except OSError:
+        raw = None
     if type(raw) is not bytes or len(raw) != _TOKEN_BYTES:
         raise ContractError("session entropy unavailable")
     return _encode(raw)
