@@ -1134,11 +1134,11 @@ class DeckTest(ServerToolTestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_harpa_token_temporary_file_is_removed_after_generation_failure(self):
-        """A generator that writes partial credential bytes must leave no copy."""
-        python = self.sb.bin / "python3"
-        python.unlink()
-        python.write_text("#!/bin/bash\nprintf 'partial-credential-canary'\nexit 1\n")
-        python.chmod(0o700)
+        """A failed credential write must remove even partial private bytes."""
+        tee = self.sb.bin / "tee"
+        tee.unlink()
+        tee.write_text("#!/bin/bash\nprintf 'partial-credential-canary' >\"$1\"\nexit 1\n")
+        tee.chmod(0o700)
         scratch = self.sb.tmp / "token-scratch"
         scratch.mkdir()
         result = self.sb.run("deck", "--apply", TMPDIR=str(scratch))
@@ -1170,21 +1170,22 @@ class DeckTest(ServerToolTestCase):
 
     def test_harpa_token_never_enters_repository_tmpdir(self):
         """The generator must not write a credential to an in-repository TMPDIR."""
-        python = self.sb.bin / "python3"
-        python.unlink()
-        readlink = shutil.which("readlink")
-        self.assertIsNotNone(readlink)
-        python.write_text(
-            f'#!/bin/bash\n{readlink} /proc/self/fd/1 >"$STATE/token_sink"\n'
-            "printf 'fake-generated-token\\n'\n"
-        )
-        python.chmod(0o700)
         result = self.sb.run("deck", "--apply", TMPDIR=str(self.sb.repo))
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.sb.harpa_credential.read_text(), "fake-generated-token\n")
-        sink = (self.sb.state / "token_sink").read_text().strip()
-        self.assertFalse(sink.startswith(str(self.sb.repo)), sink)
+        private_source = f"sudo install -m 0600 {self.sb.harpa_credential.parent}/.harpa-token."
+        self.assertTrue(self.sb.called(private_source), self.sb.calls())
         self.assertEqual(self.sb.harpa_credential.stat().st_mode & 0o777, 0o600)
+
+    def test_root_setup_never_executes_repository_python(self):
+        """A deck user's writable venv must not become a root token generator."""
+        python = self.sb.repo / ".venv" / "bin" / "python3"
+        python.parent.mkdir(parents=True)
+        python.write_text("#!/bin/bash\nprintf 'executed' >\"$STATE/repo_python_executed\"\nexit 1\n")
+        python.chmod(0o700)
+        result = self.sb.run("deck", "--apply", FAKE_UID="0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.sb.state / "repo_python_executed").exists())
+        self.assertIn(f"ExecStart={python} -m tools.control_deck", self.sb.deck_unit.read_text())
 
     def test_unsafe_harpa_credential_paths_are_refused(self):
         """Reject relative or unsafe credential paths before writing the service unit."""
@@ -1198,11 +1199,10 @@ class DeckTest(ServerToolTestCase):
 
     def test_empty_generated_harpa_token_is_refused(self):
         """Abort installation before writing the unit if token generation produces no data."""
-        python = self.sb.bin / "python3"
-        python.unlink()
-        real_python = shutil.which("python3")
-        python.write_text(f'#!/bin/bash\ncase "$2" in *secrets*) exit 0;; esac\nexec {real_python} "$@"\n')
-        python.chmod(0o700)
+        tee = self.sb.bin / "tee"
+        tee.unlink()
+        tee.write_text('#!/bin/bash\ncat >/dev/null\n: >"$1"\n')
+        tee.chmod(0o700)
         result = self.sb.run("deck", "--apply")
         self.assertEqual(result.returncode, 1)
         self.assertIn("HARPA-Eingangsschlüssel fehlt", result.stderr)

@@ -686,11 +686,13 @@ cmd_deck() {
         || die "HARPA-Schlüssel braucht privaten Besitz und Modus 0600"
     else
       (
+        # Setup can be invoked as root; never execute a repo-owned venv to
+        # create a root-managed credential.
         # Keep transient credentials under the checked private directory even
         # when TMPDIR points at the repository or another shared location.
         token_tmp="$(as_root mktemp "$credential_dir/.harpa-token.XXXXXXXX")"
         trap 'as_root rm -f -- "$token_tmp"' EXIT
-        "$python" -c 'import secrets; print(secrets.token_urlsafe(48))' | as_root tee "$token_tmp" >/dev/null
+        /usr/bin/python3 -I -S -c 'import secrets; print(secrets.token_urlsafe(48))' | as_root tee "$token_tmp" >/dev/null
         as_root install -m 0600 "$token_tmp" "$HARPA_CREDENTIAL"
       )
     fi
