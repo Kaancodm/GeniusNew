@@ -9,31 +9,39 @@ import time
 from pathlib import Path
 from typing import Any
 
-DEFAULT_REPO = Path(os.environ.get("GENIUSNEW_REPO", "/home/kaan/GeniusNew"))
+DEFAULT_REPO = Path(os.environ.get("GENIUSNEW_REPO", Path(__file__).resolve().parents[2]))
 
 BETA_GATES = [
-    ("A1", "Worker-Seccomp", "origin/codex/seccomp-process-boundary-v2"),
-    ("B0", "DB-Design", "origin/chatgpt/db-design"),
-    ("B1", "PostgreSQL-Fundament", None),
-    ("B2", "Job-Ledger persistent", None),
-    ("B3", "Acceptance-Ledger persistent", None),
-    ("B4", "Pending Jobs + Approvals", None),
-    ("B5", "Audit-Chain persistent", None),
-    ("B6", "Manipulationssichtbarkeit", None),
-    ("B7", "Crash-Recovery", None),
-    ("C1", "Server-Entrypoint", "origin/claude/serve-entrypoint"),
-    ("C2", "Anchor-Service", "origin/claude/anchor-service"),
-    ("C3", "Approver-HTTP-Route", None),
-    ("C4", "HTTP-Härtung", "origin/claude/http-limits"),
-    ("A2", "Landlock / Host-Dateien", "origin/claude/a2-landlock-design"),
+    ("A1", "Worker-Seccomp", "8a358d1aa620c664c1f073eb87febdddf81f130a"),
+    ("B0", "DB-Design", "a3958f057e2bee370bf0f3d1ff43776679a55db3"),
+    ("B1", "PostgreSQL-Fundament", "706e76d800f86b7618f0737a5e9ced6529556496"),
+    ("B2", "Job-Ledger persistent", "9a797b1d951651b1e72a353af6c8fb1bf0b412a4"),
+    ("B3", "Acceptance-Ledger persistent", "3b81265e9aa332f697a2d6fe3166bb5e7d66640f"),
+    ("B4", "Pending Jobs + Approvals", "18381c2237856c93b14c283a1bda636cb398d1a1"),
+    ("B5", "Audit-Chain persistent", "a3f2a3c55fb112a872b872d065e3c9d10df53a83"),
+    ("B6", "Manipulationssichtbarkeit", "a9705d10136ddd3ab0e48538db69e874b79df491"),
+    ("B7", "Crash-Recovery", "dfbc50bc7f4f921d495f2c71156db8cd496e05dd"),
+    ("C1", "Server-Entrypoint", "67c525f17d3f5b4c4855f7976eedd9dc62f727cc"),
+    ("C2", "Anchor-Service", "24f521bb81a3ae604da3aef00072690f7df4dd16"),
+    ("C3", "Approver-HTTP-Route", "b047798068f1d750f8c8ebf47c357fd7d771a53f"),
+    ("C4", "HTTP-Härtung", "080f1f4e4460aa28b54ef3f9f698e598d8be03e5"),
+    ("A2", "Landlock / Host-Dateien", "3297f939e99479249de352e96b2bb00aa9c67d8b"),
+    ("C5", "Betrieb + Restore", "3497e699c3b42c51eb0d26742af7b3e6de042f58"),
+    ("E3", "Fresh-host-Probe", None),
     ("D1", "Portal→Core-Vertrag", None),
     ("D2", "Portal-Identität", None),
     ("D3", "Portal-Ansichten", None),
-    ("C5", "Betrieb + Restore", None),
-    ("E1", "Persistenz-Angriffs-Demo", None),
+    ("E1", "Persistenz-Angriffs-Demo", "122a6902fc8a88488dd9312b4803571fb85c8ab2"),
     ("E2", "Security-Review final", None),
-    ("E3", "Fresh-host-Probe", None),
 ]
+
+# The required DB reviews have not been evidenced at the current head.
+PENDING_REVIEWS = {"B4": 94, "B5": 95, "C3": 111}
+PENDING_OPERATIONS = {
+    "C5": "Restore-Probe-Code gemergt; HOLD: produktiver Backup-/Restore-Betrieb nicht nachgewiesen",
+    "A2": "Landlock implementiert; HOLD: eigener Worker-OS-Nutzer im Betrieb nicht nachgewiesen",
+    "C2": "Ankerdienst implementiert; HOLD: eigener Anker-OS-Nutzer im Betrieb nicht nachgewiesen",
+}
 
 COMMANDS = {
     "tmux": "tmux attach -t genius",
@@ -127,6 +135,13 @@ def docker_status() -> dict[str, str]:
 
 
 def tool_status(name: str) -> dict[str, str]:
+    """Probe CLI availability and supported login status without model calls.
+
+    Gemini prefers Antigravity's model listing; a standalone Gemini CLI
+    is reported as installed with authentication unverified.
+    Invalid Claude auth JSON is treated as logged out, but a non-object
+    JSON value raises AttributeError. Output decoding errors propagate.
+    """
     if name == "gemini":
         agy = _which("agy")
         if agy:
@@ -159,16 +174,8 @@ def tool_status(name: str) -> dict[str, str]:
         code, _ = _run([exe, "auth", "status"], cwd=Path.home())
         return _simple("green" if code == 0 else "yellow", "logged in" if code == 0 else "login required")
     if name == "gemini":
-        code, out = _run(
-            [exe, "-p", "Reply only OK", "--output-format", "json"],
-            cwd=Path.home(),
-            timeout=8.0,
-        )
-        logged_in = code == 0 and '"error"' not in out
-        return _simple(
-            "green" if logged_in else "yellow",
-            "logged in" if logged_in else "login required",
-        )
+        return {"status": "yellow", "detail": "CLI installiert · Anmeldung ungeprüft",
+                "auth_status": "unverified"}
 
     code, out = _run([exe, "--version"], cwd=Path.home())
     version = out.splitlines()[0] if out else "installed"
@@ -176,89 +183,130 @@ def tool_status(name: str) -> dict[str, str]:
 
 
 def gate_status(repo: Path, ref: str | None) -> str:
+    """Rate a commit or remote ref against the local origin/main history.
+
+    Return red for absent evidence, green for an ancestor of origin/main,
+    and yellow for available evidence whose ancestry check did not pass.
+    Accept a 40-character lowercase commit hash or a remote branch name
+    with an optional origin/ prefix; no fetch is performed.
+    """
     if ref is None:
         return "red"
+    proof = ref if len(ref) == 40 and all(c in "0123456789abcdef" for c in ref) else None
     remote_ref = ref if ref.startswith("origin/") else f"origin/{ref}"
-    code, _ = _run(
-        ["git", "show-ref", "--verify", "--quiet", f"refs/remotes/{remote_ref}"],
-        cwd=repo,
-    )
+    check = (["git", "cat-file", "-e", f"{proof}^{{commit}}"] if proof else
+             ["git", "show-ref", "--verify", "--quiet", f"refs/remotes/{remote_ref}"])
+    code, _ = _run(check, cwd=repo)
     if code != 0:
         return "red"
-    code, _ = _run(["git", "merge-base", "--is-ancestor", remote_ref, "main"], cwd=repo)
+    code, _ = _run(["git", "merge-base", "--is-ancestor", proof or remote_ref,
+                    "refs/remotes/origin/main"], cwd=repo)
     return "green" if code == 0 else "yellow"
 
 
+def python_for(repo: Path) -> str:
+    """Use an absolute checkout venv path, preserving its Python symlink, or python3."""
+    python = repo.resolve() / ".venv/bin/python3"
+    return str(python) if python.exists() else "python3"
+
+
+def commands_for(repo: Path) -> dict[str, str]:
+    """Build copyable shell commands with quoted checkout and interpreter paths."""
+    root = shlex.quote(str(repo))
+    executable = shlex.quote(python_for(repo))
+    return {
+        "tmux": COMMANDS["tmux"], "docker": COMMANDS["docker"],
+        "git": f"cd {root} && git status --short --branch",
+        "tests": f"cd {root} && {executable} -m unittest discover -s tests -q",
+        "demo": f"cd {root} && ./scripts/demo.sh",
+        "refusals": f"cd {root} && {executable} scripts/refusals.py",
+    }
+
+
+def _login_needs_action(state: dict[str, str]) -> bool:
+    """Require login action for non-green states except yellow with unverified auth."""
+    return state["status"] != "green" and not (
+        state["status"] == "yellow" and state.get("auth_status") == "unverified"
+    )
+
+
 def _priorities(gates: list[dict[str, str]], tools: dict[str, dict[str, str]]) -> list[dict[str, str | None]]:
+    """Return up to three priorities, placing required logins before open gates."""
     steps: list[dict[str, str | None]] = []
     for tool in ("codex", "gh", "gemini"):
-        if tools[tool]["status"] != "green":
+        if _login_needs_action(tools[tool]):
             steps.append({"title": f"{tool} anmelden", "detail": tools[tool]["detail"], "action": None})
     for gate in gates:
         if gate["status"] != "green":
-            action = "tests" if gate["id"] in {"A1", "A2", "B0"} else None
-            steps.append({"title": f"{gate['id']} {gate['name']}", "detail": "nächstes offenes Beta-Gate", "action": action})
+            action = "tests" if gate["id"] in {"A1", "B0"} else None
+            steps.append({"title": f"{gate['id']} {gate['name']}",
+                          "detail": gate["detail"], "action": action})
     return steps[:3]
 
 
 def project_resume(
     gates: list[dict[str, str]], tools: dict[str, dict[str, str]], repo: Path
 ) -> dict[str, Any]:
-    by_id = {gate["id"]: gate for gate in gates}
-    missing = [name for name in ("codex", "gh", "gemini") if tools[name]["status"] != "green"]
+    """Build a project focus and up to five steps from local gate and CLI evidence.
+
+    Report the locally cached origin/main head without querying live CI
+    or granting release approval.
+    """
+    missing = [name for name in ("codex", "gh", "gemini") if _login_needs_action(tools[name])]
     if missing:
         focus = "Gate 0 – Entwicklungsumgebung fertigstellen"
         stopped = "Agent-/GitHub-Logins"
-    elif by_id["A1"]["status"] != "green":
-        focus = "A1 – Worker-Seccomp"
-        stopped = "PR #57 ist geprüft, aber noch nicht auf main"
-    elif by_id["B0"]["status"] != "green":
-        focus = "B0 – Datenbankdesign"
-        stopped = "PR #70 ist reviewt, aber noch nicht auf main"
     else:
-        focus = "B1 – PostgreSQL-Fundament"
-        stopped = "B1 kann begonnen werden"
+        next_gate = next((gate for gate in gates if gate["status"] != "green"), None)
+        focus = (f"{next_gate['id']} – {next_gate['name']}" if next_gate else
+                 "Implementierungen auf main nachgewiesen")
+        stopped = (next_gate["detail"] if next_gate else
+                   "Beta-Freigabe benötigt Betriebs- und Security-Nachweise am aktuellen Head")
 
     steps: list[dict[str, str | None]] = []
     login_commands = {
         "codex": "codex login",
         "gh": "gh auth login",
-        "gemini": "agy",
+        "gemini": "agy" if _which("agy") else "gemini",
     }
     for name in missing:
         steps.append({
-            "title": f"{name} anmelden",
+            "title": f"{name} Anmeldung prüfen",
             "type": "command",
             "value": login_commands[name],
-            "detail": "TERM-Befehl kopieren und Auth im Browser bestätigen",
+            "detail": "Lokale Prüfung bestätigt keine Anmeldung; CLI öffnen und Anmeldung manuell prüfen",
         })
-    if by_id["A1"]["status"] != "green":
+    if tools["gemini"].get("auth_status") == "unverified":
         steps.append({
-            "title": "A1 Seccomp – PR #57",
-            "type": "url",
-            "value": "https://github.com/Kaancodm/GeniusNew/pull/57",
-            "detail": "Server-Evidenz grün; Merge-Entscheidung offen",
+            "title": "gemini Anmeldung ungeprüft",
+            "type": "command",
+            "value": login_commands["gemini"],
+            "detail": "Optionale manuelle Prüfung; lokale Installation belegt keine Anmeldung",
         })
-    if by_id["B0"]["status"] != "green":
+    for gate in gates:
+        if gate["status"] == "green":
+            continue
+        review_pr = PENDING_REVIEWS.get(gate["id"])
         steps.append({
-            "title": "B0 DB-Design – PR #70",
-            "type": "url",
-            "value": "https://github.com/Kaancodm/GeniusNew/pull/70",
-            "detail": "Claude DB Review: APPROVED; Merge-Entscheidung offen",
+            "title": f"{gate['id']} {gate['name']}",
+            "type": "url" if review_pr else "action" if gate["id"] in {"A1", "B0"} else "info",
+            "value": (f"https://github.com/Kaancodm/GeniusNew/pull/{review_pr}"
+                      if review_pr else "tests" if gate["id"] in {"A1", "B0"} else ""),
+            "detail": gate["detail"],
         })
-    if by_id["B0"]["status"] == "green":
-        steps.append({
-            "title": "B1 PostgreSQL-Fundament",
-            "type": "action",
-            "value": "tests",
-            "detail": "Baseline prüfen, danach B1-Leaf-Issue/Branch starten",
-        })
+        if len(steps) >= 5:
+            break
 
-    merged = sum(1 for gate in gates if gate["status"] == "green")
+    merged = sum(1 for gate in gates if gate.get("implementation_status") == "green")
     return {
         "focus": focus,
         "stopped_at": stopped,
-        "main_head": repo_status(repo).get("head", ""),
+        "main_head": _run(["git", "rev-parse", "--short=12", "refs/remotes/origin/main"],
+                          cwd=repo)[1],
+        "release_ready": False,
+        "ci": {"status": "yellow", "detail": "nicht live abgefragt"},
+        "evidence_note": ("Lokaler origin/main-Stand; keine Live-Abfrage von GitHub. "
+                          "Code auf main ist kein Beta-/Release-PASS."),
         "merged_gates": merged,
         "total_gates": len(gates),
         "resume": steps[:5],
@@ -278,10 +326,33 @@ def research_items() -> list[dict[str, str]]:
 
 
 def snapshot(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
-    gates = [
-        {"id": gate, "name": name, "status": gate_status(repo, ref)}
-        for gate, name, ref in BETA_GATES
-    ]
+    """Collect local project, service, CLI, research, and command status.
+
+    Keep implementation ancestry separate from pending review and
+    operational evidence so merged code can still remain on hold.
+    Output decoding errors and non-object Claude auth or research JSON
+    propagate as UnicodeError and AttributeError, respectively.
+    """
+    gates = []
+    for gate, name, ref in BETA_GATES:
+        status = gate_status(repo, ref)
+        implementation_status = status
+        review_pr = PENDING_REVIEWS.get(gate)
+        if status == "green" and (review_pr or gate in PENDING_OPERATIONS):
+            status = "yellow"
+        if implementation_status == "green" and review_pr:
+            detail = (f"PR #{review_pr} gemergt; "
+                      "HOLD: erforderlicher Claude-DB-Review am PR-Head nicht nachgewiesen")
+            if gate in {"B4", "B5"}:
+                detail += "; Nachprüfung auf main 7f81e24 dokumentiert, ersetzt dieses Gate nicht"
+        elif implementation_status == "green" and gate in PENDING_OPERATIONS:
+            detail = PENDING_OPERATIONS[gate]
+        else:
+            detail = ("Implementierung auf origin/main nicht nachgewiesen" if status == "red" else
+                      "Implementierung auf origin/main nachgewiesen" if status == "green" else
+                      "Implementierungsnachweis noch nicht auf origin/main")
+        gates.append({"id": gate, "name": name, "status": status, "detail": detail,
+                      "implementation_status": implementation_status})
     tools = {
         "claude": tool_status("claude"),
         "codex": tool_status("codex"),
@@ -305,7 +376,7 @@ def snapshot(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
             "genius session" if Path(f"/tmp/tmux-{os.getuid()}/default").exists() else "check from TERM",
         ),
         "gates": gates,
-        "commands": COMMANDS,
+        "commands": commands_for(repo),
     }
 
 def agent_socket() -> str:
@@ -337,9 +408,22 @@ def agent_hub(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
          "note": "Vorhandenen Bot auf deinem Gerät öffnen. SSH-Einrichtung allein ist kein Live-Nachweis.",
          "disabled_label": "Direktstart nicht verfügbar"},
         {"id": "abacus", "name": "Abacus.AI", "status": "yellow",
-         "detail": "ChatLLM im Browser · Anmeldung wird dort geprüft",
+         "status_label": "TEXT-REVIEW GEPRÜFT",
+         "detail": "Browser-Zugang und geprüfte CLI-Textreviews · Kontingent aktuell ungeprüft",
          "url": "https://apps.abacus.ai/chatllm/", "url_label": "Abacus.AI öffnen",
-         "note": "Vorläufiger Ersatz für Grok Build · kein Server-CLI-, Repo- oder Secret-Zugriff."},
+         "models": [
+             {"name": "Gemini 3.8 Flash", "purpose": "Kleine Textreviews",
+              "verified_on": "05.10.2026", "model_id": "GEMINI_3_8_FLASH_THINKING",
+              "term_command": shlex.quote(str(Path.home() / "src/geniusnew-abacus-setup-20260930/start.sh")) + " flash",
+              "button_label": "Flash · TERM kopieren"},
+             {"name": "Sonnet 5.5", "purpose": "Anspruchsvolle Textreviews",
+              "verified_on": "05.10.2026", "model_id": "CLAUDE_V5_5_SONNET",
+              "term_command": shlex.quote(str(Path.home() / "src/geniusnew-abacus-setup-20260930/start.sh")) + " sonnet",
+              "button_label": "Sonnet · TERM kopieren"},
+         ],
+         "note": "Testnachweis vom 05.10.2026: Antworten und Starter geprüft, Plan-Modus. "
+                 "Vor jedem Auftrag Kontingent prüfen. Repo-Automatik ungeprüft. "
+                 "Das Deck startet keine Abacus-Aufträge."},
     ]
     installed = tool_status("hermes")
     running = agent_session("hermes")

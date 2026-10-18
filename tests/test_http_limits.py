@@ -1,13 +1,15 @@
 """Gate C4: one caller cannot spend everyone's workers, and connections are capped."""
 
+import io
 import json
 import socket
 import threading
 import time
 import unittest
+from http.client import HTTPMessage
 
 from geniusnew.contracts import ContractError
-from geniusnew.http_entry import HttpEntry, PrincipalRegistry, REASONS, serve
+from geniusnew.http_entry import HttpEntry, PrincipalRegistry, REASONS, make_handler, serve
 
 API_KEY = b'API-KEY-CANARY-FOR-THE-LIMIT-TESTS'
 OTHER_KEY = b'SECOND-KEY-CANARY-FOR-LIMIT-TESTS'
@@ -243,6 +245,130 @@ class ConnectionCapTest(unittest.TestCase):
         while not self.server._slots._value and time.monotonic() < deadline:
             time.sleep(0.01)
         self.assertTrue(self.served(self.connect()))
+
+
+class DuplicateHeaderTest(unittest.TestCase):
+    CASES = (
+        ('Content-Length', str(len(BODY)), str(len(BODY) + 10)),
+        ('Transfer-Encoding', 'chunked', 'gzip'),
+        ('Host', 'core.invalid', 'other.invalid'),
+        ('Authorization', 'Bearer ' + API_KEY.decode(), 'Bearer ' + OTHER_KEY.decode()),
+    )
+
+    def wire(self, name, first, second, *, second_name=None, method='POST',
+             expect=False, include_body=True):
+        headers = [
+            ('Host', 'core.invalid'),
+            ('Content-Type', 'application/json'),
+            ('Authorization', 'Bearer ' + API_KEY.decode()),
+            ('Content-Length', str(len(BODY))),
+            ('Connection', 'keep-alive'),
+        ]
+        headers = [(key, value) for key, value in headers if key.lower() != name.lower()]
+        headers.extend(((name, first), (second_name or name, second)))
+        if expect:
+            headers.append(('Expect', '100-continue'))
+        head = method + ' /jobs HTTP/1.1\r\n'
+        head += ''.join(key + ': ' + value + '\r\n' for key, value in headers)
+        return (head + '\r\n').encode() + (BODY if include_body else b'')
+
+    def assert_refused(self, wire, *, head=False):
+        reads, mappings, handled = [], [], []
+        submit = Recorder()
+
+        class BodyReader(io.BytesIO):
+            def read(self, *arguments):
+                reads.append(arguments)
+                return super().read(*arguments)
+
+        class RawHeaders(HTTPMessage):
+            def items(self):
+                mappings.append(True)
+                return super().items()
+
+        class TrackedEntry(HttpEntry):
+            def handle(self, **arguments):
+                handled.append(arguments)
+                return super().handle(**arguments)
+
+        entry = TrackedEntry(registry=registry(), submit=submit)
+        handler_type = make_handler(entry)
+        handler_type.MessageClass = RawHeaders
+        # Use the real request parser, with only its streams instrumented.
+        with BodyReader(wire) as reader, io.BytesIO() as writer:
+            handler = handler_type.__new__(handler_type)
+            handler.rfile, handler.wfile = reader, writer
+            handler.handle_one_request()
+            response = writer.getvalue()
+        self.assertEqual(reads, [], 'duplicate headers must be refused before a body read')
+        self.assertEqual(mappings, [], 'raw header multiplicity must survive until refusal')
+        self.assertEqual(handled, [], 'the entrance must not receive ambiguous headers')
+        self.assertEqual(submit.calls, [])
+        self.assertTrue(handler.close_connection)
+        headers, body = response.split(b'\r\n\r\n', 1)
+        self.assertTrue(headers.startswith(b'HTTP/1.1 400 '), response)
+        self.assertIn(b'\r\nConnection: close', headers)
+        if head:
+            self.assertEqual(body, b'')
+        else:
+            self.assertEqual(json.loads(body), {'error': 'MALFORMED_REQUEST'})
+
+    def check_header(self, name, first, other):
+        for second in (first, other):
+            for second_name in (name, name.swapcase()):
+                with self.subTest(name=name, first=first, second=second,
+                                  second_name=second_name):
+                    self.assert_refused(self.wire(name, first, second, second_name=second_name))
+
+    def test_duplicate_content_length_is_refused_even_when_values_match(self):
+        self.check_header(*self.CASES[0])
+        self.check_header('Content-Length', '5', '50')
+
+    def test_duplicate_transfer_encoding_is_malformed_before_the_chunked_refusal(self):
+        self.check_header(*self.CASES[1])
+
+    def test_duplicate_host_is_refused_before_mapping_or_body_read(self):
+        self.check_header(*self.CASES[2])
+
+    def test_duplicate_authorization_is_refused_before_mapping_or_body_read(self):
+        self.check_header(*self.CASES[3])
+
+    def test_head_refuses_duplicates_without_a_response_body(self):
+        for name, first, _ in self.CASES:
+            with self.subTest(name=name):
+                self.assert_refused(self.wire(
+                    name, first, first, second_name=name.swapcase(), method='HEAD'), head=True)
+
+    def test_duplicates_are_refused_before_100_continue(self):
+        for name, first, _ in self.CASES:
+            with self.subTest(name=name):
+                self.assert_refused(self.wire(
+                    name, first, first, second_name=name.swapcase(), expect=True))
+
+    def test_the_server_closes_duplicate_requests_without_waiting_for_a_body(self):
+        submit = Recorder()
+        server = serve(HttpEntry(registry=registry(), submit=submit))
+        loop = threading.Thread(target=server.serve_forever,
+                                kwargs={'poll_interval': 0.01}, daemon=True)
+        loop.start()
+        try:
+            for name, first, _ in self.CASES:
+                with self.subTest(name=name):
+                    with socket.create_connection(server.server_address, timeout=2) as sock:
+                        sock.sendall(self.wire(
+                            name, first, first, second_name=name.swapcase(), include_body=False))
+                        response = bytearray()
+                        while chunk := sock.recv(4096):
+                            response.extend(chunk)
+                    headers, body = bytes(response).split(b'\r\n\r\n', 1)
+                    self.assertTrue(headers.startswith(b'HTTP/1.1 400 '), response)
+                    self.assertIn(b'\r\nConnection: close', headers)
+                    self.assertEqual(json.loads(body), {'error': 'MALFORMED_REQUEST'})
+            self.assertEqual(submit.calls, [])
+        finally:
+            server.shutdown()
+            server.server_close()
+            loop.join(5)
 
 
 if __name__ == '__main__':
