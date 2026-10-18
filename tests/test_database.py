@@ -9,10 +9,12 @@ import uuid
 from unittest.mock import patch
 
 import psycopg
+from psycopg.conninfo import make_conninfo
 
 from geniusnew import database
+from geniusnew.audit_store import _AUDIT_LOCK
 from geniusnew.contracts import ContractError
-from postgres_support import PostgresDatabase
+from postgres_support import PostgresDatabase, _TEST_ROLE_LOCK
 
 
 class DatabaseTest(unittest.TestCase):
@@ -27,6 +29,64 @@ class DatabaseTest(unittest.TestCase):
         with self.db.connect() as connection:
             cursor = connection.execute(query, parameters)
             return cursor.fetchall() if cursor.description else None
+
+    def test_runtime_connection_enforces_session_settings_and_keepalives(self):
+        self.install()
+        with database.open_database(self.db.runtime_dsn) as connection:
+            self.assertEqual(connection.execute("SHOW application_name").fetchone(),
+                             ("geniusnew-core",))
+            self.assertEqual(connection.execute("SHOW search_path").fetchone(),
+                             ("pg_catalog,public",))
+            self.assertEqual(connection.execute("SHOW statement_timeout").fetchone(),
+                             ("10s",))
+            self.assertEqual(connection.execute("SHOW lock_timeout").fetchone(),
+                             ("5s",))
+            self.assertEqual(connection.execute(
+                "SHOW idle_in_transaction_session_timeout").fetchone(), ("1min",))
+            self.assertEqual({key: connection.info.get_parameters().get(key)
+                              for key in ("keepalives", "keepalives_idle",
+                                          "keepalives_interval", "keepalives_count")},
+                             {"keepalives": "1", "keepalives_idle": "30",
+                              "keepalives_interval": "10", "keepalives_count": "3"})
+
+    def test_dsn_options_cannot_relax_fixed_session_settings(self):
+        self.install()
+        dsn = make_conninfo(
+            self.db.runtime_dsn,
+            options="-c statement_timeout=0 -c lock_timeout=0 "
+                    "-c search_path=public -c idle_in_transaction_session_timeout=0",
+            application_name="caller-override", keepalives=0, keepalives_idle=600,
+            keepalives_interval=600, keepalives_count=1)
+        with database.open_database(dsn) as connection:
+            self.assertEqual(connection.execute("SHOW statement_timeout").fetchone(),
+                             ("10s",))
+            self.assertEqual(connection.execute("SHOW lock_timeout").fetchone(),
+                             ("5s",))
+            self.assertEqual(connection.execute("SHOW search_path").fetchone(),
+                             ("pg_catalog,public",))
+            self.assertEqual(connection.execute("SHOW idle_in_transaction_session_timeout").fetchone(),
+                             ("1min",))
+            self.assertEqual(connection.execute("SHOW application_name").fetchone(),
+                             ("geniusnew-core",))
+            self.assertEqual({key: connection.info.get_parameters().get(key)
+                              for key in ("keepalives", "keepalives_idle",
+                                          "keepalives_interval", "keepalives_count")},
+                             {"keepalives": "1", "keepalives_idle": "30",
+                              "keepalives_interval": "10", "keepalives_count": "3"})
+
+    def test_migration_connection_has_its_own_application_name(self):
+        with database._connect(self.db.owner_dsn, application_name="geniusnew-migrate") as connection:
+            self.assertEqual(connection.execute("SHOW application_name").fetchone(),
+                             ("geniusnew-migrate",))
+        with patch.object(database, "_connect", wraps=database._connect) as connect:
+            database.migrate(self.db.owner_dsn)
+        connect.assert_called_once_with(self.db.owner_dsn, application_name="geniusnew-migrate")
+
+    def test_advisory_locks_have_distinct_ids(self):
+        locks = (database._MIGRATION_LOCK, _AUDIT_LOCK,
+                 database._PENDING_LOCK, _TEST_ROLE_LOCK)
+        self.assertEqual(database._AUDIT_LOCK, _AUDIT_LOCK)
+        self.assertEqual(len(locks), len(set(locks)))
 
     def test_migration_is_atomic_repeatable_and_has_an_exact_byte_checksum(self):
         self.install()

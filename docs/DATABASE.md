@@ -351,6 +351,108 @@ create table api_key_digests (
 
 `digest` ist SHA-256 des hochentropischen API-Keys wie in `geniusnew/http_entry.py`.
 
+### 4.9 D1-Replay-Reservation (Entwurfszusatz, noch nicht freigegeben)
+
+Dieser Zusatz konkretisiert nur den Speicher für den Entwurf
+[`PORTAL-CORE-D1-DRAFT.md`](PORTAL-CORE-D1-DRAFT.md). Er aktiviert D1 nicht und
+braucht vor DB-Code den vorgesehenen unabhängigen Security-Review und Kaans
+Freigabe. Die Tabelle gehört ausschließlich zur Core-Datenbank; Portal, Browser
+und Portal-Runtime-Rolle haben keinen direkten Zugriff.
+
+```sql
+create table d1_replay_reservations (
+    domain text collate "C" not null
+        check (domain = 'geniusnew.portal-core.request.d1'),
+    issuer text collate "C" not null
+        check (issuer ~ '^[A-Za-z0-9._-]{1,64}$'),
+    nonce bytea not null check (octet_length(nonce) = 32),
+    expires_at bigint not null
+        check (expires_at > 0 and expires_at < 4102444800),
+    primary key (domain, issuer, nonce)
+);
+```
+
+`nonce` ist die exakte 32-Byte-Dekodierung der 64 lowercase Hex-Zeichen aus dem
+signierten D1-Envelope. `domain` bleibt über Schlüsselrotation und Deployments
+stabil; eine neue `key_id` ändert den Unique Key nicht. `expires_at` ist ein
+Nachweisfeld, **kein** Löschtermin. D1 hat weder automatische Bereinigung noch
+automatische Wiederfreigabe nach Ablauf, Uhr-Rücksprung oder Schlüsselrotation.
+Ein voller oder nicht erreichbarer Speicher verweigert neue D1-Aufträge.
+
+Die Core-Runtime darf auf dieser Tabelle nur `SELECT` und `INSERT`; ausdrücklich
+kein `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER` oder DDL. Sie ist
+nicht Eigentümerin der Tabelle, nicht Superuser, hat kein `BYPASSRLS`,
+`CREATEROLE` oder `CREATEDB` und ist weder direkt noch über Mitgliedschaften,
+geerbte Rollen, `SET ROLE`, Schemaprivilegien oder ausführbare
+`SECURITY DEFINER`-Funktionen zu diesen verbotenen Operationen fähig.
+Das schließt effektive Rechte über `PUBLIC`, `pg_write_all_data` und, soweit
+verfügbar, `pg_maintain` sowie das Tabellenrecht `MAINTAIN` ein.
+Die Portal-Runtime hat **keine** effektiven Rechte auf die Tabelle, auch nicht
+über `PUBLIC`, Mitgliedschaften oder `SECURITY DEFINER`-Funktionen. Beide
+Runtime-Rollen und ihre indirekten Rechte sind beim D1-Start zu prüfen.
+Default-Privileges und Grants sind beim Start
+zu prüfen. Nur die getrennte Migrations-/Betriebsrolle darf Schemaänderungen
+vornehmen; D1 sieht keinen
+automatischen History-Löschpfad vor.
+
+Alle D1-Zugriffe benennen Core-Schema und Tabelle vollständig. Der D1-DB-Zugang
+hat einen festgelegten sicheren `search_path` und kein `TEMP`-Recht, sodass
+Namensauflösung nicht auf eine andere Tabelle oder Funktion ausweichen kann.
+
+Alle Core-Instanzen, die dasselbe `(issuer, audience)` akzeptieren, müssen
+dieselbe autoritative, transaktionale Replay-Tabelle auf demselben schreibbaren
+Primary benutzen. Getrennte schreibbare Kopien, Split-Brain und Failover auf
+einen Stand ohne bereits bestätigte Reservationen sperren D1. Bei unbekanntem
+Replikations- oder Failover-Stand wird die Annahme verweigert.
+`audience` ist absichtlich nicht Teil des Unique Keys: Ein Nonce desselben
+`issuer` bleibt auch bei Wechsel des Core-Ziels verbraucht.
+
+Die Reservation ist ein einzelner transaktionaler Insert gegen den Primary Key:
+`INSERT ... ON CONFLICT (domain, issuer, nonce) DO NOTHING RETURNING domain,
+issuer, nonce`. Nur genau eine zurückgegebene Zeile, deren drei Werte exakt mit
+den Insert-Werten übereinstimmen, ist ein Gewinnernachweis. Null Zeilen,
+abweichende Rückgabe oder jeder SQL-/Serialisierungsfehler sind REFUSE ohne
+automatischen Retry; ein COMMIT ohne diesen Nachweis erzeugt keinen Job. Die
+Replay-Transaktion setzt `SET LOCAL synchronous_commit TO on` nach `BEGIN` und
+prüft den wirksamen Wert unmittelbar vor `COMMIT`; dazwischen darf kein Befehl
+oder Savepoint-Rollback ihn ändern. `fsync=on` und `full_page_writes=on` sind
+beim Start und vor jeder Reservation als wirksame Serverwerte zu prüfen.
+Kann eine Prüfung oder die unveränderte Betriebs-Konfiguration bis zum COMMIT
+nicht sichergestellt werden, sperrt D1. Erst ein bestätigter synchroner COMMIT
+auf dauerhaftem WAL erlaubt die Fortsetzung. Ein unbekannter Commit-Ausgang
+wird nicht automatisch wiederholt. Nach bestätigtem Insert bleibt der Nonce
+auch bei Crash vor Job-Erzeugung verbraucht.
+
+**Start, Backup und Restore — HOLD:** Vor D1-Listener-Freigabe müssen Tabelle,
+Migration, nicht deferrable Primary Key, Zeilenform, effektive Rechte beider
+Runtime-Rollen sowie die Abwesenheit von Insert-umschreibenden Triggern, Rules,
+RLS-Policies und nicht freigegebenen Partitionen/Kindtabellen geprüft werden.
+Der Nachweis umfasst die tatsächliche Insert-Zieltabelle; unklare Katalog- oder
+Schemawerte sperren D1. Eine fehlende, leere Ersatz- oder beschädigte Tabelle darf nicht
+automatisch initialisiert werden. Ein älteres Backup kann alle späteren
+Reservationen verlieren; weder Primary Key noch die bestehende Audit-/Anchor-
+Prüfung belegen dann die Vollständigkeit der Replay-Historie. Ein von der
+Core-Datenbank unabhängiger, kryptografisch prüfbarer Replay-Fortschrittsnachweis
+mit definiertem Backup-/Restore-Abgleich ist ein **separates Security-Gate**.
+Bis dessen Vertrag freigegeben und getestet ist, darf D1 nach einem Restore
+nicht als sicher gestartet werden. Kein stilles Zurücksetzen, keine automatische
+Neuinitialisierung, keine History-Löschung und kein Anchor-Reset. Der bestehende
+Audit-Anker darf nicht ohne eigenen geprüften Vertrag zum Replay-Anker erklärt
+werden.
+
+Die D1-Migration ist **nie** Teil des automatischen Migrationslaufs vor
+Dienststart. Eine erstmalige Installation oder spätere Migration braucht einen
+getrennt freigegebenen Ablauf, der vorhandene
+Replay-Historie erhält beziehungsweise deren Fehlen unabhängig belegt; bei
+ungewissem Vorzustand bleibt D1 gesperrt.
+
+**Architektur-Gate:** Der Beschluss vom 30.09.2026 in
+[`DECISIONS.md`](DECISIONS.md) verwirft einen allgemeinen Schema-Fingerprint.
+Ob die hier verlangte D1-spezifische Startprüfung von Primary Key, Zeilenform und
+Rechten damit vereinbar ist, muss Kaan vor aktivem D1-Code ausdrücklich klären.
+Bis dahin ist diese Prüfung eine Entwurfsanforderung, keine stillschweigende
+Änderung des bestehenden Beschlusses.
+
 ## 5. Portal-Schema
 
 Portal-Tabellen sind keine Autorität für Core-Policy oder Worker-Rechte.
@@ -508,6 +610,11 @@ Vor Öffnen des HTTP-Listeners:
    Approval-Records ↔ `approval_record_hash`;
 10. erst danach Requests annehmen.
 
+Für einen späteren aktiven D1-Pfad kommt vor Schritt 10 die Prüfung aus 4.9
+hinzu, einschließlich des unabhängigen Replay-Rollback-Nachweises. Ohne diesen
+Nachweis bleibt D1 gesperrt; die bestehende Core-Startprüfung wird nicht
+abgeschwächt.
+
 Fehlt eine Tabelle, Migration, Signatur, Hash-Verknüpfung oder der Anchor-Store:
 **Start verweigern**.
 
@@ -521,6 +628,12 @@ Reihenfolge:
 4. `0004_audit_chain`: Audit-Records plus `audit_heads`;
 5. `0005_portal_identity`: users, sessions, roles, quotas;
 6. `0006_portal_history`.
+
+Eine spätere, separat freizugebende D1-Migration legt die Tabelle aus 4.9 an.
+Sie erhält eine neue Version nach den bestehenden Migrationen, ist aber vom
+automatischen Lauf ausgenommen. D1-Code darf nicht vorher aktiviert und die
+Tabelle nicht beim Dienststart ad hoc erzeugt werden. Es gilt das Restore- und
+Installations-Gate aus 4.9.
 
 Migrationen laufen vor Dienststart, einzeln in Transaktionen. Kein automatisches
 „drop and recreate“ bei Fehlern.
@@ -548,6 +661,7 @@ Mindest-Rechte der Core-Runtime pro Tabelle:
 | `audit_chain` | SELECT, INSERT; kein UPDATE/DELETE |
 | `audit_heads` | SELECT, INSERT; kein UPDATE/DELETE |
 | `api_key_digests` | SELECT |
+| `d1_replay_reservations` (erst nach freigegebener D1-Migration) | SELECT, INSERT; kein UPDATE/DELETE/TRUNCATE/DDL |
 
 Die Runtime darf Schutztrigger weder ändern noch deaktivieren. Der Anchor-Store verwendet
 keine dieser Zugangsdaten. Connection-Strings, Passwörter, Raw-Tokens und Dumps gehören

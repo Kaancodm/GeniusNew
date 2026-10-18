@@ -7,6 +7,8 @@ import psycopg
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
+_TEST_ROLE_LOCK = 813781
+
 
 class PostgresDatabase:
     def __init__(self):
@@ -15,14 +17,14 @@ class PostgresDatabase:
         self.admin = psycopg.connect(admin_dsn, autocommit=True, connect_timeout=5)
         self.name = "geniusnew_test_" + uuid.uuid4().hex
         try:
-            self.admin.execute("SELECT pg_advisory_lock(813781)")
+            self.admin.execute("SELECT pg_advisory_lock(%s)", (_TEST_ROLE_LOCK,))
             try:
                 if not self.admin.execute(
                     "SELECT 1 FROM pg_roles WHERE rolname = 'genius_core'"
                 ).fetchone():
                     self.admin.execute("CREATE ROLE genius_core LOGIN")
             finally:
-                self.admin.execute("SELECT pg_advisory_unlock(813781)")
+                self.admin.execute("SELECT pg_advisory_unlock(%s)", (_TEST_ROLE_LOCK,))
             self.admin.execute(sql.SQL("CREATE DATABASE {} TEMPLATE template0").format(
                 sql.Identifier(self.name)))
         except BaseException:

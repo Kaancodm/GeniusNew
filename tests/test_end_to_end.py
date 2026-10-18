@@ -570,6 +570,7 @@ class EndToEndTest(Fixture, unittest.TestCase):
         self.assertIsNotNone(service)
 
     def test_build_refuses_what_it_cannot_rely_on(self):
+        """Reject invalid wiring inputs and conflicting runner configuration."""
         for policy in (None, 'policy', 42, {}):
             with self.subTest(policy=type(policy)):
                 with self.assertRaisesRegex(ContractError, 'policy is invalid'):
@@ -591,6 +592,21 @@ class EndToEndTest(Fixture, unittest.TestCase):
             build(root_secret=ROOT_SECRET, policy=self.policy_for(),
                   api_keys={API_KEY: 'subject-demo'},
                   workers=(DeterministicSummarizer(),), anchor='not-an-anchor')
+        with self.assertRaisesRegex(ContractError, 'worker_service_profile must be'):
+            build(root_secret=ROOT_SECRET, policy=self.policy_for(),
+                  api_keys={API_KEY: 'subject-demo'},
+                  workers=(DeterministicSummarizer(),), worker_service_profile='local')
+        from geniusnew.worker_service import WorkerServiceProfile
+        profile = WorkerServiceProfile(
+            core_uid=20001, worker_uid=20002,
+            worker_gid=20002, socket_gid=20003,
+            socket_path='/run/geniusnew-worker/ipc/worker.sock',
+            lease_path='/run/geniusnew-worker/ipc/lease')
+        with self.assertRaisesRegex(ContractError, 'cannot be combined'):
+            build(root_secret=ROOT_SECRET, policy=self.policy_for(),
+                  api_keys={API_KEY: 'subject-demo'},
+                  workers=(DeterministicSummarizer(),), worker_service_profile=profile,
+                  runner_factory=lambda worker: 'not-a-runner')
 
     def _slow_runner(self, *, takes):
         keys = self.service.keys

@@ -23,9 +23,8 @@ from .audit_chain import (AuditChain, AuditHead, AuditRecord, _EMPTY_HASH,
                           _HEAD_VERSION, _MAX_COUNT, _record_hash, _verify_head,
                           sign_head, verify)
 from .contracts import ContractError, _subject_bytes, decode_wire
-from .database import _SCOPE_KEYS, _MAX_WIRE_BYTES, connection_lock
+from .database import _AUDIT_LOCK, _SCOPE_KEYS, _MAX_WIRE_BYTES, connection_lock
 
-_AUDIT_LOCK = 0x47454E4955534235
 _MAX_EVENT_BYTES = 8192
 _MAX_HEAD_VERSION_BYTES = 64
 _MIN_HEAD_LINE_BYTES = len(anchor_process._head_line(

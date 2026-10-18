@@ -47,4 +47,4 @@ Befehlsausgabe).
 
 Die Antwort auf Prompt 2 geht an Claude Code. Claude Code überträgt sie nach
 `docs/STATUS.md` und `docs/DECISIONS.md`, bevor das nächste Werkzeug Prompt 1 bekommt;
-NotebookLM liest beide danach aus `main`.
+NotebookLM liest sie erst, wenn Kaan die geprüften Exporte aus einem exakten Commit hochgeladen hat (Verfahren: `docs/COLLABORATION.md`, „NotebookLM-Quellenpaket“); statische Uploads aktualisieren sich nicht durch Git.
