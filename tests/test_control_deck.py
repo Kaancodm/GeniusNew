@@ -372,6 +372,15 @@ class AgentControlTest(unittest.TestCase):
         self.assertIn("if(await copyText(b.dataset.resumeCmd)){", html)
         self.assertNotIn("await copyText(b.dataset.resumeCmd);const old=b.textContent", html)
 
+    def test_clipboard_falls_back_to_a_selection_copy_on_private_http(self):
+        html = (Path(__file__).parents[1] / "tools/control_deck/static/index.html").read_text()
+        start = html.index("async function copyText(")
+        body = html[start:html.index("async function", start + 10)]
+        self.assertIn("navigator.clipboard&&window.isSecureContext", body)
+        self.assertIn("document.execCommand('copy')", body)
+        self.assertLess(body.index("isSecureContext"), body.index("execCommand"))
+        self.assertIn("openPanel('TERM-Befehl',v,null);return false", body)
+
     def test_control_deck_docs_list_agents_route_and_action_commas(self):
         text = (Path(__file__).parents[1] / "docs/CONTROL-DECK.md").read_text()
         self.assertIn("`/`, `/api/status`, `/api/mail` und `/api/agents`", text)
