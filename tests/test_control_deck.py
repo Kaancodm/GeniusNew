@@ -555,7 +555,25 @@ class ControlDeckInterfaceTest(unittest.TestCase):
         self.assertLess(protected, dispatch)
         self.assertLess(dispatch, cleanup)
         self.assertLess(cleanup, unlock)
-        self.assertIn("$('runAll').disabled=!state", handler[cleanup:].split("}", 1)[0])
+        self.assertIn("$('runAll').disabled=!state",
+                      handler.rsplit("finally{", 1)[1].split("}", 1)[0])
+
+    def test_run_all_waits_for_refresh_before_releasing_locks_even_on_failure(self):
+        """Keep batch locks through refresh and release them even when it fails."""
+        handler = self.html.split("$('runAll').onclick=async()=>{", 1)[1].split(
+            "notesLoad();load();", 1)[0]
+        cleanup = handler.split("finally{", 1)[1]
+        self.assertIn("await load()", cleanup)
+        refresh = cleanup.index("await load()")
+        self.assertIn("try{", cleanup[:refresh])
+        self.assertIn("}finally{", cleanup[refresh:])
+        release = cleanup.index("}finally{", refresh)
+        finalizer = cleanup[release:].split("}", 2)[1]
+        for reset in ("runAllRunning=false", "$('runAll').disabled=!state"):
+            self.assertNotIn(reset, cleanup[:release])
+            self.assertIn(reset, finalizer)
+        self.assertLess(finalizer.index("runAllRunning=false"),
+                        finalizer.index("$('runAll').disabled=!state"))
 
     def test_mail_and_status_load_independently_and_report_failures(self):
         """Load status and mail independently and expose each request's failure state."""
@@ -599,7 +617,7 @@ class ControlDeckInterfaceTest(unittest.TestCase):
         self.assertIn("$('runAll').disabled=runAllRunning", success)
 
     def test_action_buttons_show_failures_unlock_and_refresh_after_errors(self):
-        """Show action errors and restore buttons before refreshing the dashboard."""
+        """Show action errors and restore button state in the required refresh order."""
         single = self.html.split("async function runAction(name){", 1)[1].split("function itemRow", 1)[0]
         all_actions = self.html.split("$('runAll').onclick=async()=>{", 1)[1].split(
             "notesLoad();load();", 1)[0]
@@ -612,11 +630,17 @@ class ControlDeckInterfaceTest(unittest.TestCase):
                 self.assertIn("$('poutput').textContent", error)
                 self.assertIn("'FAIL\\n'", error)
                 self.assertIn("e?.message", error)
-                cleanup = handler.split("finally{", 1)[1].split("}", 1)[0]
+                cleanup = handler.split("finally{", 1)[1]
                 disabled = "!state" if button == "runAll" else "false"
                 self.assertIn(f"$('{button}').disabled={disabled}", cleanup)
                 self.assertIn("load()", cleanup)
-                self.assertLess(cleanup.index("disabled="), cleanup.index("load()"))
+                if button == "runAll":
+                    self.assertLess(cleanup.index("await load()"),
+                                    cleanup.index("runAllRunning=false"))
+                    self.assertLess(cleanup.index("runAllRunning=false"),
+                                    cleanup.index("disabled="))
+                else:
+                    self.assertLess(cleanup.index("disabled="), cleanup.index("load()"))
 
 
 class AgentControlTest(unittest.TestCase):

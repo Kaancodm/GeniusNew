@@ -134,7 +134,7 @@ $('runAll').onclick=async()=>{
  $('runAll').disabled=true;runAllRunning=true;
  try{for(const a of acts){const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a})});if(!r.ok)throw Error('HTTP '+r.status);const d=await r.json();$('poutput').textContent+=a+': '+(d.ok?'PASS':'FAIL')+'\n'+(d.output||'')+'\n\n';if(!d.ok)break}}
  catch(e){$('poutput').textContent+='FAIL\n'+String(e?.message||e||'Unbekannter Fehler')}
- finally{runAllRunning=false;$('runAll').disabled=!state;load()}
+ finally{try{await load()}finally{runAllRunning=false;$('runAll').disabled=!state}}
 };
 notesLoad();load();loadAgents();setInterval(load,30000);setInterval(loadAgents,30000);
 </script></body></html>
