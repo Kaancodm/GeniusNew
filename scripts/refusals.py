@@ -86,6 +86,9 @@ GUARDED_TOOL_TESTS = {"tools/ipad_llm.py": "test_ipad_llm.py"}
 # still runs all tests; every selected test file must pass for a mutation to
 # survive. A missing refusal test is therefore still a failure of this guard.
 GUARDED_PYTHON = {
+    "geniusnew/http_entry.py": (
+        "test_http_entry.py", "test_http_limits.py", "test_approver_routes.py",
+    ),
     "geniusnew/results.py": ("test_results.py",),
     "geniusnew/orchestrator.py": ("test_orchestrator.py",),
     "geniusnew/database.py": (
