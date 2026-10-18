@@ -174,7 +174,7 @@ Ed25519-Negativvektoren nicht.
 
 ### Ed25519-Festwertvektor (L1)
 
-Öffentliches **Testmaterial**, niemals für den Betrieb. Der Seed ist unabhängig vom Core-Root-Secret. Der ASCII-Body ist `b'{"text":"hello"}'` und das unveränderte 352-Byte-Envelope aus dem Vektor oben; die Signatur gilt genau `b"geniusnew/portal-core/request/ed25519/d1\\x00" + envelope_bytes` (393 Bytes).
+Öffentliches **Testmaterial**, niemals für den Betrieb. Der Seed ist unabhängig vom Core-Root-Secret. Der ASCII-Body ist `b'{"text":"hello"}'` und das unveränderte 352-Byte-Envelope aus dem Vektor oben; die Signatur gilt genau `b"geniusnew/portal-core/request/ed25519/d1\x00" + envelope_bytes` (393 Bytes).
 
 | Wert | Erwartet (lowercase Hex) |
 | --- | --- |
@@ -310,7 +310,74 @@ Reihenfolge eines D1-Requests:
 7. Den synchronen dauerhaften COMMIT bestätigen und Audit-/Anker-Abgleich erfüllen. Unbekannter COMMIT-Ausgang bleibt **UNKNOWN**: Ein vollständiger Job samt Reservation und Audit kann bereits bestehen; weder neuer Job noch automatischer Retry noch Workerstart sind erlaubt. Wird ein bereits verbindlich angenommener Job vor Ausführung abgelaufen, erfolgt ein separater atomarer Ledger-/Audit-Refusal **für dieselbe Job-ID**, nicht die Behauptung, es habe nie einen Job gegeben.
 8. Erst danach den Worker **außerhalb** der Annahmetransaktion starten. `max_in_flight` ist auf allen Ausgängen freizugeben. Kein Worker läuft in einer Replay-/Ablehnungstransaktion.
 
-**Signaturgeprüfte Ablehnungen ohne Reservation (Gate 9):** Für einen verbrauchten Nonce oder Ablauf nach gültiger Signatur wird eine begonnene Annahmetransaktion vollständig zurückgerollt; es darf kein neuer Job entstehen. Eine **separate dauerhafte Audit-Transaktion** schreibt ein versioniertes `D1_REQUEST_REFUSED`-Event mit unabhängiger zufälliger `attempt_id` (kein Job-Identifier), `SHA256(envelope_bytes)`, Digest des verifizierten Service-Principals, Digest des kanonischen Replay-Schlüssels `(domain,issuer,nonce)`, `expires_at`, geprüfter Core-Zeit und festem Grund `NONCE_CONFLICT` oder `REQUEST_EXPIRED`, zusammen mit signiertem Audit-Kopf; Ankerprüfung bleibt bestehen. Body, Signatur und Secrets erscheinen nicht im Audit. Abbruch, Crash, unbekannter Commit oder Ankerfehler verhindern eine als bestätigt ausgegebene Audit-Ablehnung und jeden Workerstart. Der B6-Startabgleich prüft die Bindungen beidseitig: jede nicht bereinigte Reservation genau zu Annahme und Job, jede Annahme zu Reservation oder exakt passendem auditiertem Bereinigungsnachweis; nur versionierte Ablehnungs-Events dürfen ohne Job/Reservation existieren. Unbekannte Event-Typen, Bindungen oder fehlende Zeilen sind REFUSE. Damit ist Gate 9 als **Entwurfsvertrag erledigt**, nicht als implementierte Freigabe.
+**Signaturgeprüfte Ablehnungen ohne Reservation (Gate 9):**
+
+Der folgende Ablehnungsvertrag übernimmt die Regel aus
+[DB-Entwurf #161, §4.9.2](https://github.com/Kaancodm/GeniusNew/blob/7bbc07ec64618aef342f837680cfd4ea07736b35/docs/DATABASE.md#492-eine-annahme-transaktion-gate-9).
+Das versionierte D1-Ablehnungs-Event heißt `D1_REQUEST_REFUSED`; sein geschlossener
+Grund ist `NONCE_CONFLICT` oder `REQUEST_EXPIRED`.
+
+Für signaturgeprüfte Ablehnungen **ohne
+Reservation** gilt im vorgeschlagenen Speichermodell: **höchstens ein
+D1-Ablehnungs-Event je `(issuer, nonce)`**, auch bei parallelen Requests,
+Neustart oder Schlüsselrotation. Ein Event setzt das für diese Anfrage bereits
+erfolgreich belastete Dienst-Token voraus, keine zweite Buchung. Nach ROLLBACK einer
+gegebenenfalls begonnenen
+Annahme-Transaktion entstehen in einer eigenen dauerhaften Audit-Transaktion
+nur dieses versionierte Event und sein bereits signierter Kopf. Das Event
+bindet Envelope-Version/-Digest, geprüfte Dienstidentität als Digest, Prüfzeit
+und einen geschlossenen Ablehnungsgrund, etwa Nonce-Konflikt oder Ablauf nach
+Signaturprüfung. Es entstehen weder Replay-Zeile noch Job; Job-/Handoff-Felder
+werden nicht durch erfundene IDs ausgefüllt.
+
+Für die Deduplizierung bindet das Event zusätzlich einen versionierten,
+domänenseparierten Digest der kanonischen Werte `issuer` und `nonce`.
+`expires_at`, `key_id`, `audience`, Envelope-Digest und Ablehnungsgrund gehören
+**nicht** in diesen Schlüssel: geänderte Werte erlauben kein zweites Event.
+Der Replay-Zeilendigest mit `expires_at` ist dafür kein Ersatz. Prüfung auf
+einen vorhandenen Ablehnungsnachweis und Append erfolgen unter derselben
+datenbankgestützten Audit-Serialisierung über alle D1-Annehmer. Die verifizierte
+Audit-Kette ist die autoritative Deduplizierungsquelle; ein abgeleiteter Cache
+darf keinen ungeprüften oder veralteten Stand verwenden. Beim Start wird der
+Nachweis aus der geprüften Kette rekonstruiert; mehrere Ablehnungs-Events zu
+derselben Identität sind ein Startfehler. Replay-Bereinigung entfernt diesen
+Nachweis nicht. Recovery erkennt den Ereignistyp ausdrücklich als Ablehnung
+ohne Job-/Replay-Gegenstück und prüft weiterhin Signatur, Kette und Anker.
+Die neue Event-Version muss diese Form ausdrücklich zulassen.
+
+Weitere Ablehnungen derselben Identität belasten, soweit verfügbar, je ein
+Dienst-Token und dürfen ausschließlich begrenzte, aggregierte Zähler erhöhen.
+Sie erzeugen kein weiteres Audit-Event und keinen requestbezogenen Logeintrag.
+**Bei leerem Dienst-Bucket wird sofort ohne Audit oder requestbezogenes Logging
+abgelehnt**, auch wenn noch kein Event zu dieser Identität existiert. Zähler
+haben feste Kategorien und lösen keine eigene dauerhafte Buchung je Versuch
+aus; eine zusätzliche unbegrenzte Tabelle oder Queue pro Nonce ist unzulässig.
+Leer bedeutet hier: Die anfängliche Dienst-Tokenbuchung für diese Anfrage
+scheitert. Ein bereits budgetierter neuer Ablehnungsnachweis bleibt dagegen
+erforderlich, auch wenn die erfolgreiche Buchung das letzte Token verbraucht hat.
+
+Die erforderliche Ablehnungs-Transaktion beginnt erst nach Freigabe der äußeren
+Sperren. COMMIT und Ankerbestätigung bleiben für einen neuen Nachweis Pflicht;
+ein fehlgeschlagenes oder unklares erforderliches Ablehnungs-Audit sperrt
+weitere D1-Annahmen, ohne Erfolg oder automatischen Retry zu behaupten.
+Ein bereits belastetes Dienst-Token bleibt verbraucht; ein leerer Bucket
+erzeugt kein Ersatz-Token.
+
+Das Event hält zusätzlich `expires_at` als Nachweisfeld fest; es erweitert damit
+nicht den Deduplizierungsschlüssel. Body, Signatur und Secrets erscheinen nicht
+im Audit. Abbruch, Crash, unbekannter Commit oder Ankerfehler verhindern eine als
+bestätigt ausgegebene Audit-Ablehnung und jeden Workerstart. Der B6-Startabgleich
+prüft die Bindungen beidseitig: jede nicht bereinigte Reservation genau zu Annahme
+und Job, jede Annahme zu Reservation oder exakt passendem auditiertem
+Bereinigungsnachweis; nur versionierte Ablehnungs-Events dürfen ohne
+Job/Reservation existieren. Unbekannte Event-Typen, Bindungen oder fehlende
+Zeilen sind REFUSE.
+
+Die Abnahme muss parallele Wiederholungen, Neustart, Schlüsselrotation,
+Replay-Bereinigung, geänderte Nicht-Schlüsselfelder sowie den leeren Dienst-Bucket
+und die erfolgreiche Buchung des letzten Tokens abdecken. Nach diesem Abgleich
+ist Gate 9 **im Entwurf erledigt**; unabhängiger Review und Implementierungsnachweis
+bleiben offen.
 
 **Gate 8, Buchung:** Ablehnungen vor erfolgreicher Ed25519-Prüfung einschließlich erster Zeitprüfung belasten ausschließlich das Quellbudget am Proxy und das globale Core-Vorab-Budget, **nicht** den gemeinsamen Dienst-Bucket und niemals eine Nutzerquote. Bei gültiger Signatur wird der Dienst-Bucket vor weiterer Zeit-/Replay-Prüfung genau einmal belastet; signaturgeprüfte Replay-/Zeitablehnungen erstatten ihn nicht zurück. Unsignierte Requests dürfen über frei behauptete `issuer`-Werte nicht den Dienst-Bucket erschöpfen.
 
@@ -373,7 +440,7 @@ Test, der ihr Fehlen bemerkt, und das Modul gehört in `scripts/refusals.py::GUA
 Ein DB-Code-PR benötigt zusätzlich `Claude DB Review: APPROVED` am exakten Head und
 grüne `contracts`.
 
-**Gate-Status – D1 bleibt HOLD:** (1) D1 vor D3 **ausschließlich für Kaan als einzigen Portalnutzer**, nur risikoarme Jobs ohne Approval; H1-Start-Ablehnungen als Entwurfsvertrag entschieden, D3-Personenbindung vor einem zweiten Nutzer erforderlich. (2) NTP, Prozess-Monotonie und PostgreSQL-Höchstzeit als Betriebsgrenze, eigener SECURITY.md-PR ausstehend. (3) **ERLEDIGT im Entwurf:** 65-s-Quarantäne statt Replay-Fortschrittsnachweis; Nachweis im Betrieb offen. (4) Proxy erhält Header, Core prüft Rohduplikate; nginx-Tests offen. (5) Lastbudgets, konkrete Zahlen, Replay-/Audit-Speicherschwelle und Kaans Freigabe offen. (6) **OFFEN:** erneuter unabhängiger Claude-Review am exakten Head. (7) Spezifische D1-Startprüfung von PK, Zeilenform und Rechten ist freigegeben; Umsetzung offen. (8) Signierte Ablehnungen belasten den Dienst-Bucket, unsignierte ausschließlich Vorabbudgets; Nutzerquote nie. (9) **ERLEDIGT im Entwurf:** atomare Annahme plus separate auditierte Ablehnung und B6-Abgleich; Review und DB-Vertrag stehen aus. (10) Geschützter Ingress und vor dem Signieren wirksame instanzfeste Portal-Limits als Betriebsgate.
+**Gate-Status – D1 bleibt HOLD:** (1) D1 vor D3 **ausschließlich für Kaan als einzigen Portalnutzer**, nur risikoarme Jobs ohne Approval; H1-Start-Ablehnungen als Entwurfsvertrag entschieden, D3-Personenbindung vor einem zweiten Nutzer erforderlich. (2) NTP, Prozess-Monotonie und PostgreSQL-Höchstzeit als Betriebsgrenze, eigener SECURITY.md-PR ausstehend. (3) **ERLEDIGT im Entwurf:** 65-s-Quarantäne statt Replay-Fortschrittsnachweis; Nachweis im Betrieb offen. (4) Proxy erhält Header, Core prüft Rohduplikate; nginx-Tests offen. (5) Lastbudgets, konkrete Zahlen, Replay-/Audit-Speicherschwelle und Kaans Freigabe offen. (6) **OFFEN:** erneuter unabhängiger Claude-Review am exakten Head. (7) Spezifische D1-Startprüfung von PK, Zeilenform und Rechten ist freigegeben; Umsetzung offen. (8) Signierte Ablehnungen belasten den Dienst-Bucket, unsignierte ausschließlich Vorabbudgets; Nutzerquote nie. (9) **im Entwurf erledigt:** atomare Annahme plus dedupliziertes Ablehnungs-Audit gemäß #161 (7bbc07ec64618aef342f837680cfd4ea07736b35) und B6-Abgleich; höchstens ein Event je `(issuer, nonce)`, Wiederholungen nur aggregiert, bei gescheiterter Dienst-Tokenbuchung kein Audit; unabhängiger Review und Implementierungsnachweis stehen aus. (10) Geschützter Ingress und vor dem Signieren wirksame instanzfeste Portal-Limits als Betriebsgate.
 
 (10) Nachweis eines vor dem Vorab-Budget wirksamen geschützten Ingress, der
 anonyme öffentliche Last auf die D1-Route ausschließt, und der instanz- und
