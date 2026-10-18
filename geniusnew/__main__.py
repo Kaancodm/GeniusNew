@@ -50,7 +50,8 @@ def _refuse_discontinuous_start(service: Service) -> None:
               f"holds {held}; the service cannot continue the anchored history")
 
 
-def _serve(config_path: str) -> int:
+def _serve(config_path: str, *, runner_factory=None) -> int:
+    """Load configuration and serve with PostgreSQL ledgers and durable audit."""
     config = load_config(config_path)
     from .database import PostgresAcceptanceLedger, PostgresJobLedger, open_database
     from .audit_store import PostgresAuditChain
@@ -64,13 +65,16 @@ def _serve(config_path: str) -> int:
             acceptance_ledger=PostgresAcceptanceLedger(database_connection),
             database_connection=database_connection,
             audit_chain_factory=lambda audit: PostgresAuditChain(
-                database_connection, authority=audit))
+                database_connection, authority=audit),
+            runner_factory=runner_factory)
 
 
 def _run_service(config: ServiceConfig, *, job_ledger: JobLedger,
                  acceptance_ledger: AcceptanceLedger,
                  database_connection=None,
-                 audit_chain_factory: Callable[[AuditAuthority], AuditChain] | None = None) -> int:
+                 audit_chain_factory: Callable[[AuditAuthority], AuditChain] | None = None,
+                 runner_factory=None) -> int:
+    """Build the configured service and close it after listener shutdown."""
     if config.anchor_socket is not None:
         # Served anchor (gate C2): its lifecycle is not ours, so `service.close`
         # leaves it running and `_refuse_discontinuous_start` asks it.
@@ -82,7 +86,9 @@ def _run_service(config: ServiceConfig, *, job_ledger: JobLedger,
                         anchor=anchor, limits=config.limits, job_ledger=job_ledger,
                         acceptance_ledger=acceptance_ledger,
                         database_connection=database_connection,
-                        audit_chain_factory=audit_chain_factory)
+                        audit_chain_factory=audit_chain_factory,
+                        worker_service_profile=(config.worker_service if runner_factory is None
+                                                else None), runner_factory=runner_factory)
     else:
         service = build(root_secret=config.root_secret, policy=config.policy,
                         principals=config.principals, approvers=config.approvers,
@@ -90,7 +96,9 @@ def _run_service(config: ServiceConfig, *, job_ledger: JobLedger,
                         anchor_state=config.anchor_state, limits=config.limits,
                         job_ledger=job_ledger, acceptance_ledger=acceptance_ledger,
                         database_connection=database_connection,
-                        audit_chain_factory=audit_chain_factory)
+                        audit_chain_factory=audit_chain_factory,
+                        worker_service_profile=(config.worker_service if runner_factory is None
+                                                else None), runner_factory=runner_factory)
     try:
         _refuse_discontinuous_start(service)
         server = serve(service.entry, host=config.listen_host, port=config.listen_port,

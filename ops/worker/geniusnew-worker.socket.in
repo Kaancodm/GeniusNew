@@ -1,0 +1,12 @@
+[Unit]
+Description=GeniusNew isolated worker socket
+
+[Socket]
+ListenStream=/run/geniusnew-worker/ipc/worker.sock
+Accept=yes
+MaxConnections=1
+SocketUser=root
+SocketGroup=@SOCKET_GID@
+SocketMode=0660
+DirectoryMode=0710
+RemoveOnStop=yes

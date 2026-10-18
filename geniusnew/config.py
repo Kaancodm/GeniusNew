@@ -56,6 +56,7 @@ from typing import Any, Mapping
 from .approvals import ApproverPolicy
 from .contracts import ContractError, Grant, Policy
 from .http_entry import HttpLimits
+from .worker_service import WorkerServiceProfile
 from .workers import DeterministicSummarizer, Worker
 
 # Published in scripts/demo.py. Refused here so it cannot become a real key.
@@ -67,7 +68,9 @@ _MAX_CONFIG_BYTES = 1024 * 1024
 
 _TOP_KEYS = frozenset({"service", "policy", "principals"})
 _SERVICE_KEYS = frozenset({"listen_host", "listen_port", "root_secret_file",
-                           "database_dsn_file", "limits"})
+                           "database_dsn_file", "limits", "worker"})
+_WORKER_KEYS = frozenset({"core_uid", "worker_uid", "worker_gid", "socket_gid",
+                          "socket_path", "lease_path"})
 # One anchor mode is required, and exactly one (see `_anchor`): a child of the
 # service persisted at `anchor_state`, or a separate service at `anchor_socket`.
 _ANCHOR_KEYS = frozenset({"anchor_state", "anchor_socket", "anchor_reply_public_key"})
@@ -104,6 +107,7 @@ class ServiceConfig:
     principals: Mapping[str, str]
     approvers: Mapping[str, str]
     workers: tuple[Worker, ...]
+    worker_service: WorkerServiceProfile
 
     def __repr__(self) -> str:
         # The dataclass default would print the root secret.
@@ -300,6 +304,7 @@ def parse_config(data: Mapping[str, Any]) -> ServiceConfig:
     principals, approver_policy = _principals(
         top["principals"], policy, top.get("approvers", {}))
     anchor_state, anchor_socket, anchor_reply_public_key = _anchor(service)
+    worker = _table(service["worker"], "service.worker", _WORKER_KEYS)
     return ServiceConfig(
         listen_host=_loopback_host(service["listen_host"]),
         listen_port=_port(service["listen_port"]),
@@ -314,6 +319,7 @@ def parse_config(data: Mapping[str, Any]) -> ServiceConfig:
         principals=principals,
         approvers=approver_policy.identities,
         workers=_workers(policy),
+        worker_service=WorkerServiceProfile(**worker),
     )
 
 

@@ -169,20 +169,26 @@ Siehe:
 
 ## Betrieb als Dienst
 
-Neben der Demo startet `python -m geniusnew serve` den Kern als Dienst, ausschließlich
+Neben der Demo startet `python -I -m geniusnew serve` den Kern als Dienst, ausschließlich
 aus einer TOML-Konfiguration (Vorlage: `docs/examples/geniusnew.toml`):
 
 ```sh
 head -c 32 /dev/urandom > /etc/geniusnew/root_secret && chmod 600 /etc/geniusnew/root_secret
 python -m geniusnew digest-api-key < api-key-file   # Digest für [principals]
 python -m geniusnew migrate --dsn-file /etc/geniusnew/migration_dsn
-python -m geniusnew serve --config /etc/geniusnew/geniusnew.toml
+python -I -m geniusnew serve --config /etc/geniusnew/geniusnew.toml
 ```
 
 Vorher Core-Datenbank, getrennte Rollen und private DSN-Dateien gemäß
 [PostgreSQL-B1-Anleitung](docs/POSTGRES-B1.md) einrichten. `serve` verweigert eine
 unerreichbare Datenbank sowie fehlende, geänderte oder unbekannte Migrationen vor
 dem Öffnen des HTTP-Listeners. Es führt selbst keine Migration aus.
+
+Der Serverpfad setzt zusätzlich den getrennten Worker-Dienst und eine frisch
+installierte, root-kontrollierte Python-Laufzeit gemäß
+[A2-Worker-Betriebsvertrag](ops/worker/README.md) voraus. Core und Worker benötigen
+verschiedene feste UIDs; die Entwicklungs-Venv ist keine Dienstinstallation.
+Die echte UID-/systemd-Abnahme bleibt bis zum belegten PASS **HOLD**.
 
 Der Dienst startet nicht, wenn etwas fehlt oder nicht stimmt: unbekannte Schlüssel,
 eine Nicht-Loopback-Adresse (TLS kommt vom Reverse-Proxy), eine Root-Secret-Datei mit
