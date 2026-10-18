@@ -445,7 +445,10 @@ class IsolationChildContractTest(unittest.TestCase):
 # control that shows a probe can pass at all.
 _SYSCALLS = {
     "x86_64": {"getpid": 39, "clone": 56, "fork": 57, "vfork": 58, "execve": 59,
-               "execveat": 322, "clone3": 435},
+               "execveat": 322, "clone3": 435, "setuid": 105, "setgid": 106,
+               "setreuid": 113, "setregid": 114,
+               "setgroups": 116, "setresuid": 117, "setresgid": 119,
+               "setfsuid": 122, "setfsgid": 123, "capset": 126, "prctl": 157},
 }
 _PROBE = r"""
 import ctypes, os, sys
@@ -458,6 +461,9 @@ syscall = ctypes.CDLL(None, use_errno=True).syscall
 syscall.restype = ctypes.c_long
 syscall.argtypes = (ctypes.c_long,) * 6
 values = [int(value) for value in sys.argv[2:]]
+if sys.argv[1] == "thread-name":
+    name = ctypes.create_string_buffer(b"worker-test")
+    values.append(ctypes.addressof(name))
 isolation._install_process_filter()
 result = syscall(*values, *[0] * (6 - len(values)))
 os._exit(100 + ctypes.get_errno() if result < 0 else 0)
@@ -534,6 +540,22 @@ class ProcessFilterTest(unittest.TestCase):
         for name in ("fork", "vfork", "execve", "execveat"):
             with self.subTest(syscall=name):
                 self.assertEqual(self.probe("native", self.syscalls[name]), -signal.SIGSYS)
+
+    def test_identity_changes_and_dump_reactivation_are_killed(self):
+        """Require fatal seccomp refusals for identity changes and restoring dumpability."""
+        for name in ("setuid", "setgid", "setreuid", "setregid", "setgroups", "setresuid", "setresgid",
+                     "setfsuid", "setfsgid", "capset"):
+            with self.subTest(syscall=name):
+                self.assertEqual(self.probe("native", self.syscalls[name], 0), -signal.SIGSYS)
+        self.assertEqual(self.probe("native", self.syscalls["prctl"], 4, 1),
+                         -signal.SIGSYS)
+
+    def test_setting_a_thread_name_refuses_without_killing_the_thread(self):
+        """Require thread naming to return EPERM while the calling process survives."""
+        # Python 3.14 names OS threads; exercise its syscall on older Python too.
+        # Its OSError handler can continue, without exposing payload in comm.
+        self.assertEqual(self.probe("thread-name", self.syscalls["prctl"], 15),
+                         100 + errno.EPERM)
 
     def test_clone_without_clone_thread_is_killed(self):
         self.assertEqual(

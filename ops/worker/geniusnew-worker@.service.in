@@ -1,0 +1,33 @@
+[Unit]
+Description=GeniusNew isolated worker for one accepted connection
+
+[Service]
+Type=exec
+Slice=system.slice
+User=@WORKER_UID@
+Group=@WORKER_GID@
+SupplementaryGroups=
+UnsetEnvironment=LD_LIBRARY_PATH LD_PRELOAD LD_AUDIT LD_DEBUG LD_DEBUG_OUTPUT LD_DYNAMIC_WEAK LD_BIND_NOT LD_BIND_NOW LD_HWCAP_MASK LD_ORIGIN_PATH LD_PROFILE LD_PROFILE_OUTPUT LD_SHOW_AUXV LD_TRACE_LOADED_OBJECTS LD_USE_LOAD_BIAS LD_VERBOSE LD_WARN LD_PREFER_MAP_32BIT_EXEC GLIBC_TUNABLES GCONV_PATH LOCPATH
+ExecStart=@PYTHON@ -I -S @BOOTSTRAP@ --core-uid @CORE_UID@ --worker-uid @WORKER_UID@ --worker-gid @WORKER_GID@
+StandardInput=socket
+StandardOutput=null
+StandardError=null
+LimitCORE=0
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+PrivateNetwork=yes
+SystemCallFilter=~socket socketpair
+SystemCallErrorNumber=EPERM
+KillMode=control-group
+SendSIGKILL=yes
+Restart=no
+TimeoutStartSec=5s
+RuntimeMaxSec=12s
+TimeoutStopSec=2s
+TasksMax=4
+MemoryMax=512M
+UMask=0077
+RuntimeDirectory=geniusnew-worker/jobs/%i
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=no
