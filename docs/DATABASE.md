@@ -703,6 +703,8 @@ Tokenzahl; jede Anfrage kostet ein Token.
 | Gleichzeitig laufende D1-Jobs | höchstens 2 insgesamt, keine Warteschlange | Vor Reservation; belegt zusätzlich das bestehende Core-`max_in_flight`, dessen strengere Grenze immer gewinnt |
 | Replay-Zeilen | Warnung ab 64, Annahmestopp bei 128 vorhandenen Zeilen | Gesamte gemeinsame Tabelle, einschließlich abgelaufener, noch nicht bereinigter Zeilen; kein 129. Insert |
 | Bereinigung | höchstens 30 s zwischen erfolgreichen Läufen, höchstens 32 Zeilen je atomarem Lauf | Erst nach Quarantäne und nur nach 4.9.5; keine unlimitierte Aufholschleife |
+| Portal, vor jedem Signierversuch | 10/min je serverseitig geprüfter Nutzerreferenz UND portalweit, Token-Kapazität jeweils 2; je 200 Versuche pro UTC-Tag | Einschließlich fehlgeschlagener Versuche, über Sessions/Instanzen/Neustarts; konservatives Ein-Nutzer-Profil, nicht 10 Core-Annahmen/min |
+| Freier DB-/WAL-Speicher | D1-Stopp bei weniger als 2 GiB je betroffenem Volume oder UNKNOWN | Zusätzliche Mindestreserve; falls gemessener Bedarf für Audit, WAL, Jobs oder Cleanup größer ist, früher sperren |
 | Serialisierte Anker-Anfrage einschließlich Protokollhülle | Warnung ab 32 MiB, D1-Annahmestopp ab 48 MiB | Unterhalb des bestehenden harten 64-MiB-Transportlimits |
 | Berechnete Anker-Zustandsgröße | Warnung ab 8 MiB, D1-Annahmestopp ab 12 MiB | Unterhalb des bestehenden harten 16-MiB-Dateilimits |
 
@@ -732,6 +734,12 @@ Quell- und Vorab-Budget belastet. Signaturgeprüfte Replay-/Zeit-Ablehnungen
 belasten gemäß Gate 8 den Dienst-Bucket, **keine Nutzerquote**. Bestehende
 Core-Verbindungsgrenzen, Body-/Headerlimits, Policy- und Anker-Gates bleiben
 wirksam. Dieser Entwurf erweitert keine Nutzerrechte.
+
+**Begründung der Startzahlen (nur Vorschlag, keine Messung):** Proxy 30/min entspricht einer Anfrage je 2 s pro verifizierter Transportquelle; `burst=5 nodelay` statt Burst 10 vermindert sofortige Spitzen (nginx-Burst ist kein Kern-Token-Bucket). Das globale Vorab-Budget 60/min mit Kapazität 10 erlaubt bis zur doppelten Quellrate, ohne vor der Signaturprüfung 20 sofortige Token freizugeben. Der signaturgeprüfte Dienst-Bucket 6/min mit Kapazität 2 statt Kaans Ausgangswert 20/min und Burst 5 begrenzt die teure gemeinsame Audit-Kette für eine geschlossene Beta mit genau einer Person. Vier gleichzeitig verarbeitete D1-Verbindungen statt acht je Quelladresse decken zwei laufende Jobs mit geringem Reserveplatz ab. Zwei statt vier D1-Jobs lassen einen zweiten Auftrag zu, ohne `max_in_flight` auszuweiten. Diese Zahlen müssen unter realer Last nachjustiert und durch Kaan freigegeben werden.
+
+**Portalbudgets:** Vor dem Signieren muss die Portal-Runtime atomar sowohl den Zähler der *serverseitig verifizierten* Nutzerreferenz als auch einen gemeinsamen Portal-Zähler prüfen und belasten: 10/min, Kapazität 2, höchstens 200 Versuche pro geprüftem UTC-Kalendertag. 10/min lässt kurze Bedienphasen zu; 200/Tag begrenzt unbegrenzte Signierarbeit und Kosten. Fehlgeschlagene Versuche verbrauchen ebenfalls das Portal-Signierbudget und werden nicht erstattet; ein Core-Refusal belastet dagegen gemäß Gate 8 **keine** Nutzerquote. Es gibt keine neu erzeugte Kapazität pro Session, Neustart oder Instanz. Unbekannter Zähler-/Zeitstatus bedeutet REFUSE. Ein zweiter Portal-Nutzer ist vor D3 weiterhin unzulässig.
+
+**Replay-/Bereinigungsprofil:** Der rechnerische Normalbestand bei 6/min, Kapazität 2 und 161 Sekunden Aufbewahrungsfenster ist `ceil(2 + (6/60) × 161) = 19` Zeilen. Warnung bei 64 und Stopp bei 128 lassen somit rechnerisch 45 bzw. 109 Zeilen Reserve im rückstaufreien Betrieb; die ursprünglichen 100.000 wären für diese Beta keine frühe Störungserkennung. Eine Bereinigung von 32 je 30 s deckt höchstens fünf neu budgetierte Dienstversuche je 30 s ab, aber keinen unbegrenzten Altrückstau. Strikte atomare Kapazitätsgrenze, 2 GiB Mindestfreiraum je DB-/WAL-Volume und bestehende Audit-/Anker-Schranken wirken gemeinsam. Warn- und Ankergrenzen bei 32/48 MiB gegenüber 64 MiB Transport-Hardlimit sowie 8/12 MiB gegenüber 16 MiB Zustands-Hardlimit sollen Betriebsreserve für notwendige Ereignisse lassen; ihre **Angemessenheit ist nicht nachgewiesen**. Bei unbekanntem oder nicht ausreichendem Freiraum D1 verweigern; `DELETE` gibt nicht automatisch physische Relationsgröße frei.
 
 **Rechenbasis:** Bei 6/min (= 0,1/s) und Token-Kapazität 2 werden höchstens
 `2 + 0,1 × t` Dienst-Tokens in einem Zeitraum von `t` Sekunden verbraucht.
@@ -786,6 +794,16 @@ Bereinigungspfad signiert ausschließlich über die `AuditAuthority` im Kern;
 die normale Runtime-DSN kann weder DELETE noch den Bereinigungspfad ausführen.
 Link-, Konsistenz- und Diff-Prüfungen dieses Entwurfs belegen diese späteren
 Laufzeiteigenschaften nicht.
+
+#### 4.9.7 Geschützter Eingang vor dem Vorab-Budget (Gate 10)
+
+**Entwurf zur getrennten Freigabe:** Der Portal-Backend-Dienst auf Vercel spricht den Kern ausschließlich über HTTPS und einen geschützten Core-Proxy an. Vercels ausgehende IP-Adressen stammen standardmäßig aus einem dynamischen Pool; feste ausgehende Adressen dürfen nicht als bestehende Voraussetzung unterstellt werden ([Vercel: IP-Allowlisting](https://vercel.com/kb/guide/how-to-allowlist-deployment-ip-address)). Alternativ verfügbare [Static IPs](https://vercel.com/docs/networking/static-ips) sind keine Authentisierung und werden hier nicht eingerichtet.
+
+Für die Ein-Nutzer-Beta wird ein **separater hochentropischer Ingress-Schlüssel** in einem nur serverseitig gesetzten Transportheader, vorgeschlagen `X-Genius-Ingress-Key`, als einfache Zugangsgrenze vorgeschlagen. Der erste TLS-terminierende Proxy-Hop muss bereits auf der rohen Headerliste vor Zusammenführung, Mapping oder Protokollübersetzung ASCII-case-insensitiv prüfen, dass der Header **genau einmal** vorkommt, und dessen Wert vor Core-Weiterleitung verifizieren. Fehlender, falscher oder doppelter Header wird am Proxy abgelehnt und darf kein globales D1-Vorab-Token im Kern verbrauchen. Kein alternativer öffentlicher Listener, Port oder Route darf diese Prüfung umgehen.
+
+**Vertragskonflikt explizit offen:** Der aktuelle D1-Proxy-Vertrag in [Issue #159](https://github.com/Kaancodm/GeniusNew/issues/159) verbietet das Entfernen sicherheitsrelevanter Header. Ein Entfernen **ausschließlich dieses zusätzlichen, bereits erfolgreich verifizierten Ingress-Headers** vor dem Core wird vorgeschlagen, damit er weder im Core noch in Logs erscheint und niemals als `Authorization`, D1-Signatur oder Core-Principal verwendet werden kann. Diese eng begrenzte Ausnahme braucht die ausdrückliche Aktualisierung des Vertrags in #163, unabhängiges Review und Kaans Freigabe. Bis dahin **Gate 10 HOLD**; andere D1-/Framing-Header werden nicht geändert, und der Kern lehnt ihre Duplikate unverändert anhand der rohen eingehenden Liste ab. Der neue Header darf keine User-/Job-Autorität ersetzen.
+
+Schlüssel nur in getrennten Secret-Stores für Vercel-Backend und Proxy, niemals Browser, Repository, Fehlerantwort, Request-Log oder Trace; keine Ableitung aus Core-Root-Secret oder D1-Signierschlüssel. Rotation, Proxy, TLS, Firewall und Deployment bleiben unverändert und benötigen eigene Freigabe. **Betriebsnachweis:** tatsächliche Vercel-Runtime, nginx/TLS-/HTTP2-Übersetzung, Duplikat-/Mischheader, ungültige/fehlende Schlüssel, Bypass-Ports und Lastbudget müssen reproduzierbar geprüft werden. Ein korrekter Ingress-Schlüssel umgeht niemals Signatur-, Zeit-, Replay-, Policy-, Audit- oder Quotenprüfungen. mTLS ist eine mögliche spätere Alternative, hier nicht eingerichtet.
 
 ## 5. Portal-Schema
 
