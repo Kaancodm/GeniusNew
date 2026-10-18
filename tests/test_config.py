@@ -41,6 +41,7 @@ class Files:
         return str(path)
 
     def data(self):
+        """Return a complete configuration using private fixture files and fixed worker IDs."""
         return {
             "service": {
                 "listen_host": "127.0.0.1",
@@ -48,6 +49,11 @@ class Files:
                 "root_secret_file": self.secret_path,
                 "anchor_state": self.anchor_path,
                 "database_dsn_file": self.dsn_path,
+                "worker": {"core_uid": 20001, "worker_uid": 20002,
+                           "worker_gid": 20002,
+                           "socket_gid": 20003,
+                           "socket_path": "/run/geniusnew-worker/ipc/worker.sock",
+                           "lease_path": "/run/geniusnew-worker/ipc/lease"},
                 "limits": {"rate_per_minute": 30, "burst": 5,
                            "max_in_flight": 4, "max_connections": 32},
             },
@@ -144,6 +150,18 @@ class StructureTest(Files, unittest.TestCase):
         data = self.data()
         data["service"]["tls"] = True
         self.refused(data, "unknown keys: tls")
+
+    def test_worker_profile_is_required_and_closed(self):
+        """Reject missing worker profiles, unknown settings, and shared Core/worker UIDs."""
+        data = self.data()
+        del data["service"]["worker"]
+        self.refused(data, "missing keys: worker")
+        data = self.data()
+        data["service"]["worker"]["fallback"] = "local"
+        self.refused(data, "unknown keys: fallback")
+        data = self.data()
+        data["service"]["worker"]["worker_uid"] = data["service"]["worker"]["core_uid"]
+        self.refused(data, "different UIDs")
 
     def test_grants_that_are_not_an_array_are_refused(self):
         data = self.data()
