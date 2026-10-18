@@ -591,7 +591,13 @@ initialisiert werden.
 
 Nach **jedem** Start nimmt D1 mindestens **65 Sekunden** nichts an: 60 Sekunden
 maximale Envelope-Gültigkeit plus 5 Sekunden erlaubter Vorlauf. Die Quarantäne
-beginnt erst nach bestandener Speicher-/Anker- und Uhrprüfung. Mindestens
+beginnt erst, wenn **alle Startprüfungen erfolgreich abgeschlossen** sind:
+Schema-/Rechte- und Speicherprüfung, vollständiger B5/B6-Abgleich von Job-Ledger
+und Audit, Prüfung der signierten Köpfe gegen den getrennten Anker sowie
+Uhrprüfung nach 4.9.3. Erst danach werden die monotone Startmarke und die
+geprüfte Core-UTC-Startzeit der Quarantäne gesetzt; die Dauer der Startprüfungen
+zählt nicht zu den 65 Sekunden. Eine fehlgeschlagene oder unklare Startprüfung
+startet keine Quarantäne und gibt D1 auch nach 65 Sekunden nicht frei. Mindestens
 65 Sekunden monotone Laufzeit **und** entsprechender geprüfter UTC-Fortschritt
 müssen verstrichen sein; bei unklarem Zeitverlauf bleibt D1 gesperrt. Während
 der Quarantäne werden Requests abgelehnt, nicht für eine spätere Annahme
@@ -764,7 +770,10 @@ der Relationsdateien. Lastprobe, Alarmnachweis und Kaans Zahlenfreigabe stehen a
 COMMIT/ROLLBACK und Crash-Ausgänge; parallele Nonce-/Kapazitätskonflikte;
 Uhr-Rücksprung im Prozess, nach Neustart und zwischen Instanzen; fehlende/
 abgesenkte Höchstzeit und unzulässige Rollenrechte; Quarantänegrenzen auch bei
-eingefrorener Uhr; koordinierter Restore; Bereinigung bei exakt/mehr als
+einer simulierten Startprüfdauer von mehr als 65 Sekunden: vor Ablauf weiterer
+65 Sekunden nach erfolgreichem Abschluss bleibt D1 REFUSE; fehlgeschlagene
+Startprüfungen starten keine Freigabefrist; eingefrorene Uhr; koordinierter
+Restore; Bereinigung bei exakt/mehr als
 65 Sekunden sowie fehlendem Audit/Kopf und Crash nach COMMIT; bidirektionaler
 Abgleich auch nach Bereinigung; Budgeterschöpfung, Neustart und unbekannter
 Speicherzustand. Zusätzlich: parallele und nach Neustart wiederholte
