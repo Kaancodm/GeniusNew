@@ -1,6 +1,6 @@
 # GeniusNew — Projektstand
 
-**Stand: 17.10.2026, `main` `462709314b6ce1731914ba90cd62ff8acad6c74c`.** Teil der
+**Stand: 18.10.2026, `main` `9b11f7a89fe948d65d6b2eb3337111a5b11d3a57`.** Teil der
 Wissensdatenbank, geführt von Claude Code (`docs/COLLABORATION.md`); NotebookLM gibt
 Auskunft. Entscheidungen stehen in `docs/DECISIONS.md`. Dieses Dokument ist in sich
 geschlossen gedacht: als Quelle für NotebookLM, Microsoft 365 Copilot oder jeden anderen
@@ -46,7 +46,7 @@ Audit-Kette festgehalten.
 
 | Gate | Inhalt | PR |
 | --- | --- | --- |
-| A1, A2 | Seccomp gegen Prozessstart; Landlock-Allowlist (Mindestziel). Offen: eigener OS-Nutzer für den Worker | #57, #76 |
+| A1, A2 | Seccomp gegen Prozessstart; Landlock-Allowlist; getrennter Worker-Dienst mit eigener fester UID gemergt. Betriebsabnahme für den Dienst weiterhin HOLD | #57, #76, #140 |
 | B0–B3 | `docs/DATABASE.md`, PostgreSQL-Fundament, persistentes Job- und Annahme-Ledger | #70, #78, #90, #93 |
 | B4, B5 | Wartende Jobs und Approval-Speicher, persistente Audit-Kette. **Ohne** `Claude DB Review: APPROVED` am Head gemergt, Nachholung offen (Entscheidung 6) | #94, #95 |
 | B6 | Ledger und Approval-Speicher manipulationssichtbar, Abgleich gegen die verankerte Kette | #97 |
@@ -60,10 +60,13 @@ Audit-Kette festgehalten.
 | E1 | Demo mit Persistenz-Angriffen | #112 |
 | Werkzeuge | Server-Einrichtung `ops/server/genius-server`, Deck, Reviewkanäle Abacus und Kiro; manueller iPad-Modellclient über Tailscale (`tools/ipad_llm.py`, Live-Test am Gerät UNKNOWN) | #110, #114, #116, #142 |
 
-**Noch offen:** C5 (Betriebsanleitung mit systemd, Rotation), E3 (frischer Klon auf einem
-echten Server), D1-Code, D2, D3, E2 (Security-Review am Head). Die
+**Noch offen:** C5 (Betriebsanleitung mit systemd, Rotation und Betriebsabnahme des
+Worker-Dienstes aus #140), E3 (frischer Klon auf einem echten Server), D1-Code, D2,
+D3 und E2 (Security-Review am Head). **D1-Code bleibt auf HOLD; D2 und D3 folgen
+erst nach einer neuen Entscheidung.** Die
 `ROADMAP-V02.md`-Spalte „Stand“ ist seit #130 (`c6a37bb`) angeglichen. Nur die C3-Zelle
-nennt `Claude DB Review` dort noch UNKNOWN; belegt ist APPROVED am Merge-Head `cc95586`
+nennt `Claude DB Review` dort noch UNKNOWN; belegt ist APPROVED am Merge-Head
+`cc95586ca27e6f9d76fd737967d87cdb2e8a44d5`
 (`docs/DECISIONS.md`, 04.10.2026). Das korrigiert ein eigener Docs-PR.
 
 **Messbar (am 17.10.2026 auf `4627093` ausgeführt, Python 3.13.16, lokales PostgreSQL 16):**
@@ -119,12 +122,15 @@ Test wird übersprungen (`AGENTS.md`, Regel 4).
 
 ## Nächste Schritte
 
-Reihenfolge laut `docs/ROADMAP-V02.md`; Entscheidungen von Kaan sind dort unter „Offene
-Entscheidungen“ gelistet (Portal in der Beta, Portal→Kern-Authentisierung, abgelaufene
+Die Roadmap-Reihenfolge gilt vorbehaltlich der jüngeren Entscheidung vom 09.10.2026:
+Zunächst werden offene PRs, Konflikte und Merge-Gates bereinigt; danach pausiert die
+Entwicklung bis zum neuen v0.2-Master-Prompt. Die übrigen Punkte sind ein Rückstand,
+kein Auftrag zum Start neuer Features. Offene Architekturentscheidungen stehen in
+`docs/ROADMAP-V02.md` (Portal in der Beta, Portal→Kern-Authentisierung, abgelaufene
 Jobs, Annahmen und Policy).
 
-1. Offene PRs fertig aufräumen (Abschnitt unten, Auftrag vom 09.10.2026); danach Pause
-   bis zum neuen v0.2-Master-Prompt, sofern Kaan sie bestätigt.
+1. Offene PRs, Konflikte und Merge-Gates fertig bereinigen (Abschnitt unten, Auftrag
+   vom 09.10.2026); danach Entwicklungspause bis zum neuen v0.2-Master-Prompt.
 2. `Claude DB Review` für B4 (#94) und B5 (#95) am gemergten Stand nachholen.
 3. Kaan entscheidet: Python-Version der CI (3.13 zusätzlich oder statt 3.11) und ob
    Linter, Typprüfung, Coverage und `pip-audit` als Entwicklungswerkzeuge dazukommen.
@@ -138,7 +144,8 @@ Jobs, Annahmen und Policy).
    Gemini, Freigabe Kaan), dann die Umsetzung (Codex, `Claude DB Review`, Grenze aus
    `SECURITY.md` mit Kaans OK).
 8. Quellenpaket für NotebookLM nach Verfahren (`docs/COLLABORATION.md`).
-9. D1-Code (Codex) nach dem Vertrag aus #120, danach D2 und D3.
+9. D1-Code bleibt auf HOLD; D2 und D3 erst nach einer neuen Entscheidung zu D1
+   einplanen. Der Vertrag aus #120 ist nur Dokumentation.
 10. E2: Security-Review des vollständigen Heads (Claude und Copilot).
 11. Roadmap: C3-Zelle auf den Beleg aus `docs/DECISIONS.md` korrigieren (eigener Docs-PR).
 
@@ -154,14 +161,17 @@ Kaans OK ohne Merge geschlossen:
 | #134 | `cbf32f6` | Regeländerung ohne belegte Kaan-Entscheidung und ohne die nötigen Reviews; schwächt Schutzregeln ab (Entscheidung 07.10.2026) |
 | #118 | `8ab7fca` | Überholt durch #129 und #130; die C3-Entscheidung steht jetzt in `docs/DECISIONS.md` |
 
-Danach sind 16 PRs offen. Keiner ist mergebereit; überall fehlt das Copilot-Review
-(Kontingent erschöpft). Offen für Kaan:
+Nach diesen Schließungen waren 16 PRs offen. Am 18.10.2026 sind 20 PRs offen;
+#140 wurde am 17.10.2026 um 21:33:51 UTC als
+`9b11f7a89fe948d65d6b2eb3337111a5b11d3a57` gemergt. Die Betriebsabnahme
+bleibt laut #140 auf HOLD; #144 ist noch offen. Offene Fragen:
 
-- **Pause:** Gilt sie noch? Am 17.10.2026 wurde #142 (neues Werkzeug) gemergt, und an
-  A2/C5 wird in #140 und #144 gearbeitet. UNKNOWN, bis Kaan entscheidet.
+- **Pause:** Die Entscheidung vom 09.10.2026 gilt als dokumentierte Reihenfolge:
+  erst PRs, Konflikte und Merge-Gates bereinigen, dann pausieren. Die Bereinigung ist
+  bei 20 offenen PRs noch nicht abgeschlossen; die Pause steht daher noch aus.
 - **Copilot-Review:** warten oder für die Dauer des Engpasses einen Ersatz festlegen.
-- **Regelfassung:** #139 und #141 berufen sich auf zwei verschiedene, nicht eingetragene
-  Kaan-Entscheidungen (08.10. und 06.10.2026) und widersprechen sich in `AGENTS.md` und
+- **Regelfassung:** Die weiterhin offenen #139 und #141 berufen sich auf zwei
+  verschiedene, nicht eingetragene Kaan-Entscheidungen (08.10. und 06.10.2026) und widersprechen sich in `AGENTS.md` und
   `docs/COLLABORATION.md`; #128 berührt dieselben Regeldateien. Welche gilt, entscheidet
   Kaan schriftlich; Claude Code trägt es in `docs/DECISIONS.md` ein.
 
