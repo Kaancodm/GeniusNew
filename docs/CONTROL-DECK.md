@@ -20,6 +20,27 @@ Alarmstatus für Verkauf, Sponsoring, Allgemein und System. TERM-Befehle werden 
 die Zwischenablage kopiert. Wiedereinstiegspunkte öffnen PRs, kopieren Login-Befehle
 oder starten eine allowlistete Prüfung.
 
+## Projektstand und Wiedereinstieg
+
+Die 21 Implementierungspunkte verwenden feste Merge-Commit-SHAs statt löschbarer
+Feature-Branch-Namen. Das Deck prüft die Commit-Existenz und die Zugehörigkeit zu
+lokalem `main`. „AUF MAIN“ bedeutet nur: Code gemergt, kein vollständiger Gate-PASS.
+
+Die Merge-Nachweise wurden am 05.10.2026 mit GitHub und lokalem `main` abgeglichen.
+Für `3497e699c3b42c51eb0d26742af7b3e6de042f58` wurde der GitHub-Check
+`contracts` als erfolgreich gelesen. Wechselt der main-SHA, wird diese historische
+CI-Evidenz als ungeprüft angezeigt.
+
+Der Wiedereinstieg folgt der Reihenfolge der offenen Punkte; E3 (frische Installation)
+kommt vor dem Portal. Bereits gemergte B1–B7 werden nicht erneut als „beginnen“
+angeboten. Offene Betriebs- und Reviewnachweise bleiben ausdrücklich sichtbar:
+eigene OS-Nutzer für Worker/Anker, produktiver Restore-Betrieb, aktuelle B4/B5-Reviews
+und unabhängiger Abschlussreview. Das Deck erteilt keine Beta-/Release-Freigabe.
+
+TERM-Kommandos zeigen auf den Checkout aus `--repo`, nicht auf ein zweites,
+möglicherweise veraltetes `~/GeniusNew`. Vorhandene lokale venv-Pythonpfade werden
+verwendet. Statusabfragen führen diese TERM-Kommandos nicht aus.
+
 ## Mail Center
 
 Das Control Deck liest ausschließlich einen normalisierten lokalen Mail-Snapshot. Der
@@ -77,9 +98,14 @@ unterschiedliche Zustände; eine offene Terminal-Sitzung beweist keinen Modellzu
 - Grok: direkter Web-Zugang; der Browser prüft die Anmeldung.
 - Grok Bot: externer Zugang, ohne unterstützten direkten Steuerungsadapter.
   Weder ein installierter Skill noch eine frühere SSH-Einrichtung beweisen Live-Zugriff.
-- Abacus.AI: vorläufiger Ersatz für Grok Build. Das Control Deck öffnet ausschließlich
-  ChatLLM im Browser; es gibt keinen lokalen Abacus-Start, keinen Repo-Zugriff und keine
-  Secret-Weitergabe aus dem Control Deck.
+- Abacus.AI: Browser-Link und zwei TERM-Kopierknöpfe für die geprüften Textreview-
+  Profile Gemini 3.8 Flash und Sonnet 5.5. Die Anzeige kennzeichnet den historischen
+  Testnachweis vom 05.10.2026 und das aktuell ungeprüfte Kontingent getrennt.
+  Beide Starter öffnen die jeweilige getestete Sitzung im Plan-Modus mit gesperrten
+  Werkzeugen; erst ein eingegebener Auftrag verbraucht Modellkontingent.
+  Die Modellkennungen wurden am CLI-Lauf belegt, nicht aus der Antwort abgeleitet.
+  Die API startet Abacus nicht. Automatische Repo-Arbeit bleibt ungeprüft.
+  Das Deck liest keine Credentials und reicht keine Secrets weiter.
 - Grok Build bleibt pausiert, bis sein unterstützter Zugriffs- und Sandbox-Umfang neu
   geprüft und als eigenes Gate freigegeben ist.
 - Hermes-Status liest nur Programmpfad und tmux-Zustand; der Paket-Launcher wird
