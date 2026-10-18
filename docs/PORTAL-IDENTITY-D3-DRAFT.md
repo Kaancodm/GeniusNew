@@ -31,10 +31,10 @@ authentisiert niemanden.
   als 32 lowercase Hex-Zeichen (`portal_user_ref`). Ein Klartextname oder eine
   E-Mail-Adresse gehört nicht in die signierte Nachricht.
 - Kaan prüft die Person außerhalb des Portals, bevor ein Core-Administrator
-  `(issuer, portal_user_ref)` einer bestehenden oder neuen kanonischen
-  Personen-ID zuordnet. Der Core erzeugt diese ID; Portal und Browser wählen
-  sie nicht. Ein unbekannter, mehrfacher, gesperrter oder widersprüchlicher
-  Eintrag ist REFUSE.
+  `(portal_service_principal_id, portal_user_ref)` einer bestehenden oder
+  neuen kanonischen Personen-ID zuordnet. Der Core erzeugt diese ID; Portal
+  und Browser wählen sie nicht. Ein unbekannter, mehrfacher, gesperrter oder
+  widersprüchlicher Eintrag ist REFUSE.
 - Direkte API-Keys und Approver-Subjects derselben geprüften Person tragen
   dieselbe Core-Personen-ID. Ein noch nicht verifizierter Alias darf keine
   Freigabe auslösen. Die C3-Selbstfreigabe vergleicht die Personen-ID des
@@ -43,12 +43,14 @@ authentisiert niemanden.
 - Sperren und Aufheben einer Bindung wirken bei jeder neuen Core-Annahme.
   Bereits signierte, noch gültige Requests werden erneut gegen den aktuellen
   Registerzustand geprüft und nach Sperrung abgelehnt. Eine einmal verwendete
-  `(issuer, portal_user_ref)` wird niemals einer anderen Person zugewiesen.
-  Nach Sperrung bleibt die Referenz dauerhaft gesperrt. Wiederaufnahme eines
-  Kontos erhält eine neue Referenz und benötigt einen auditierten
-  Administratorvorgang mit erneutem Identitätsnachweis. So kann ein vor der
-  Sperrung signierter Request nicht nach einer schnellen Umbindung unter einer
-  anderen Personen-ID angenommen werden.
+  `(portal_service_principal_id, portal_user_ref)` wird niemals einer anderen
+  Person zugewiesen. Nach Sperrung bleiben Konto und Referenz dauerhaft
+  gesperrt. Für eine Wiederaufnahme wird nach erneutem Identitätsnachweis
+  ein **neues** Portal-Konto mit neuer Referenz eingeladen und durch einen
+  auditierten Administratorvorgang derselben Core-Personen-ID zugeordnet.
+  Das alte Konto und dessen Bindung bleiben als gesperrte Datensätze erhalten.
+  So kann ein vor der Sperrung signierter Request nicht nach einer schnellen
+  Umbindung unter einer anderen Personen-ID angenommen werden.
 - Portal-Sessions werden bei Kontosperrung beendet. Die Core-Sperre ist davon
   unabhängig nötig, weil ein bereits signierter Request sonst noch eintreffen
   könnte. Fällt Portal-DB oder Core-Register aus, wird die Aktion abgelehnt.
@@ -71,7 +73,8 @@ auch hier und muss vor Code in den gemeinsamen Vertrag übernommen werden.
 Eine v2-Signatur darf
 niemals als D1-Signatur gelten und umgekehrt. Die Replay-Domäne ist
 `geniusnew.portal-core.request.v2`; sie bleibt über Schlüsselwechsel stabil.
-Ein Nonce wird für diese Domäne und denselben `issuer` genau einmal verbraucht.
+Ein Nonce wird für diese Domäne und denselben verifizierten
+`portal_service_principal_id` genau einmal verbraucht.
 Die Speichergestalt und ihre Rollback-Sicherung gehören in den von ChatGPT in
 Kaans Auftrag geführten Entwurf [`DATABASE.md`](DATABASE.md), nicht in diesen
 Vertrag.
@@ -93,11 +96,16 @@ ein Proxy darf v2 nicht als D1 oder direkte API-Key-Route weiterleiten.
 2. Der Core prüft am geschützten Ingress rohe Route, Header, Framing und Limits,
    dann kanonische Body- und Envelope-Bytes, Digest, Zeit und Signatur. Ein
    D1-Envelope oder ein Mischheader auf dem v2-Pfad ist REFUSE.
-3. Der Core ermittelt den konfigurierten Portal-Dienst aus
-   `(issuer, audience, key_id)`. Erst dann liest er seine aktuelle eindeutige
-   Bindung für `(issuer, portal_user_ref)` und löst sie zu Core-`subject` und
-   kanonischer Personen-ID auf. Ohne aktive Bindung entsteht weder Job noch
-   Freigabe. Der Service-Principal wird nie als Job-`user_id` eingesetzt.
+3. Der Core ordnet das erfolgreich verifizierte Tupel
+   `(issuer, audience, key_id)` einem konfigurierten Portal-Dienst zu. Die
+   Konfiguration ordnet jedem zugelassenen Tupel genau eine stabile
+   `portal_service_principal_id` zu; mehrere Tupel dürfen auf denselben
+   Dienst zeigen, etwa bei Schlüsselrotation. Erst dann liest der Core seine
+   aktuelle eindeutige Bindung für
+   `(portal_service_principal_id, portal_user_ref)` und löst sie zu
+   Core-`subject` und kanonischer Personen-ID auf. Ohne aktive Bindung
+   entsteht weder Job noch Freigabe. Der Service-Principal wird nie als
+   Job-`user_id` eingesetzt.
 4. Der Core prüft Policy, Rolle, Personen-ID, Job-Grenzen, Rate und Quote mit
    der aufgelösten Identität. Eine Freigabe durch dieselbe Person wird vor
    jeder Zustandsmutation abgelehnt. Erst danach darf die Replay-Reservation
