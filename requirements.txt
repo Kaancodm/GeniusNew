@@ -155,6 +155,16 @@ pycparser==3.0 \
     --hash=sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29 \
     --hash=sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992
 
+# Portal password hashing; Kaan approved Argon2id in docs/DECISIONS.md.
+# Hashes: https://pypi.org/pypi/argon2-cffi/25.1.0/json
+argon2-cffi==25.1.0 \
+    --hash=sha256:fdc8b074db390fccb6eb4a3604ae7231f219aa669a2652e0f20e16ba513d5741 \
+    --hash=sha256:694ae5cc8a42f4c4e2bf2ca0e64e51e23a040c6a517a85074683d3959e1346c1
+# Hashes: https://pypi.org/pypi/argon2-cffi-bindings/26.1.0/json
+argon2-cffi-bindings==26.1.0 \
+    --hash=sha256:27f1821903e2ceadcb88ec2b45ef190897b7682449c772f4d9b53e42c520cf29 \
+    --hash=sha256:63505c71542a44b68b1e38060450fb006404170da375feb31af153e7f9c6205d
+
 # PostgreSQL adapter; uses the system libpq (Debian/Ubuntu: libpq5).
 # Hashes: https://pypi.org/pypi/psycopg/3.3.3/json
 psycopg==3.3.3 \

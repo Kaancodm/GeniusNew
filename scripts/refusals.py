@@ -74,7 +74,8 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/http_entry.py", "geniusnew/wiring.py",
            "geniusnew/anchor_process.py", "geniusnew/config.py",
            "geniusnew/__main__.py", "geniusnew/database.py",
-           "geniusnew/audit_store.py", "tools/control_deck/actions.py",
+           "geniusnew/audit_store.py", "geniusnew/portal_passwords.py",
+           "tools/control_deck/actions.py",
            "tools/ipad_llm.py",
            "ops/server/genius-server")
 
@@ -86,6 +87,7 @@ GUARDED_TOOL_TESTS = {"tools/ipad_llm.py": "test_ipad_llm.py"}
 # still runs all tests; every selected test file must pass for a mutation to
 # survive. A missing refusal test is therefore still a failure of this guard.
 GUARDED_PYTHON = {
+    "geniusnew/portal_passwords.py": ("test_portal_passwords.py",),
     "geniusnew/worker_service.py": ("test_worker_service.py",),
     "geniusnew/isolation.py": ("test_isolation.py",),
     "geniusnew/workers.py": ("test_workers.py", "test_isolation.py", "test_ttl.py"),
