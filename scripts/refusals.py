@@ -25,9 +25,13 @@ structured evidence while tests still pass because ContractError was raised.
 
 Shell scripts in the guarded list refuse with `die "..."`. Each such line is
 rewritten to `: "..."` — the message is still evaluated, but nothing stops —
-and the test module that runs the script must fail. Only that module runs per
-mutant (GUARDED_SHELL): the whole suite per line would take an hour, and no
-other module executes the script.
+and the test module that runs the script must fail. Standalone tools likewise
+use their dedicated test module per mutant. The unmutated baseline still runs
+the complete suite.
+
+Each numeric entry in the sandbox's `_FILTER_ARCHES` kill table is also a
+refusal: remove it independently and require the raw-syscall tests to notice.
+The thread-name EPERM action is replaced by ALLOW independently as well.
 
 This is deliberately not general-purpose mutation testing. Flipping arbitrary
 operators produces mutants that change nothing observable, and the survivors are
@@ -64,6 +68,7 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/audit.py", "geniusnew/audit_chain.py",
            "geniusnew/results.py", "geniusnew/keys.py",
            "geniusnew/workers.py", "geniusnew/isolation.py",
+           "geniusnew/worker_service.py",
            "geniusnew/isolation_child.py", "geniusnew/gateway.py",
            "geniusnew/orchestrator.py", "geniusnew/verifier.py",
            "geniusnew/http_entry.py", "geniusnew/wiring.py",
@@ -71,10 +76,40 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/__main__.py", "geniusnew/database.py",
            "geniusnew/audit_store.py", "tools/control_deck/actions.py",
            "tools/control_deck/harpa_inbox.py", "tools/control_deck/server.py",
+           "tools/ipad_llm.py",
            "ops/server/genius-server")
 
 # Guarded shell scripts and the one test module that runs each of them.
 GUARDED_SHELL = {"ops/server/genius-server": "test_server_tool.py"}
+GUARDED_TOOL_TESTS = {"tools/ipad_llm.py": "test_ipad_llm.py"}
+
+# Mutants run the tests that exercise each boundary. The unmutated baseline
+# still runs all tests; every selected test file must pass for a mutation to
+# survive. A missing refusal test is therefore still a failure of this guard.
+GUARDED_PYTHON = {
+    "geniusnew/worker_service.py": ("test_worker_service.py",),
+    "geniusnew/isolation.py": ("test_isolation.py",),
+    "geniusnew/workers.py": ("test_workers.py", "test_isolation.py", "test_ttl.py"),
+    "geniusnew/wiring.py": (
+        "test_approver_roles.py", "test_c3_durable_approvers.py",
+        "test_end_to_end.py", "test_approval_recovery_validation.py",
+        "test_anchored_wiring.py", "test_persistent_audit_wiring.py",
+        "test_ledger_audit_boundary.py", "test_approver_routes.py",
+        "test_acceptance_ledger.py", "test_b6_reconciliation.py",
+        "test_pending_database.py", "test_b7_crash_recovery.py", "test_serve.py",
+    ),
+    "geniusnew/config.py": ("test_config.py", "test_approver_config.py"),
+    "geniusnew/__main__.py": ("test_persistent_audit_wiring.py", "test_serve.py"),
+}
+
+
+def _focused_tests(path: str) -> tuple[str, ...] | None:
+    """Return boundary-specific test patterns or a standalone tool test."""
+    focused = GUARDED_PYTHON.get(path)
+    if focused is not None:
+        return focused
+    standalone = GUARDED_SHELL.get(path) or GUARDED_TOOL_TESTS.get(path)
+    return (standalone,) if standalone else None
 
 # `die "` as a command, not as the German article inside a message, a comment
 # or the definition `die() {`.
@@ -92,7 +127,8 @@ _SHELL_DIE = re.compile(r'(?<![\w-])die(\s+")')
 _REFUSAL_CALLS = {"_fail", "_deny"}
 _REFUSAL_RAISES = {
     "ContractError", "Rejected", "GatewayRejected", "AgentStartRefused",
-    "HarpaPayloadError", "HarpaStorageError",
+    "WorkerBoundaryError", "_OccupiedCgroup", "HarpaPayloadError",
+    "HarpaStorageError",
 }
 _REFUSAL_RETURNS = {"_refusal"}
 
@@ -151,13 +187,52 @@ def _find_shell_refusals(path: Path) -> list[Refusal]:
     return found
 
 
+def _seccomp_kill_rules(tree: ast.AST):
+    """Yield each numeric kill-table entry together with its containing tuple."""
+    for assignment in ast.walk(tree):
+        if not (isinstance(assignment, ast.Assign)
+                and any(isinstance(target, ast.Name) and target.id == "_FILTER_ARCHES"
+                        for target in assignment.targets)
+                and isinstance(assignment.value, ast.Dict)):
+            continue
+        for architecture in assignment.value.values:
+            if not isinstance(architecture, ast.Dict):
+                continue
+            for key, rules in zip(architecture.keys, architecture.values):
+                if (isinstance(key, ast.Constant) and key.value == "kill"
+                        and isinstance(rules, ast.Tuple)):
+                    for entry in rules.elts:
+                        if isinstance(entry, ast.Constant) and type(entry.value) is int:
+                            yield rules, entry
+
+
+def _thread_name_actions(tree: ast.AST):
+    """Yield values assigned to the seccomp thread-name refusal action."""
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign)
+                and any(isinstance(target, ast.Name) and target.id == "_THREAD_NAME_ACTION"
+                        for target in node.targets)):
+            yield node.value
+
+
 def find_refusals(path: Path) -> list[Refusal]:
+    """Locate supported conditional, gateway, shell, and seccomp refusals."""
     if path.suffix != ".py":
         return _find_shell_refusals(path)
     source = path.read_text()
     tree = ast.parse(source)
     lines = source.splitlines()
     found: list[Refusal] = []
+    for value in _thread_name_actions(tree):
+        found.append(Refusal(
+            path=str(path.relative_to(ROOT)), line=value.lineno,
+            condition="thread-name action", message="seccomp refuses thread names",
+            kind="seccomp_thread_name"))
+    for _, entry in _seccomp_kill_rules(tree):
+        found.append(Refusal(
+            path=str(path.relative_to(ROOT)), line=entry.lineno,
+            condition=str(entry.value), message=f"seccomp forbids syscall {entry.value}",
+            kind="seccomp_kill"))
     for node in ast.walk(tree):
         if isinstance(node, ast.ExceptHandler):
             for statement in _gateway_wrappers(node):
@@ -207,6 +282,16 @@ def _disable(source: str, refusal: Refusal) -> str:
         lines[refusal.line - 1] = _SHELL_DIE.sub(r":\1", target)
         return "".join(lines)
     tree = ast.parse(source)
+    if refusal.kind == "seccomp_thread_name":
+        for value in _thread_name_actions(tree):
+            if value.lineno == refusal.line:
+                return _replace_node(source, value, "_SECCOMP_RET_ALLOW")
+    if refusal.kind == "seccomp_kill":
+        for rules, entry in _seccomp_kill_rules(tree):
+            if entry.lineno == refusal.line and str(entry.value) == refusal.condition:
+                remaining = ast.Tuple(elts=[item for item in rules.elts if item is not entry],
+                                      ctx=ast.Load())
+                return _replace_node(source, rules, ast.unparse(remaining))
     for node in ast.walk(tree):
         if refusal.kind == "gateway_metadata" and isinstance(node, ast.ExceptHandler):
             for statement in _gateway_wrappers(node):
@@ -221,25 +306,34 @@ def _disable(source: str, refusal: Refusal) -> str:
 
 
 def _suite_passes(cwd: Path, *, failfast: bool = False,
-                  show_failure: bool = False, pattern: str | None = None) -> bool:
+                  show_failure: bool = False,
+                  patterns: tuple[str, ...] | None = None) -> bool:
+    """Run every selected test pattern, returning false on failure or timeout."""
     # A mutant is caught by its first failing test. The unmutated baseline
     # still runs every test so an unrelated failure cannot validate a mutant.
-    command = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"]
-    if pattern:
-        command += ["-p", pattern]
-    if failfast:
-        command.append("-f")
-    completed = subprocess.run(
-        command,
-        cwd=cwd, capture_output=True, text=True,
-    )
-    if show_failure and completed.returncode != 0:
-        print(completed.stdout[-4000:], file=sys.stderr)
-        print(completed.stderr[-4000:], file=sys.stderr)
-    return completed.returncode == 0
+    for pattern in patterns or (None,):
+        command = [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-q"]
+        if pattern:
+            command += ["-p", pattern]
+        if failfast:
+            command.append("-f")
+        try:
+            completed = subprocess.run(
+                command, cwd=cwd, capture_output=True, text=True,
+                timeout=300 if pattern is None else 60,
+            )
+        except subprocess.TimeoutExpired:
+            return False
+        if show_failure and completed.returncode != 0:
+            print(completed.stdout[-4000:], file=sys.stderr)
+            print(completed.stderr[-4000:], file=sys.stderr)
+        if completed.returncode != 0:
+            return False
+    return True
 
 
 def check(paths: list[str]) -> int:
+    """Require baseline success and a failing test for each isolated refusal mutation."""
     refusals = [(Path(ROOT / path), refusal)
                 for path in paths for refusal in find_refusals(ROOT / path)]
     if not refusals:
@@ -255,6 +349,14 @@ def check(paths: list[str]) -> int:
             print("the suite does not pass unmutated — fix that first", file=sys.stderr)
             return 1
 
+        focused_patterns = sorted({pattern for path in paths
+                                   for pattern in _focused_tests(path) or ()})
+        for pattern in focused_patterns:
+            if not _suite_passes(workspace, show_failure=True, patterns=(pattern,)):
+                print(f"focused baseline {pattern} does not pass — fix that first",
+                      file=sys.stderr)
+                return 1
+
         survivors = []
         for index, (path, refusal) in enumerate(refusals, start=1):
             target = workspace / refusal.path
@@ -265,7 +367,7 @@ def check(paths: list[str]) -> int:
             original = target.read_text()
             target.write_text(_disable(original, refusal))
             survived = _suite_passes(workspace, failfast=True,
-                                     pattern=GUARDED_SHELL.get(refusal.path))
+                                     patterns=_focused_tests(refusal.path))
             target.write_text(original)
 
             mark = "SURVIVED" if survived else "caught  "

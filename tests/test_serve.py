@@ -37,6 +37,7 @@ def free_port() -> int:
 
 def configuration(*, secret_path: str, anchor_path: str, port: int, digest: str, database_dsn_file: str,
                   rate_per_minute: int = 60, burst: int = 20) -> str:
+    """Render a local server configuration with the fixed worker profile."""
     return f"""
 [service]
 listen_host = "127.0.0.1"
@@ -44,6 +45,14 @@ listen_port = {port}
 root_secret_file = "{secret_path}"
 anchor_state = "{anchor_path}"
 database_dsn_file = "{database_dsn_file}"
+
+[service.worker]
+core_uid = 20001
+worker_uid = 20002
+worker_gid = 20002
+socket_gid = 20003
+socket_path = "/run/geniusnew-worker/ipc/worker.sock"
+lease_path = "/run/geniusnew-worker/ipc/lease"
 
 [service.limits]
 rate_per_minute = {rate_per_minute}
@@ -109,8 +118,10 @@ class ServeTest(unittest.TestCase):
         self._directory.cleanup()
 
     def start(self):
+        """Start the explicit local runner fixture and wait for listener readiness."""
         self.process = subprocess.Popen(
-            [sys.executable, "-m", "geniusnew", "serve", "--config", str(self.config)],
+            [sys.executable, str(ROOT / "tests" / "serve_fixture.py"),
+             "--config", str(self.config)],
             cwd=ROOT, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE)
         deadline = time.monotonic() + 30
@@ -156,6 +167,16 @@ class ServeTest(unittest.TestCase):
         self.assertNotIn(b"listening on", result.stderr)
         self.assertNotIn(b"Traceback", result.stderr)
         self.assertNotIn(self.dsn_path.read_bytes(), result.stderr)
+        with socket.socket() as probe:
+            self.assertNotEqual(probe.connect_ex(("127.0.0.1", self.port)), 0)
+
+    def test_real_server_refuses_without_verified_worker_service(self):
+        """Require production startup to refuse an unverified worker before listening."""
+        result = run_module("serve", "--config", str(self.config), timeout=20)
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn(b"listening on", result.stderr)
+        self.assertNotIn(b"Traceback", result.stderr)
+        self.assertNotIn(ROOT_SECRET, result.stderr)
         with socket.socket() as probe:
             self.assertNotEqual(probe.connect_ex(("127.0.0.1", self.port)), 0)
 
