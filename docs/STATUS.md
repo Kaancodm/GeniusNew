@@ -1,6 +1,7 @@
 # GeniusNew — Projektstand
 
-**Stand: 08.10.2026, `main` `7f81e240f6ec4b16d876f081249afb3d47240901`.** Teil der
+**Stand: 08.10.2026, `main` `7f81e240f6ec4b16d876f081249afb3d47240901`.** Nachtrag nur
+zu D1 (Entscheidungen vom 18.10.2026, #158); die Gesamtpflege seit 08.10.2026 steht aus. Teil der
 Wissensdatenbank, geführt von Claude Code (`docs/COLLABORATION.md`); NotebookLM gibt
 Auskunft. Entscheidungen stehen in `docs/DECISIONS.md`. Dieses Dokument ist in sich
 geschlossen gedacht: als Quelle für NotebookLM, Microsoft 365 Copilot oder jeden anderen
@@ -55,7 +56,7 @@ Audit-Kette festgehalten.
 | C3 | Rolle „Freigebende“ mit eigener HTTP-Route | #111 |
 | C4 | Rate-Limit, Job- und Verbindungsgrenze, nginx-Vorlage | #71 |
 | C5 (Teil) | Restore gegen den unabhängigen Anker durchgespielt | #119 |
-| D1 (nur Doku) | Portal→Kern-Vertrag, Replay- und Identitäts-Gates; Code fehlt | #120 |
+| D1 (nur Doku) | Portal→Kern-Vertrag, Replay- und Identitäts-Gates; Code fehlt. Security-Review am `3d26d74` (H1, M1–M4); Gates 1–5, 7 und 8 sowie der Annahmepfad von Gate 9 von Kaan am 18.10.2026 entschieden (`docs/DECISIONS.md`); Entwurf noch nicht überarbeitet, D1 bleibt HOLD | #120, #158 |
 | E1 | Demo mit Persistenz-Angriffen | #112 |
 | Werkzeuge | Server-Einrichtung `ops/server/genius-server`, Deck, Reviewkanäle Abacus und Kiro | #110, #114, #116 |
 
@@ -130,7 +131,10 @@ Jobs, Annahmen und Policy).
    Gemini, Freigabe Kaan), dann die Umsetzung (Codex, `Claude DB Review`, Grenze aus
    `SECURITY.md` mit Kaans OK).
 8. Quellenpaket für NotebookLM nach Verfahren (`docs/COLLABORATION.md`).
-9. D1-Code (Codex) nach dem Vertrag aus #120, danach D2 und D3.
+9. D1: Entwurf nach den Entscheidungen vom 18.10.2026 überarbeiten (Codex, #159) und
+   `docs/DATABASE.md` §4.9 anpassen (ChatGPT im Auftrag von Kaan, #160); Uhr-Grenze als
+   eigener `SECURITY.md`-PR, Zahlen fürs Lastbudget zur Freigabe, erneuter Review am
+   neuen Head (Gate 6); erst dann D1-Code (Codex), danach D2 und D3.
 10. E2: Security-Review des vollständigen Heads (Claude und Copilot).
 
 ## Zusammenarbeit der Werkzeuge
