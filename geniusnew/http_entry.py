@@ -490,6 +490,27 @@ def make_handler(entry: HttpEntry):
             # chain, where what may appear is a closed contract.
             return
 
+        def _check_headers(self) -> bool:
+            # A mapping loses duplicates; get() and dict(items()) can then
+            # disagree about framing or authority. Refuse before either is used.
+            try:
+                for name in ("Content-Length", "Transfer-Encoding", "Host", "Authorization"):
+                    if len(self.headers.get_all(name, [])) > 1:
+                        _fail("duplicate request header")
+            except ContractError:
+                self.close_connection = True
+                self._respond(_refusal(400, "MALFORMED_REQUEST"))
+                return False
+            return True
+
+        def parse_request(self) -> bool:
+            # Every method, including HEAD, must pass the raw-header check.
+            return super().parse_request() and self._check_headers()
+
+        def handle_expect_100(self) -> bool:
+            # The base parser calls this before parse_request() returns.
+            return self._check_headers() and super().handle_expect_100()
+
         def _respond(self, response: Response) -> None:
             payload = response.to_bytes()
             self.send_response(response.status)
@@ -502,7 +523,8 @@ def make_handler(entry: HttpEntry):
                 # error, which is the wrong thing to debug.
                 self.send_header("Connection", "close")
             self.end_headers()
-            self.wfile.write(payload)
+            if self.command != "HEAD":
+                self.wfile.write(payload)
 
         def _read_body(self) -> bytes | None:
             # Chunked bodies are not read here, and a body left unread on a
