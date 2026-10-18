@@ -22,6 +22,8 @@ _AGENT_CRITERIA = {
     "copilot": "GitHub-aware coding assistance, review, and focused implementation",
     "gemini": "knowledge synthesis, documentation, and contradiction review",
     "abacus": "cross-model analysis, agent experimentation, and fallback evaluation",
+    "kimi": "long-context coding, analysis, and cost-sensitive fallback evaluation",
+    "grok": "tool-assisted coding, fast research, and fallback evaluation",
 }
 _ALLOWED_AGENTS = tuple(_AGENT_CRITERIA)
 _MAX_TEXT = 4096

@@ -23,7 +23,7 @@ class LayaShadowTests(unittest.TestCase):
         self.assertEqual(question["type"], "choice")
         self.assertEqual(
             set(question["criteria"]),
-            {"kiro", "copilot", "gemini", "abacus"},
+            {"kiro", "copilot", "gemini", "abacus", "kimi", "grok"},
         )
         self.assertNotIn("allow", payload)
         self.assertNotIn("deny", payload)
@@ -62,12 +62,12 @@ class LayaShadowTests(unittest.TestCase):
         self.assertEqual(result.authoritative_choice, "abacus")
 
     def test_parser_accepts_jev_answer_shape(self):
-        self.assertEqual(
-            parse_choice(
-                b'{"answers":{"agent":{"type":"choice","choice":"kiro"}}}'
-            ),
-            "kiro",
-        )
+        for agent in ("kiro", "kimi", "grok"):
+            with self.subTest(agent=agent):
+                raw = json.dumps({"answers": {"agent": {
+                    "type": "choice", "choice": agent,
+                }}}).encode("utf-8")
+                self.assertEqual(parse_choice(raw), agent)
 
     def test_task_size_is_bounded(self):
         with self.assertRaisesRegex(ShadowError, "task"):
