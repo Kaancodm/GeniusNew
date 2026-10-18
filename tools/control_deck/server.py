@@ -4,6 +4,7 @@ import argparse
 import hmac
 import ipaddress
 import json
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -14,6 +15,7 @@ from .mail_center import snapshot as mail_snapshot
 from .harpa_inbox import HarpaPayloadError, snapshot as harpa_snapshot, store as store_harpa
 
 STATIC = Path(__file__).with_name("static")
+HARPA_BODY_TIMEOUT_SECONDS = 10
 
 
 def _deny(handler: BaseHTTPRequestHandler, status: int) -> None:
@@ -29,6 +31,30 @@ def _refusal() -> None:
 class Handler(BaseHTTPRequestHandler):
     server_version = "GeniusControlDeck/0.1"
     timeout = 10
+
+    def _read_harpa_body(self, size: int) -> bytes:
+        """Bound the whole authenticated upload, including a slow byte stream."""
+        deadline = time.monotonic() + HARPA_BODY_TIMEOUT_SECONDS
+
+        def remaining_time() -> float:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("HARPA body deadline exceeded")
+            return remaining
+
+        original_timeout = self.connection.gettimeout()
+        body = bytearray()
+        try:
+            while len(body) < size:
+                self.connection.settimeout(remaining_time())
+                chunk = self.rfile.read1(min(size - len(body), 4096))
+                remaining_time()
+                if not chunk:
+                    raise HarpaPayloadError("incomplete HARPA body")
+                body.extend(chunk)
+            return bytes(body)
+        finally:
+            self.connection.settimeout(original_timeout)
 
     def _trusted_host(self) -> bool:
         # A page on any domain can resolve its own name to 127.0.0.1 (DNS
@@ -125,8 +151,11 @@ class Handler(BaseHTTPRequestHandler):
             _deny(self, 413)
             return
         try:
-            payload = json.loads(self.rfile.read(size))
+            payload = json.loads(self._read_harpa_body(size))
             result = store_harpa(payload, self.server.harpa_inbox)
+        except TimeoutError:
+            _deny(self, 408)
+            return
         except (ValueError, UnicodeDecodeError, RecursionError):
             _deny(self, 400)
             return

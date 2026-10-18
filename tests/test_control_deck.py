@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
+import socket
 import stat
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -386,6 +388,100 @@ class HostCheckTest(unittest.TestCase):
                 self.assertEqual(self.request("POST", "/api/harpa", f"127.0.0.1:{self.port}",
                                               headers, data)[0], status)
                 self.assertFalse(self.deck.harpa_inbox.exists())
+
+    def test_harpa_slow_body_has_a_total_deadline(self):
+        """Continuous bytes cannot keep an authenticated handler occupied forever."""
+        with patch.object(server, "HARPA_BODY_TIMEOUT_SECONDS", 0.25):
+            with socket.create_connection(("127.0.0.1", self.port), timeout=2) as client:
+                client.settimeout(2)
+                client.sendall((
+                    "POST /api/harpa HTTP/1.1\r\n"
+                    f"Host: 127.0.0.1:{self.port}\r\n"
+                    "Content-Type: application/json\r\n"
+                    f"Authorization: Bearer {'t' * 48}\r\n"
+                    "Content-Length: 100\r\n\r\n"
+                ).encode("ascii"))
+                stopped = threading.Event()
+                sent = []
+
+                def trickle():
+                    while not stopped.wait(0.03):
+                        try:
+                            client.sendall(b" ")
+                            sent.append(1)
+                        except OSError:
+                            return
+
+                sender = threading.Thread(target=trickle, daemon=True)
+                sender.start()
+                started = time.monotonic()
+                try:
+                    response = client.recv(4096)
+                finally:
+                    stopped.set()
+                    sender.join(2)
+        self.assertIn(b" 408 ", response.split(b"\r\n", 1)[0])
+        self.assertGreaterEqual(len(sent), 3)
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertFalse(self.deck.harpa_inbox.exists())
+
+    def test_harpa_truncated_body_is_rejected(self):
+        with socket.create_connection(("127.0.0.1", self.port), timeout=2) as client:
+            client.settimeout(2)
+            client.sendall((
+                "POST /api/harpa HTTP/1.1\r\n"
+                f"Host: 127.0.0.1:{self.port}\r\n"
+                "Content-Type: application/json\r\n"
+                f"Authorization: Bearer {'t' * 48}\r\n"
+                "Content-Length: 100\r\n\r\n{{"
+            ).encode("ascii"))
+            client.shutdown(socket.SHUT_WR)
+            response = client.recv(4096)
+        self.assertIn(b" 400 ", response.split(b"\r\n", 1)[0])
+        self.assertFalse(self.deck.harpa_inbox.exists())
+
+    def test_harpa_expired_deadline_refuses_before_reading(self):
+        """A past deadline rejects even when the socket has buffered bytes."""
+        class Connection:
+            def gettimeout(self):
+                return 10
+
+            def settimeout(self, timeout):
+                if timeout <= 0:
+                    raise ValueError("invalid socket timeout")
+
+        class Stream:
+            def read1(self, size):
+                raise AssertionError("expired request must not read")
+
+        handler = object.__new__(server.Handler)
+        handler.connection = Connection()
+        handler.rfile = Stream()
+        with patch.object(server, "time") as clock:
+            clock.monotonic.side_effect = [0, 11]
+            with self.assertRaises(TimeoutError):
+                handler._read_harpa_body(1)
+
+    def test_harpa_deadline_refuses_last_byte_arriving_too_late(self):
+        """A complete body received after the deadline is still refused."""
+        class Connection:
+            def gettimeout(self):
+                return 10
+
+            def settimeout(self, timeout):
+                pass
+
+        class Stream:
+            def read1(self, size):
+                return b"x"
+
+        handler = object.__new__(server.Handler)
+        handler.connection = Connection()
+        handler.rfile = Stream()
+        with patch.object(server, "time") as clock:
+            clock.monotonic.side_effect = [0, 0, 11]
+            with self.assertRaises(TimeoutError):
+                handler._read_harpa_body(1)
 
     def test_harpa_missing_short_or_unreadable_credentials_disable_ingress(self):
         original = self.deck.harpa_token_file

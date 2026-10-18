@@ -100,6 +100,8 @@ GUARDED_PYTHON = {
     ),
     "geniusnew/config.py": ("test_config.py", "test_approver_config.py"),
     "geniusnew/__main__.py": ("test_persistent_audit_wiring.py", "test_serve.py"),
+    "tools/control_deck/harpa_inbox.py": ("test_control_deck.py",),
+    "tools/control_deck/server.py": ("test_control_deck.py",),
 }
 
 
@@ -128,7 +130,7 @@ _REFUSAL_CALLS = {"_fail", "_deny"}
 _REFUSAL_RAISES = {
     "ContractError", "Rejected", "GatewayRejected", "AgentStartRefused",
     "WorkerBoundaryError", "_OccupiedCgroup", "HarpaPayloadError",
-    "HarpaStorageError",
+    "HarpaStorageError", "TimeoutError",
 }
 _REFUSAL_RETURNS = {"_refusal"}
 
