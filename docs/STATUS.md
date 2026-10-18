@@ -1,6 +1,7 @@
 # GeniusNew — Projektstand
 
-**Stand: 08.10.2026, `main` `7f81e240f6ec4b16d876f081249afb3d47240901`.** Teil der
+**Stand: 08.10.2026, `main` `7f81e240f6ec4b16d876f081249afb3d47240901`.** Nachtrag nur
+zu D1 (Entscheidungen vom 18.10.2026, #158); die Gesamtpflege seit 08.10.2026 steht aus. Teil der
 Wissensdatenbank, geführt von Claude Code (`docs/COLLABORATION.md`); NotebookLM gibt
 Auskunft. Entscheidungen stehen in `docs/DECISIONS.md`. Dieses Dokument ist in sich
 geschlossen gedacht: als Quelle für NotebookLM, Microsoft 365 Copilot oder jeden anderen
