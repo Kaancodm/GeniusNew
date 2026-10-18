@@ -172,6 +172,19 @@ einschließlich kleiner Ordnung sowie eine nur kofaktorisiert
 gültige Signatur als **REFUSE** prüfen; `signing_sha256` ersetzt diese
 Ed25519-Negativvektoren nicht.
 
+### Ed25519-Festwertvektor (L1)
+
+Öffentliches **Testmaterial**, niemals für den Betrieb. Der Seed ist unabhängig vom Core-Root-Secret. Der ASCII-Body ist `b'{"text":"hello"}'` und das unveränderte 352-Byte-Envelope aus dem Vektor oben; die Signatur gilt genau `b"geniusnew/portal-core/request/ed25519/d1\\x00" + envelope_bytes` (393 Bytes).
+
+| Wert | Erwartet (lowercase Hex) |
+| --- | --- |
+| Test-Seed: `bytes(range(32))` | `000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f` |
+| Public Key (32 Bytes, Raw) | `03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8` |
+| Ed25519-Signatur (64 Bytes / 128 Hex-Zeichen) | `ae927e464ea6e7b9ed2021c16f4697e66140fc701cd5d3902ab80c0e9df997fdc4b0f088bdf97551bead84c71582667b911fe54df67576e2366e6f9eccbca101` |
+| SHA-256 des kanonischen Envelope für `d1-audit-v1` | `08c36cbf373c676a3d92c0eee5537d50f87fc110a10e06231ba0153e4519871f` |
+
+Reproduktion: Ed25519-Private-Key aus dem Seed bauen, rohen öffentlichen Schlüssel vergleichen, die exakt vorhandenen Envelope-Bytes kanonisch erzeugen und mit `private_key.sign(signing_bytes)` signieren. Der daraus berechnete Wert muss bytegleich sein; `public_key.verify(signature, signing_bytes)` muss erfolgreich sein. Nach Änderung je eines Bytes der Signatur und der signierten Nachricht muss `InvalidSignature` folgen. Alle bereits dokumentierten `body_sha256`- und `signing_sha256`-Vektoren bleiben gültig. Zusätzlich sind Negativtests für `S >= L`, nichtkanonische Punkte und Signaturen nur mit Kofaktor-Gleichung erforderlich (strenges Profil oben).
+
 ## HTTP- und Proxy-Grenze
 
 Der einzige D1-Header heißt exakt `X-GeniusNew-D1-Envelope`. Sein einzelner ASCII-Wert
@@ -271,7 +284,7 @@ Reihenfolge eines D1-Requests:
    Ed25519-Prüfung, ein begrenztes, authentisierungsunabhängiges D1-Eingangsbudget
    belasten. Auch ungültige und nicht signierte Versuche verbrauchen dieses Budget;
    Erschöpfung ist REFUSE. Kapazität und Rate müssen für alle aktiven Core-Instanzen
-   vor Code als Last-Gate festgelegt und geprüft sein. Dieses Vorab-Budget ersetzt
+   vor Code als Last-Gate festgelegt und geprüft sein. Das vorangeschaltete geschützte Ingress-Gate 10 ist hierfür zwingend. Dieses Vorab-Budget ersetzt
    weder den Dienst- noch den Nutzer-Token-Bucket. Das Portal begrenzt zusätzlich
    die Zahl der Signierversuche pro geprüfter Portal-Nutzerreferenz **über alle
    Sessions hinweg** und insgesamt für das Portal, bevor es einen D1-Request
@@ -308,7 +321,7 @@ verwenden denselben schreibbaren PostgreSQL-Primary und dieselbe Replay-Tabelle.
 Getrennte schreibbare Kopien, Split-Brain und ein Failover ohne bestätigte
 Reservationen sperren D1; unbekannter Replikationsstand ist REFUSE.
 
-Die Replay-Transaktion setzt `SET LOCAL synchronous_commit TO on` nach `BEGIN`
+Jede D1-Schreibtransaktion setzt `SET LOCAL synchronous_commit TO on` nach `BEGIN`
 und prüft den wirksamen Wert unmittelbar vor COMMIT, ohne dazwischenliegende
 Änderung. `fsync=on` und `full_page_writes=on` werden beim Start und vor jeder
 Reservation wirksam geprüft. Kann das Betriebsprofil nicht bis zum COMMIT
