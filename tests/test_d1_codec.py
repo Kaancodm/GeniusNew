@@ -1,6 +1,7 @@
 import hashlib
 import json
 import unittest
+from unittest.mock import patch
 
 from geniusnew.contracts import ContractError
 from geniusnew.d1_codec import (encode_body, encode_unsigned_envelope,
@@ -59,6 +60,13 @@ class D1CodecTest(unittest.TestCase):
     def test_distinct_body_boundaries(self):
         with self.assertRaisesRegex(ContractError, "duplicate JSON key"):
             parse_body(b'{"text":"a","text":"b"}')
+        with self.assertRaisesRegex(ContractError, "JSON integer exceeds D1 range"):
+            parse_body(b'{"text":' + b'1' * 5000 + b'}')
+        with self.assertRaises(ContractError):
+            parse_body(b'[' * 1500 + b'0' + b']' * 1500)
+        with patch("geniusnew.d1_codec.json.loads", side_effect=RecursionError):
+            with self.assertRaisesRegex(ContractError, "invalid ASCII JSON"):
+                parse_body(self.body)
         with self.assertRaisesRegex(ContractError, "invalid JSON byte length"):
             parse_body(b'{"text":"' + b'a' * 16384 + b'"}')
         with self.assertRaisesRegex(ContractError, "body exceeds D1 limit"):

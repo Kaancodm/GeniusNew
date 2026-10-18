@@ -35,13 +35,22 @@ def _forbid_number(value: str) -> None:
     _fail("non-integer JSON number")
 
 
+def _bounded_int(value: str) -> int:
+    # D1 timestamps fit in ten digits; bound parsing before Python's integer
+    # conversion limit can turn an otherwise valid-size body into ValueError.
+    if len(value) > 10:
+        _fail("JSON integer exceeds D1 range")
+    return int(value)
+
+
 def _read_json(wire: bytes, limit: int) -> Any:
     if type(wire) is not bytes or not 0 < len(wire) <= limit:
         _fail("invalid JSON byte length")
     try:
         value = json.loads(wire.decode("ascii"), object_pairs_hook=_pairs,
-                           parse_float=_forbid_number, parse_constant=_forbid_number)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                           parse_int=_bounded_int, parse_float=_forbid_number,
+                           parse_constant=_forbid_number)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ContractError("invalid ASCII JSON") from exc
     return value
 
