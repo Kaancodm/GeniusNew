@@ -304,6 +304,19 @@ class HttpEntranceTest(Fixture, unittest.TestCase):
             with self.subTest(host=repr(host)):
                 with self.assertRaisesRegex(ContractError, 'host'):
                     serve(self.entry, host=host)
+        # A name is not an address: what it resolves to is the resolver's
+        # answer on the day, and 'localhost' has meant non-loopback before.
+        for host in ('localhost', 'example.org', '127.1', '0177.0.0.1'):
+            with self.subTest(host=repr(host)):
+                with self.assertRaisesRegex(ContractError, 'literal IP address'):
+                    serve(self.entry, host=host)
+        # No TLS lives behind this entrance, so a routable bind is refused
+        # here too, not only by the service configuration.
+        for host in ('0.0.0.0', '::', '203.0.113.7', '192.168.1.10',
+                     '::ffff:127.0.0.1'):
+            with self.subTest(host=repr(host)):
+                with self.assertRaisesRegex(ContractError, 'loopback'):
+                    serve(self.entry, host=host)
         for port in (-1, 65536, None, '8080', 80.0):
             with self.subTest(port=repr(port)):
                 with self.assertRaisesRegex(ContractError, 'port'):
