@@ -83,6 +83,13 @@ class TextDigestTest(unittest.TestCase):
         self.assertEqual(set(first), {"text"})
         self.assertLessEqual(len(first["text"]), 6000)
 
+    def test_long_stopword_only_fallback_keeps_statistics(self):
+        # No ranked keywords: the fallback must not consume the 6,000-char budget.
+        text = ("der " * 1700).strip() + "."
+        digest = render_digest(text)
+        self.assertIn("## Kennzahlen", digest)
+        self.assertNotIn("Gekürzt", digest)
+
     def test_the_tool_is_registered_for_the_server(self):
         self.assertIs(BUILTIN_WORKERS["digest"], TextDigest)
         self.assertEqual(TextDigest.tool, "digest")

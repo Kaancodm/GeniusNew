@@ -313,7 +313,7 @@ def render_digest(text: str) -> str:
         f"## {labels['core']}",
         "",
     ]
-    lines.extend(_core_sentences(sentences, keywords) or [sentences[0]])
+    lines.extend(_core_sentences(sentences, keywords) or [sentences[0][:320]])
     if keywords:
         lines += ["", f"## {labels['keywords']}", "",
                   ", ".join(f"{word} ({count})" for word, count in keywords)]
