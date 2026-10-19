@@ -1,8 +1,9 @@
 import unittest
+import unittest.mock
 
 from geniusnew.audit import AuditAuthority, event_from_handoff
 from geniusnew.audit_chain import (AuditAnchor, AuditChain, AuditHead, AuditRecord, sign_head,
-                                   verify)
+                                   verify, verify_extension)
 from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, issue, validate
 
 
@@ -621,6 +622,136 @@ class AsymmetricHeadTest(ChainFixture, unittest.TestCase):
             with self.subTest(key=repr(key)[:12]):
                 with self.assertRaisesRegex(ContractError, '32 bytes'):
                     AuditVerifier(public_key=key)
+
+
+class AnchorDeltaTest(ChainFixture, unittest.TestCase):
+    """The incremental protocol (docs/AUDIT-INCREMENTAL-DRAFT.md, step 1).
+
+    Deltas never carry their own base: the anchor extends what it already
+    committed, so a delta that would fit any other base is refused here.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.records = self.chain.records
+        self.head = self.chain.head(self.authority)
+        self.anchor = AuditAnchor()
+        self.head2 = sign_head(count=2, head_hash=self.records[1].record_hash,
+                               authority=self.authority)
+        self.anchor.commit_delta(self.head2, self.records[:2], authority=self.authority)
+
+    def test_a_delta_extends_from_the_committed_record(self):
+        committed = self.anchor.commit_delta(self.head, self.records[2:],
+                                             authority=self.authority)
+        self.assertEqual(committed, (5, self.head.head_hash))
+        self.assertEqual(self.anchor.committed, committed)
+
+    def test_a_zero_delta_against_the_committed_head_is_idempotent(self):
+        before = self.anchor.committed
+        self.assertEqual(
+            self.anchor.commit_delta(self.head2, [], authority=self.authority), before)
+
+    def test_a_zero_delta_must_name_the_committed_head(self):
+        foreign_zero = sign_head(count=2, head_hash=self.records[0].record_hash,
+                                 authority=self.authority)
+        with self.assertRaisesRegex(
+                ContractError, 'extension does not end where the signed head says'):
+            self.anchor.commit_delta(foreign_zero, [], authority=self.authority)
+
+    def test_a_gap_is_refused(self):
+        """Records starting past the committed count cannot extend it."""
+        with self.assertRaisesRegex(
+                ContractError, 'extension holds 2 records but the signed head adds 3'):
+            self.anchor.commit_delta(self.head, self.records[3:], authority=self.authority)
+
+    def test_a_replay_is_refused(self):
+        """Re-sending already committed records is not an extension."""
+        with self.assertRaisesRegex(
+                ContractError, 'extension holds more than the 3 records the signed'):
+            self.anchor.commit_delta(self.head, self.records, authority=self.authority)
+
+    def test_more_records_than_the_head_adds_are_refused(self):
+        with self.assertRaisesRegex(
+                ContractError, 'extension holds more than the 0 records the signed'):
+            self.anchor.commit_delta(self.head2, self.records[:1], authority=self.authority)
+
+    def test_a_head_before_the_committed_count_is_refused(self):
+        with self.assertRaisesRegex(
+                ContractError, 'signed head claims 0 records but the extension '
+                               'base already holds 2'):
+            self.anchor.commit_delta(
+                sign_head(count=0, head_hash='0' * 64, authority=self.authority),
+                [], authority=self.authority)
+
+    def test_a_wrong_link_is_refused(self):
+        with self.assertRaisesRegex(
+                ContractError, 'record 2 does not link to its predecessor'):
+            verify_extension(self.records[2:], self.head, from_count=2,
+                             from_hash='f' * 64, authority=self.authority)
+
+    def test_a_wrong_index_is_refused(self):
+        record = self.records[2]
+        relabelled = AuditRecord(99, record.event, record.previous_hash, record.record_hash)
+        with self.assertRaisesRegex(
+                ContractError, 'record at position 2 claims index 99'):
+            verify_extension((relabelled, *self.records[3:]), self.head, from_count=2,
+                             from_hash=self.records[1].record_hash, authority=self.authority)
+
+    def test_an_altered_record_is_refused(self):
+        record = self.records[2]
+        altered = AuditRecord(2, self.event(9), record.previous_hash, record.record_hash)
+        with self.assertRaisesRegex(ContractError, 'record 2 has been altered'):
+            verify_extension((altered, *self.records[3:]), self.head, from_count=2,
+                             from_hash=self.records[1].record_hash, authority=self.authority)
+
+    def test_an_extension_not_reaching_the_signed_head_is_refused(self):
+        short_head = sign_head(count=5, head_hash=self.records[3].record_hash,
+                               authority=self.authority)
+        with self.assertRaisesRegex(
+                ContractError, 'extension does not end where the signed head says'):
+            verify_extension(self.records[2:], short_head, from_count=2,
+                             from_hash=self.records[1].record_hash, authority=self.authority)
+
+    def test_a_head_signed_by_another_authority_is_refused(self):
+        foreign = sign_head(count=5, head_hash=self.head.head_hash, authority=self.other)
+        with self.assertRaises(ContractError):
+            self.anchor.commit_delta(foreign, self.records[2:], authority=self.authority)
+
+    def test_an_extension_past_the_delta_bound_is_refused(self):
+        from geniusnew import audit_chain
+        with unittest.mock.patch.object(audit_chain, '_MAX_DELTA_RECORDS', 2):
+            with self.assertRaisesRegex(
+                    ContractError, 'extension holds 3 records, more than the 2 one delta'):
+                self.anchor.commit_delta(self.head, self.records[2:], authority=self.authority)
+
+    def test_an_extension_checked_against_a_moved_anchor_is_refused(self):
+        """If the anchor moved elsewhere mid-check, the delta no longer applies.
+
+        The generator moves the anchor forward on the same chain — to three
+        records, not to this head — while the extension is being read. The
+        proof was made against the two-record base, so it must not land.
+        """
+        head3 = sign_head(count=3, head_hash=self.records[2].record_hash,
+                          authority=self.authority)
+
+        def sneaky():
+            self.anchor.commit_delta(head3, self.records[2:3], authority=self.authority)
+            yield from self.records[2:]
+
+        with self.assertRaisesRegex(
+                ContractError, 'anchor moved to 3 records while the extension from 2'):
+            self.anchor.commit_delta(self.head, sneaky(), authority=self.authority)
+        self.assertEqual(self.anchor.committed, (3, head3.head_hash))
+
+    def test_an_extension_landing_after_the_same_head_is_idempotent(self):
+        """The same move, when it lands on this very head, is not a conflict."""
+
+        def sneaky():
+            self.anchor.commit(self.head, self.records, authority=self.authority)
+            yield from self.records[2:]
+
+        committed = self.anchor.commit_delta(self.head, sneaky(), authority=self.authority)
+        self.assertEqual(committed, (5, self.head.head_hash))
 
 
 if __name__ == '__main__':

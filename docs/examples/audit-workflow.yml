@@ -1,0 +1,45 @@
+# TEMPLATE — move this file to .github/workflows/audit.yml to activate it.
+# It lives here because the automation that authored it (Arena app) holds no
+# `workflows` permission: GitHub refused both the git push and the contents
+# API for any file under .github/workflows/. The owner activates it with one
+# move (`git mv docs/examples/audit-workflow.yml .github/workflows/audit.yml`)
+# or the GitHub web editor. Until then, scripts/check_dependencies.py is the
+# same check with only the standard library, runnable anywhere.
+
+name: Audit dependencies
+
+# Hash-pinning freezes the dependency bytes; it does not watch them. This
+# workflow is the watcher: pip-audit checks the exact pinned set against the
+# PyPI advisory database. It is scheduled weekly instead of gating every pull
+# request, because a newly disclosed CVE in an unchanged pin says nothing
+# about the change in an unrelated PR — but a PR that touches the pins is
+# audited before it can land. A finding fails the job; fixing it is a
+# deliberate bump (AGENTS.md rule 7, procedure in requirements.txt), never an
+# input to silence here.
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - requirements.txt
+      - .github/workflows/audit.yml
+
+permissions:
+  contents: read
+
+jobs:
+  pip-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.11"
+      # require-hashes audits exactly the pinned set, transitives included,
+      # with no resolution that could audit anything else (it implies
+      # pip-audit's --no-deps; passing both only adds a warning).
+      - uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
+        with:
+          inputs: requirements.txt
+          require-hashes: true
