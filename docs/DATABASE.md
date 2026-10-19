@@ -541,6 +541,107 @@ create table portal_jobs (
 
 Diese Tabelle ist nur UX-Zustand. Bei Widerspruch gewinnt der Kern.
 
+
+### 5.6 Portal-D2/D3-Wiring und Eigentumsgrenzen (Vorschlag, HOLD)
+
+**Status: Doku-Entwurf, keine Migrations-/Runtime-Freigabe.** Das bereits
+akzeptierte dunkelblaue GeniusNew-Portal ist eine UI-Vorlage für **ein**
+bestehendes privates Portal, kein eigenständiges Produktivsystem. Der
+Prototyp liefert Mock-Daten. Echte Statuswerte dürfen nur über den
+authentisierten, serverseitigen Datenprovider dieses Portals kommen;
+bis dahin bleiben sie UNKNOWN.
+
+**Wichtiger Konflikt mit 5.1–5.5:** Die vorhandenen Tabellen verwenden
+für Portal-Konten den Schlüssel user_id und sogar subject. Der freigegebene
+D3-Entwurf vom 18.10.2026 verlangt dagegen eine eigene, zufällige und
+unveränderliche portal_user_ref aus 16 Bytes (= 32 lowercase Hex-Zeichen).
+Diese Referenz ist weder eine Core-Personen-ID noch ein Core-Subject.
+Die SQL-Vorlagen 5.1–5.5 sind daher noch **nicht** unmittelbar als
+Migration 0005/0006 zu implementieren. Vor DB-Code sind sie nach
+Security-Review entsprechend zu überarbeiten. Kein stilles Umbenennen
+bereits angewandter Migrationen (derzeit sind Portal-Migrationen nicht
+als auf main implementiert belegt).
+
+**Vorgeschlagener relationaler Schlüsselwechsel (Review-Gate):**
+
+- Portal users: portal_user_ref als 128-Bit-CSPRNG-Schlüssel, einmalig,
+  unveränderlich, nie einer zweiten Person zuweisbar. Deaktivierte
+  Konten bleiben als Tombstones; E-Mail ist nur Login-/UX-Attribut,
+  niemals Identitätsbeweis für den Core.
+- Sessions: SHA-256-Digest des 32-Byte-Tokens als einziger Schlüssel,
+  Fremdschlüssel auf portal_user_ref, Ablauf und Sperrzeit; niemals
+  das rohe Token, Cookie oder ein CSRF-Secret speichern. Login und
+  Tokenrotation in einer Transaktion. Gesperrte/abgelaufene Sessions,
+  DB-Ausfall und unsichere Zeit sind REFUSE.
+- Rollen: weiterhin USER/APPROVER/ADMIN als reine Portal-UI-Rollen,
+  keine Autorität für Core-Policy, C3-Approvals oder Job-Eigentum.
+- Quoten und Nutzung: Schlüssel portal_user_ref; Prüfung+Zähler-
+  Inkrement atomar per Zeilensperre/Upsert. Zusätzlich separater,
+  persistenter Portal-Dienst-Bucket. Beträge, Zeitquelle und die
+  Recovery-Grenze für das D1-Signierbudget aus #161 sind offen,
+  nicht von dieser Skizze festgelegt; kein Signieren bei unbekanntem
+  Budgetzustand.
+- Portal-History: (portal_user_ref, job_id) nur nichtautoritativer
+  Anzeige-/UX-Cache. Nur vom Kern verifizierte Daten anzeigen.
+  Fremde Aufträge antworten einheitlich 404; der Browser darf
+  Job-Eigentum oder Status nicht selbst festlegen.
+
+**Identitäts- und Datenfluss:**
+
+~~~text
+Browser (untrusted)
+  -> privates GeniusNew Portal Backend
+    -> eigene Portal-PostgreSQL (Sessions/Konten/UX, Rolle genius_portal)
+    -> signierte versionierte Portal->Core HTTP-Operation (D1/v2 HOLD)
+      -> Core-seitig verwaltete Personenbindung und Policy
+      -> persistenter Ledger, Audit-Kette und separater Anker
+~~~
+
+Der Core verwaltet die Bindung des Tupels
+(portal_service_principal_id, portal_user_ref) an den Core-Subject
+und die kanonische Personen-ID. Die Portal-Datenbank darf diese
+Core-Registry nicht duplizieren oder als Autorität ersetzen.
+Ein deaktivierter oder mehrfach gemappter Alias: REFUSE. Die
+Portal-Signatur stellt die Dienstidentität sicher, nicht die
+persönliche Approver-Identität. Ein zweiter Benutzer und Freigaben
+bleiben ohne D3-v2-Gate gesperrt. D1s begrenzte Ein-Nutzer-Ausnahme
+bleibt auf risikoarme Tools ohne Approvals beschränkt.
+
+**Transaktions- und Recovery-Gates vor Code:**
+
+1. Login: Argon2id aus PR #151, Token/CSRF aus PR #152; Session
+   wird nur bei ACTIVE-Konto, gültigem Digest, Zeitfenster und
+   geprüfter CSRF-Zuordnung akzeptiert. Cookie Secure, HttpOnly,
+   Host-only, SameSite=Lax. Es gibt kein automatisches Demo-Login.
+2. Paralleles Deaktivieren einer Person und ein Session-/Job-Request
+   verwenden eine beweisbar serialisierte Kontozeilen-Sperre;
+   nach bestätigter Deaktivierung darf kein neuer Auftrag beginnen.
+   Alte portal_user_ref bleibt für immer gesperrt.
+3. Job: sichere Session -> persistente Quoten -> Portal-Signatur
+   über den ausschließlich serverseitig ermittelten Alias -> Core-
+   Signatur-/Replay-/Policy-/Registry-Prüfung -> atomare Core-
+   Annahme/Audit -> erst dann UX-Caching. Ungewisser COMMIT-
+   Ausgang oder Netzverlust bedeutet UNKNOWN/HOLD, kein stiller Retry.
+4. Eine Core-Jobsignatur autorisiert nicht automatisch History,
+   Approval oder API-Key-Verwaltung. Jede dieser Operationen
+   braucht einen gesondert versionierten Vertrag und Test.
+5. Portal-Laufzeit ohne Core-DB-DSN, Root-/Anker-Secret, DDL-,
+   TRIGGER-, TRUNCATE-, Owner- oder Superuser-Recht. Die
+   separate Portal-Migrationsrolle besitzt DDL. Server-Konfiguration
+   ist die einzige Quelle von Secrets; nie Browser-Bundle/Repo.
+6. PostgreSQL-Integration in isolierter Wegwerf-DB: Sessionablauf,
+   Rotation, Logout, parallele Sperre, fremdes Job-404, Quoten-
+   Wettlauf, Replay, DB-Ausfall, Restore und unbekannter COMMIT.
+   Rote Negativtests zuerst, dann CI und Refusal-Guard,
+   unabhängiges Claude DB Review am exakten SHA, Kaan-Merge.
+7. OFFENE ARCHITEKTURFRAGEN: Hosting-Vorgabe (alter Vercel-
+   Stack-Freeze versus der neu formulierte Wunsch nach einem
+   einzigen zentralen privaten Portal), Einladungs- und E-Mail-
+   Kanonisierung, Quotenpersistenz/Zeitrücksprung, Retention,
+   administrative Core-Registry-Sperr- und Restore-Transaktionen.
+   Weder dieser Entwurf noch ein Design-Prototyp entscheiden sie.
+
+
 ## 6. Audit-Commit und Anchor-Crashfenster
 
 Ein Audit-Eintrag wird zuerst dauerhaft in der Core-Datenbank committed. Danach wird der
