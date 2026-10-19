@@ -626,7 +626,11 @@ def serve(entry: HttpEntry, *, host: str = "127.0.0.1", port: int = 0,
         address = ipaddress.ip_address(host)
     except ValueError as exc:
         raise ContractError("host must be a literal IP address") from exc
-    if not address.is_loopback:
+    # An IPv4-mapped IPv6 address is refused whichever Python answers:
+    # newer interpreters delegate `is_loopback` to the embedded IPv4
+    # address, older ones do not, and what gets bound is the address as
+    # written, not the one embedded in it.
+    if not address.is_loopback or getattr(address, "ipv4_mapped", None) is not None:
         _fail("host must be a loopback address; "
               "put a TLS reverse proxy in front instead")
     if type(port) is not int or not 0 <= port <= 65535:

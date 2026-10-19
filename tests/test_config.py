@@ -201,6 +201,11 @@ class ListenerTest(Files, unittest.TestCase):
     def test_a_public_address_is_refused(self):
         self.refused(host="203.0.113.7", message="loopback")
 
+    def test_a_mapped_loopback_is_refused(self):
+        # Newer Pythons report ::ffff:127.0.0.1 as loopback via the embedded
+        # address; the listener binds the address as written, so it refuses.
+        self.refused(host="::ffff:127.0.0.1", message="loopback")
+
     def test_a_hostname_is_refused(self):
         # "localhost" resolves through a file an attacker on the host may edit.
         self.refused(host="localhost", message="literal IP address")
