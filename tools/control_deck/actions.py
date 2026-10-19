@@ -6,7 +6,7 @@ import fcntl
 import subprocess
 from pathlib import Path
 
-from .checks import DEFAULT_REPO, _which, agent_socket, agent_session, tool_status
+from .checks import DEFAULT_REPO, _which, agent_socket, agent_session, python_for, tool_status
 
 _MAX_OUTPUT = 24_000
 
@@ -27,6 +27,14 @@ def allowed_actions() -> tuple[str, ...]:
 
 
 def run_action(name: str, repo: Path = DEFAULT_REPO) -> dict[str, object]:
+    """Run an allowlisted check and return its bounded output and exit status.
+
+    Commands run in repo and retain the last 24,000 output characters.
+    Tests prefer repo/.venv/bin/python3, falling back to python3 on PATH.
+    Hermes status succeeds when installed, even if its session is inactive.
+    Unknown actions raise ValueError. OS launch errors and timeouts return
+    ok=False and exit_code=None; output decoding errors propagate.
+    """
     if name not in allowed_actions():
         raise ValueError("action is not allowlisted")
     if name == "hermes_status":
@@ -36,6 +44,8 @@ def run_action(name: str, repo: Path = DEFAULT_REPO) -> dict[str, object]:
         return {"action": name, "ok": ok, "exit_code": 0 if ok else 1,
                 "output": installed["detail"] + "\n" + session["detail"]}
     argv, timeout = _ACTIONS[name]
+    if name == "tests":
+        argv = [python_for(repo), *argv[1:]]
     env = {
         **os.environ,
         "LC_ALL": "C",
