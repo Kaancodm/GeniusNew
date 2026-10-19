@@ -1,0 +1,16 @@
+# Dependabot looks after the GitHub Actions pins only.
+#
+# Python dependencies are deliberately *not* listed here: requirements.txt is
+# hash-pinned, and a new or bumped dependency is a decision of the project
+# owner (AGENTS.md rule 7), not a bot pull request. Known vulnerabilities in
+# the pinned set surface through pip-audit runs instead, and the bump then
+# follows the update procedure in the header of requirements.txt.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: ci
