@@ -161,6 +161,8 @@ Siehe:
 - `geniusnew/verifier.py`
 - `geniusnew/http_entry.py`
 - `geniusnew/wiring.py` — Kompositionswurzel
+- `geniusnew/advisory.py` — einziger Weg zu einem lokalen Modell, beratend und
+  ohne Autorität (`docs/AI-ADVISORY.md`)
 - `geniusnew/anchor_process.py` — Audit-Anker in eigenem Prozess
 - `geniusnew/audit.py`, `geniusnew/audit_chain.py`
 - `docs/ISOLATION-V01.md`
