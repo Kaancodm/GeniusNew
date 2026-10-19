@@ -154,6 +154,7 @@ Siehe:
 - `geniusnew/contracts.py`
 - `geniusnew/approvals.py`
 - `geniusnew/workers.py`
+- `docs/PRODUCT-DIGEST.md` — erstes Produkt: das `digest`-Tool (Demo `scripts/demo_product.py`, Client `tools/genius_client.py`)
 - `geniusnew/isolation.py`
 - `geniusnew/gateway.py`
 - `geniusnew/orchestrator.py`
