@@ -1,0 +1,120 @@
+name: A2 C5 disposable VM system probe
+
+on:
+  push:
+    branches:
+      - chatgpt/a2-c5-ephemeral-vm-20261019
+    paths:
+      - .github/workflows/a2-c5-vm-probe.yml
+      - docs/A2-C5-VM-PROBE.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-systemd-probe:
+    name: Synthetic UID and systemd isolation (not C5 acceptance)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      EXPECTED_PROBE_SHA: 55d5e2605d829bb44b2d9967066747ce48042019
+    steps:
+      - name: Refuse unexpected repository or non-VM host
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "Kaancodm/GeniusNew"
+          test "$(cat /proc/1/comm)" = "systemd"
+          test -S /run/dbus/system_bus_socket
+          test -e /sys/fs/cgroup/cgroup.controllers
+          test -x /usr/bin/python3
+          test "$(id -u)" -ne 0
+          sudo -n true
+          echo "Disposable Ubuntu runner: preflight PASS."
+
+      - name: Checkout pinned synthetic probe PR 144
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: Kaancodm/GeniusNew
+          ref: 55d5e2605d829bb44b2d9967066747ce48042019
+          path: probe
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify source and run probe unit tests
+        working-directory: probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_PROBE_SHA"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          test -f docs/A2-C5-SYSTEM-PROBE.md
+          test -f tools/a2c5_probe/__main__.py
+          /usr/bin/python3 -B -W error::ResourceWarning -m unittest discover -s tests -p test_a2c5_probe.py -q
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+      - name: Execute disposable system probe and publish sanitized status
+        working-directory: probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Only synthetic canaries; never provide production credentials.
+          probe_rc=0
+          sudo -n /usr/bin/python3 -B -m tools.a2c5_probe run --disposable-host --report-dir /root/gnprobe-reports || probe_rc=$?
+          sudo -n /usr/bin/python3 - "$EXPECTED_PROBE_SHA" <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import glob
+          import hashlib
+          import json
+          import re
+          import sys
+
+          expected_sha = sys.argv[1]
+          paths = glob.glob("/root/gnprobe-reports/a2c5-probe-*.json")
+          if len(paths) != 1:
+              raise SystemExit("HOLD: expected exactly one synthetic report")
+          with open(paths[0], "rb") as stream:
+              raw = stream.read()
+          data = json.loads(raw)
+          if (data.get("probe") != "geniusnew-a2c5-system-probe"
+                  or data.get("commit", {}).get("sha") != expected_sha
+                  or data.get("commit", {}).get("clean") is not True):
+              raise SystemExit("HOLD: report has unexpected source or format")
+          findings = data.get("findings")
+          if not isinstance(findings, list) or not findings:
+              raise SystemExit("HOLD: report findings missing")
+          verdict = data.get("verdict")
+          if verdict not in {"PASS", "FAIL", "HOLD"}:
+              raise SystemExit("HOLD: report verdict is unknown")
+          counts = {"PASS": 0, "FAIL": 0, "HOLD": 0}
+          ids = {}
+          for finding in findings:
+              label, state = finding.get("id"), finding.get("verdict")
+              if (not isinstance(label, str)
+                      or not re.fullmatch(r"[A-Za-z0-9_.-]{1,70}", label)
+                      or state not in counts or label in ids):
+                  raise SystemExit("HOLD: malformed or duplicate finding")
+              counts[state] += 1
+              ids[label] = state
+          if verdict == "PASS":
+              if ids.get("X.cleanup") != "PASS" or counts["PASS"] != len(findings):
+                  raise SystemExit("HOLD: complete PASS or teardown not proven")
+          print("## A2/C5 synthetic systemd probe (PR #144)")
+          print("")
+          print(f"- Verdict: **{verdict}**")
+          print(f"- Pinned source: `{expected_sha}`")
+          print(f"- SHA-256 of sanitized JSON: `{hashlib.sha256(raw).hexdigest()}`")
+          print(f"- Findings: PASS={counts['PASS']}, FAIL={counts['FAIL']}, HOLD={counts['HOLD']}")
+          print(f"- Cleanup: {ids.get('X.cleanup', 'UNKNOWN')}")
+          print("")
+          print("Synthetic host evidence only. Actual Worker PR #140,")
+          print("Debian 13 C5/E3 and release remain **HOLD**.")
+          if verdict != "PASS":
+              print("")
+              print("### Non-PASS checks")
+              for label, state in sorted(ids.items()):
+                  if state != "PASS":
+                      print(f"- `{label}`: {state}")
+          sys.exit(0 if verdict == "PASS" else 2)
+          PY
+          test "$probe_rc" -eq 0
