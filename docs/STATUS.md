@@ -1,6 +1,10 @@
 # GeniusNew — Projektstand
 
-**Stand: 08.10.2026, `main` `7f81e240f6ec4b16d876f081249afb3d47240901`.** Teil der
+**Stand: 19.10.2026, `main` `dde20f2bd1726a2a00005f0b3c8614155c2888dc`.** Gesamtpflege
+über #145: Gates, Messwerte, Risiken, Aufräumen der offenen PRs. Die Abschnitte zu D1
+(Entscheidungen vom 18.10.2026, #158) und zum lokalen KI-Pilot (19.10.2026, Issue #166)
+stammen aus früheren Pflege-PRs und sind hier nicht neu geprüft; der Portal-DB-Vertrag
+aus #176 (D2/D3, HOLD) ist nur als gemergt erfasst. Teil der
 Wissensdatenbank, geführt von Claude Code (`docs/COLLABORATION.md`); NotebookLM gibt
 Auskunft. Entscheidungen stehen in `docs/DECISIONS.md`. Dieses Dokument ist in sich
 geschlossen gedacht: als Quelle für NotebookLM, Microsoft 365 Copilot oder jeden anderen
@@ -46,30 +50,41 @@ Audit-Kette festgehalten.
 
 | Gate | Inhalt | PR |
 | --- | --- | --- |
-| A1, A2 | Seccomp gegen Prozessstart; Landlock-Allowlist (Mindestziel). Offen: eigener OS-Nutzer für den Worker | #57, #76 |
+| A1, A2 | Seccomp gegen Prozessstart; Landlock-Allowlist; getrennter Worker-Dienst mit eigener fester UID gemergt. Betriebsabnahme für den Dienst weiterhin HOLD | #57, #76, #140 |
 | B0–B3 | `docs/DATABASE.md`, PostgreSQL-Fundament, persistentes Job- und Annahme-Ledger | #70, #78, #90, #93 |
-| B4, B5 | Wartende Jobs und Approval-Speicher, persistente Audit-Kette. **Ohne** `Claude DB Review: APPROVED` am Head gemergt, Nachholung offen (Entscheidung 6) | #94, #95 |
+| B4, B5 | Wartende Jobs und Approval-Speicher, persistente Audit-Kette. **Ohne** `Claude DB Review: APPROVED` am Head gemergt, kein separates Nachholen des `Claude DB Review`, E2 deckt es ab (Entscheidung 6, `docs/DECISIONS.md` 18.10.2026); das Gemini-Sicherheitsreview bleibt offen | #94, #95 |
 | B6 | Ledger und Approval-Speicher manipulationssichtbar, Abgleich gegen die verankerte Kette | #97 |
 | B7 | Absturztest mit `SIGKILL` an jeder Zustandsgrenze | #106 |
+| B (Härtung) | PostgreSQL-Sitzungen: Idle-Grenze 60 s für offene Transaktionen, TCP-Keepalives, `application_name`, zentrale Advisory-Lock-IDs | #137 |
 | C1, C2 | `python -m geniusnew serve`; Anker als eigener Dienst mit signierten Antworten | #61, #62 |
 | C3 | Rolle „Freigebende“ mit eigener HTTP-Route | #111 |
 | C4 | Rate-Limit, Job- und Verbindungsgrenze, nginx-Vorlage | #71 |
 | C5 (Teil) | Restore gegen den unabhängigen Anker durchgespielt | #119 |
-| D1 (nur Doku) | Portal→Kern-Vertrag, Replay- und Identitäts-Gates; Code fehlt | #120 |
+| D1 (nur Doku) | Portal→Kern-Vertrag, Replay- und Identitäts-Gates; Code fehlt. Security-Review am `3d26d74` (H1, M1–M4); Gates 1–5, 7 und 8 sowie der Annahmepfad von Gate 9 von Kaan am 18.10.2026 entschieden (`docs/DECISIONS.md`); Entwurf danach überarbeitet (#163, gemergt 18.10.2026); der erneute Review am neuen Head (Gate 6) ist UNKNOWN; D1 bleibt HOLD | #120, #158, #163 |
+| D1 (Kern) | HTTP-Eingang lehnt doppelte Header vor Body und Mapping ab | #162 |
+| D3 (nur Doku) | Entwurf der administrierten Personenbindung mit neuer Envelope-Version; Portal-DB-Wiring D2/D3 mit sicheren Identitätsgrenzen. Beide HOLD, kein Code aktiv | #148, #176 |
 | E1 | Demo mit Persistenz-Angriffen | #112 |
-| Werkzeuge | Server-Einrichtung `ops/server/genius-server`, Deck, Reviewkanäle Abacus und Kiro | #110, #114, #116 |
+| Werkzeuge | Server-Einrichtung `ops/server/genius-server`, Deck, Reviewkanäle Abacus und Kiro; manueller iPad-Modellclient über Tailscale (`tools/ipad_llm.py`, Live-Test am Gerät UNKNOWN); Refusal-Guard für drei langsame Module fokussiert; Project Deck | #110, #114, #116, #142, #153, #156 |
 
-**Noch offen:** C5 (Betriebsanleitung mit systemd, Rotation), E3 (frischer Klon auf einem
-echten Server), D1-Code, D2, D3, E2 (Security-Review am Head). Was in der
-`ROADMAP-V02.md`-Spalte „Stand“ noch „offen“ steht, aber oben gemergt ist, gleicht ein
-eigener Docs-PR an (die Roadmap gehört nicht zu diesem Wissens-PR).
+**Noch offen:** C5 (Betriebsanleitung mit systemd, Rotation und Betriebsabnahme des
+Worker-Dienstes aus #140), E3 (frischer Klon auf einem echten Server), D1-Code, D2, D3
+und E2 (Security-Review am Head). **D1-Code bleibt auf HOLD** (Entscheidung vom
+18.10.2026); D2 und D3 sind nicht aktiv (#151 und #152 offen, #148 und #176 nur Doku). Die
+`ROADMAP-V02.md`-Spalte „Stand“ wurde mit #130 und #167 angeglichen; zwei Punkte fehlen
+dort noch. Die C3-Zelle nennt `Claude DB Review` UNKNOWN; belegt ist APPROVED am
+Merge-Head `cc95586ca27e6f9d76fd737967d87cdb2e8a44d5` (`docs/DECISIONS.md`, 04.10.2026).
+Die Zellen A2 und C5 nennen #140 noch nicht (getrennter Worker-Dienst mit
+Unit-Vorlagen gemergt, Betriebsabnahme HOLD). Das korrigiert ein eigener Docs-PR.
 
-**Messbar (am 08.10.2026 auf `7f81e24` ausgeführt):**
-- 1078 Tests laufen in etwa 94 Sekunden, Ergebnis `OK`. Ein zweiter Lauf unter
-  Python 3.13.16 mit lokalem PostgreSQL 16 endete ebenfalls `OK` (etwa 104 Sekunden).
+**Messbar (am 19.10.2026 auf dem Stand von `main` `dde20f2` ausgeführt, Python 3.13.16,
+lokales PostgreSQL 16):**
+- 1244 Tests laufen in etwa 111 Sekunden, Ergebnis `OK`.
 - Die Demo endet mit „PASS“, dabei werden **15 von 15 Angriffe** abgelehnt.
-- Der Refusal-Guard führt 19 Python-Module in `GUARDED` plus eine Shell-Datei
-  (`GUARDED_SHELL`). Er wurde in dieser Sitzung **nicht** ausgeführt: UNKNOWN.
+- Der Refusal-Guard führt 23 Einträge in `GUARDED`: 20 Kernmodule unter `geniusnew/`
+  (neu ist `geniusnew/worker_service.py` aus #140), `tools/control_deck/actions.py`,
+  `tools/ipad_llm.py` und das Shell-Skript `ops/server/genius-server` (sein Muster
+  steht in `GUARDED_SHELL`). Lokal wurde er in dieser Sitzung **nicht** ausgeführt:
+  UNKNOWN.
 
 ## Bekannte Grenzen
 
@@ -95,7 +110,11 @@ Eine externe Bewertung von `7f81e24` hat Claude Code am Code nachgeprüft. Best�
   gespeicherte Kette (`_append` ruft `_read` in `geniusnew/audit_store.py`), und jeder
   Commit schickt die ganze Kette an den Anker. An der Größengrenze (64 MiB Anfrage,
   16 MiB Ankerzustand, `SECURITY.md`) verweigert der Dienst weitere Events (fail
-  closed). Für Dauerbetrieb braucht es ein inkrementelles Protokoll.
+  closed). Gemessen in #137 (PostgreSQL 17) an einer synthetisch befüllten Kette mit
+  62 137 Records, der rechnerischen Leseobergrenze: ein (abgelehnter) Append etwa 18,3 s,
+  die Audit-Startprüfung etwa 18,3 s. Im Betrieb lehnt die Zustandsprüfung laut #136
+  bereits den 61 231. Kopf ab; bei großen Events greift das 64-MiB-Limit früher. Für
+  Dauerbetrieb braucht es ein inkrementelles Protokoll (Entwurf in #136, Draft).
 - **Eine Datenbankverbindung für alles.** `python -m geniusnew serve` teilt eine
   Verbindung zwischen Job-Ledger, Annahme-Ledger und Audit-Kette
   (`geniusnew/__main__.py`), gewollt für die B6-Atomarität. Der Durchsatz ist damit
@@ -110,14 +129,49 @@ Nicht übernommen: DB-Tests ohne `GENIUSNEW_TEST_ADMIN_DSN` überspringen.
 `tests/postgres_support.py` wertet fehlende Infrastruktur bewusst als Fehler, und kein
 Test wird übersprungen (`AGENTS.md`, Regel 4).
 
+## Lokaler KI-Pilot (Stand 19.10.2026, Issue #166)
+
+Ein beratender Pilot auf dem Server: Qwen 3.5 4B schlägt einen Plan vor, genau ein
+Helfer führt ihn aus, der Server-Code prüft deterministisch. Er ist **nicht** Teil von
+v0.2, nicht implementiert (kein Code unter `tools/`) und berührt `geniusnew/` nicht.
+Der Sicherheitsvertrag steht als Entwurf von Claude Code in Issue #166 und ist keine
+Entscheidung von Kaan; entschieden sind Modellwahl, Wechselbetrieb und der Download
+des Helfermodells (`docs/DECISIONS.md`, 18. und 19.10.2026).
+
+**Gerät Server, belegt am 19.10.2026** (Ausgaben aus Kaans Terminal, nur lesend):
+
+- Ollama 0.40.1 läuft als User-Dienst `genius-local-ai.service` unter dem Nutzer `kaan`
+  und lauscht nur auf `127.0.0.1:11434`.
+- Cgroup des Prozesses: `memory.max` 6442450944 (6 GiB), `memory.high` 5368709120
+  (5 GiB). `systemctl show genius-local-ai` ohne `--user` zeigt `infinity` und ist
+  dafür der falsche Weg.
+- `OLLAMA_NUM_PARALLEL=1`, `OLLAMA_MAX_LOADED_MODELS=1`, `OLLAMA_KEEP_ALIVE=2m`.
+- Modelle: `qwen3.5:4b-q4_K_M` 3.3 GB, `qwen3.5:9b` 6.6 GB, `gemma4:e2b` 4.6 GB,
+  `qwen2.5-coder:3b` 1.9 GB, dazu `qwen2.5-coder:1.5b` (geladen 1.03 GiB).
+- Mini-Inferenz mit `qwen3.5:4b-q4_K_M`: Antwort `OK`, 13 s. Qwen 4B allein erreicht
+  `memory.high`; im Test stieg der `high`-Zähler um 1571. Beide Modelle gleichzeitig
+  sind nicht gemessen (UNKNOWN), im Wechselbetrieb gab es kein OOM.
+- Tailscale läuft; Peers nach Gerätetyp: iOS online ×2, Windows online ×1, Android
+  offline ×1, Linux offline ×1.
+
+**Gerät Laptop, von Kaan gemeldet am 19.10.2026** (Zusammenfassung ohne Rohausgabe, die
+letzte Zeile kam abgeschnitten an): Ollama 0.40.6, Port 11434, Bindung `127.0.0.1`,
+lokale API PASS. `OLLAMA_HOST` ist laut Kaan in den untersuchten Terminalsitzungen nicht
+gesetzt; maßgeblich ist die geprüfte Bindung `127.0.0.1` (ein Wert auf Dienst- oder
+Systemebene ist damit nicht ausgeschlossen). Es wurden keine Einstellungen verändert.
+
+**Nicht geprüft (UNKNOWN):** Rohbelege vom Laptop, Auth und WLAN-Erreichbarkeit der
+iPad-App (ai.local). Das Prüfskript `ai-check.sh` liegt nicht im Repository.
+
 ## Nächste Schritte
 
 Reihenfolge laut `docs/ROADMAP-V02.md`; Entscheidungen von Kaan sind dort unter „Offene
 Entscheidungen“ gelistet (Portal in der Beta, Portal→Kern-Authentisierung, abgelaufene
 Jobs, Annahmen und Policy).
 
-1. Roadmap-Spalte „Stand“ an die gemergten PRs angleichen (Docs-PR #130).
-2. `Claude DB Review` für B4 (#94) und B5 (#95) am gemergten Stand nachholen.
+1. Offene PRs, Konflikte und Merge-Gates bereinigen (Abschnitt „Aufräumen“ unten,
+   Auftrag vom 09.10.2026); danach Entwicklungspause bis zum neuen v0.2-Master-Prompt.
+2. ~~`Claude DB Review` für B4 (#94) und B5 (#95) nachholen~~ — entschieden am 18.10.2026: nicht separat, E2 deckt es ab. Offen bleibt das Gemini-Sicherheitsreview zu B4/B5.
 3. Kaan entscheidet: Python-Version der CI (3.13 zusätzlich oder statt 3.11) und ob
    Linter, Typprüfung, Coverage und `pip-audit` als Entwicklungswerkzeuge dazukommen.
 4. Server einrichten (`ops/server/genius-server`, Kaan) und Landlock dort prüfen.
@@ -125,13 +179,67 @@ Jobs, Annahmen und Policy).
    Schlüsselrotation (Entwurf von ChatGPT in #117, Draft).
 6. E3: frischer Klon folgt der Anleitung wörtlich bis zum laufenden Dienst, Protokoll
    mit SHA.
-7. Audit-Append inkrementell machen: erst ein Messtest zum Wachstum (Codex), dann der
-   Entwurf in `docs/DATABASE.md` (ChatGPT im Auftrag von Kaan, Design-Vorprüfung durch
-   Gemini, Freigabe Kaan), dann die Umsetzung (Codex, `Claude DB Review`, Grenze aus
-   `SECURITY.md` mit Kaans OK).
+7. Audit-Append inkrementell machen: Der Entwurf für `docs/DATABASE.md` liegt als #136
+   vor (Draft, ChatGPT im Auftrag von Kaan). Offen sind die Design-Vorprüfung durch
+   Gemini, Claudes Sicherheitsreview und Kaans Freigabe; danach folgen Messtest und
+   Umsetzung (Codex, `Claude DB Review`, Grenze aus `SECURITY.md` mit Kaans OK).
 8. Quellenpaket für NotebookLM nach Verfahren (`docs/COLLABORATION.md`).
-9. D1-Code (Codex) nach dem Vertrag aus #120, danach D2 und D3.
+9. D1: Der Entwurf ist nach den Entscheidungen vom 18.10.2026 überarbeitet (#163
+   gemergt). Offen: `docs/DATABASE.md` §4.9 anpassen (ChatGPT im Auftrag von Kaan, #161
+   als Draft; #165 ohne Merge geschlossen); Uhr-Grenze als eigener `SECURITY.md`-PR,
+   Zahlen fürs Lastbudget zur Freigabe, erneuter Review am neuen Head (Gate 6); erst
+   dann D1-Code (Codex), danach D2 und D3.
 10. E2: Security-Review des vollständigen Heads (Claude und Copilot).
+11. KI-Pilot P1 (nur Server): Umsetzung unter `tools/` mit den sechs Negativtests und
+    Eval-Suite (Codex, eigenes Issue); Tailscale-ACL, `tailscale serve` und
+    ai.local-Prüfliste (ChatGPT, eigenes Issue); Laptop- und iPad-Prüfung auf den
+    Geräten (Kaan). Security-Review am exakten Head (Claude) plus Gemini-Zweitmeinung
+    wegen der neuen Netzgrenze.
+12. Roadmap: C3-Zelle auf den Beleg aus `docs/DECISIONS.md` korrigieren und #140 in den
+    Zellen A2 und C5 nachtragen (eigener Docs-PR).
+
+## Aufräumen der offenen PRs (Stand 19.10.2026)
+
+Auftrag von Kaan vom 09.10.2026 (`docs/DECISIONS.md`). Am 17.10.2026 hat Claude Code mit
+Kaans OK ohne Merge geschlossen:
+
+| PR | Head | Grund |
+| --- | --- | --- |
+| #101 | `97b400d` | Die drei Tests sind über #97 (`f220e30`) schon auf `main` |
+| #109 | `42a5aeb` | Rollenmodell überholt durch die Regeln vom 04.10.2026; Konflikt in allen drei Dateien |
+| #134 | `cbf32f6` | Regeländerung ohne belegte Kaan-Entscheidung und ohne die nötigen Reviews; schwächt Schutzregeln ab (Entscheidung 07.10.2026) |
+| #118 | `8ab7fca` | Überholt durch #129 und #130; die C3-Entscheidung steht jetzt in `docs/DECISIONS.md` |
+
+Außerdem ohne Merge geschlossen, nicht von Claude: #121 (CI-Runner), #143 und #146
+(automatische CodeRabbit-PRs). Am 19.10.2026 sind 27 PRs offen. Offene Fragen:
+
+- **Pause:** Die Entscheidung vom 09.10.2026 ordnet an: erst PRs, Konflikte und
+  Merge-Gates bereinigen, dann pausieren. Die Bereinigung ist bei 27 offenen PRs nicht
+  abgeschlossen; neue Features starten laut derselben Entscheidung nicht. Seitdem
+  wurden aber #140, #142, #148, #162, #163 und #176 gemergt, und #147, #149 bis #152 sowie
+  #171 bis #175 sind offen. Am 18.10.2026 hat Kaan das Portal (D1 bis D3) zur Beta
+  gezählt (`docs/DECISIONS.md`); ob damit die Pause für das Portal entfällt, ist
+  nicht eingetragen: UNKNOWN. Welche der offenen PRs als Aufräumarbeit gelten, entscheidet
+  Kaan.
+- **Entscheidung vom 18.10.2026 laut #148:** administrierte Core-Personenbindung für
+  v0.2 und eine neue Envelope-Version statt einer zweiten Signatur. Sie ist nur als
+  Chat-Angabe in der Beschreibung des gemergten Entwurfs belegt und deshalb nicht in
+  `docs/DECISIONS.md` eingetragen; Claude Code trägt sie ein, sobald Kaan sie bestätigt.
+- **Neue Abhängigkeit in #151:** `argon2-cffi` und `argon2-cffi-bindings` in
+  `requirements.txt`. Die Wahl von `argon2-cffi` ist am 26.09.2026 entschieden; der Merge
+  einer neuen Abhängigkeit braucht nach `docs/COLLABORATION.md` trotzdem Kaans OK und
+  vorher ein Gemini-Pro-Sicherheitsreview im PR.
+- **Copilot-Review:** warten oder für die Dauer des Engpasses einen Ersatz festlegen.
+  Laut Kommentar in #153 (6244844507) gilt für die Zusammenführung von #145 eine
+  einmalige Copilot-Ausnahme von Kaan; sie ersetzt weder das Gate auf `main` noch die
+  CI.
+- **Regelfassung:** #139 und #141 berufen sich auf zwei verschiedene, nicht
+  eingetragene Kaan-Entscheidungen (08.10. und 06.10.2026) und kollidieren miteinander in
+  `AGENTS.md`, `docs/COLLABORATION.md` und `.github/copilot-instructions.md`; #139
+  kollidiert außerdem mit `main` in `scripts/refusals.py`, und #141 ändert
+  `docs/DECISIONS.md` und `docs/STATUS.md`, die nur Claude Code schreibt. #128 berührt
+  `docs/DECISIONS.md`. Welche Fassung gilt, entscheidet Kaan schriftlich; Claude Code
+  trägt es in `docs/DECISIONS.md` ein.
 
 ## Zusammenarbeit der Werkzeuge
 

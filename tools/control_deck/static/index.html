@@ -61,9 +61,21 @@ textarea{width:100%;min-height:86px;resize:vertical;background:#080d1a;color:var
 <script>
 const $=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const labels={green:'PASS',yellow:'ACTION',red:'OPEN'},actionFor={Git:'git_status',Docker:'docker_status'};let state=null,mail=null,agentsLoading=false,runAllRunning=false;
+/** Return status badge HTML, labeling unrecognized states UNKNOWN. */
 const badge=s=>'<span class="badge '+esc(s)+'">'+(labels[s]||'UNKNOWN')+'</span>';
+/** Show text details; a is the optional action name offered by the Run button. */
 function openPanel(t,b,a){$('ptitle').textContent=t;$('pbody').textContent=b;$('poutput').hidden=true;$('prun').hidden=!a;$('prun').dataset.action=a||'';$('panel').classList.add('open')}
+/**
+ * Resolve true after copying v, or show it for manual copying and resolve false.
+ * Use selection copying when the secure Clipboard API is unavailable; a rejected
+ * clipboard write or selection-copy error goes directly to the manual panel.
+ */
 async function copyText(v){try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(v);return true}const box=document.createElement('textarea');box.value=v;box.style.position='fixed';box.style.opacity='0';document.body.appendChild(box);box.select();box.setSelectionRange(0,v.length);const ok=document.execCommand('copy');box.remove();if(ok)return true}catch(e){}openPanel('TERM-Befehl',v,null);return false}
+/**
+ * Post an action and show its result, ignoring calls while Run is disabled.
+ * Display request, HTTP, and JSON errors as FAIL, then unlock Run and start
+ * a status/mail refresh without waiting for it to finish.
+ */
 async function runAction(name){
  if($('prun').disabled)return;
  $('prun').disabled=true;$('poutput').hidden=false;$('poutput').textContent='läuft…';
@@ -71,10 +83,22 @@ async function runAction(name){
  catch(e){$('poutput').textContent='FAIL\n'+String(e?.message||e||'Unbekannter Fehler')}
  finally{$('prun').disabled=false;load()}
 }
+/** Return a status button's HTML using v.detail or, when absent, v.head. */
 function itemRow(name,v){return '<button class="row click" data-item="'+esc(name)+'"><span>'+badge(v.status)+' '+esc(name)+'</span><span class="muted">'+esc(v.detail||v.head||'')+'</span></button>'}
+/**
+ * Render browser-local notes and bind deletion, treating read/JSON errors as empty.
+ * Non-array stored values can raise TypeError; deletion write errors propagate
+ * from the click handler.
+ */
 function notesLoad(){let a=[];try{a=JSON.parse(localStorage.getItem('genius-project-notes')||'[]')}catch(e){};$('notes').innerHTML=a.map((n,i)=>'<div class="item note"><div><b>'+esc(n.text)+'</b><small>'+esc(n.at)+'</small></div><button data-del-note="'+i+'">×</button></div>').join('')||'<div class="muted">Noch keine lokalen Notizen auf diesem Gerät.</div>';document.querySelectorAll('[data-del-note]').forEach(b=>b.onclick=()=>{a.splice(Number(b.dataset.delNote),1);localStorage.setItem('genius-project-notes',JSON.stringify(a));notesLoad()})}
+/**
+ * Prepend a trimmed, timestamped local note, keeping at most 40; ignore blank input.
+ * Read/JSON errors use an empty list; non-array data and storage-write errors propagate.
+ */
 $('saveNote').onclick=()=>{const t=$('noteInput').value.trim();if(!t)return;let a=[];try{a=JSON.parse(localStorage.getItem('genius-project-notes')||'[]')}catch(e){};a.unshift({text:t,at:new Date().toLocaleString()});localStorage.setItem('genius-project-notes',JSON.stringify(a.slice(0,40)));$('noteInput').value='';notesLoad()};
+/** Return report card HTML with escaped text; tone is a trusted CSS class. */
 function reportCard(title,value,detail,tone){return '<div class="item"><b>'+esc(title)+'</b><div class="'+(tone||'muted')+'">'+esc(value)+'</div><small>'+esc(detail)+'</small></div>'}
+/** Render daily/weekly summaries from the current snapshot; do nothing without state. */
 function renderReports(){
  if(!state)return;
  const ci=state.project?.ci?.detail||'ungeprüft';
@@ -95,14 +119,25 @@ function renderReports(){
    reportCard('Was kostete Zeit?','Noch keine belastbare Historie','Kontingent-, Agenten- und Setup-Blocker werden erst nach n8n-Ereignisspeicherung automatisch aggregiert.')+
    reportCard('Fokus nächste Woche',first?first.title:'Aus Live-Prioritäten ableiten',first?first.detail:'Keine Priorität verfügbar.');
 }
+/**
+ * Replace target's contents with the selected mail category or an unavailable/empty notice.
+ * Escape subjects/senders and display received_at Unix seconds as local dates.
+ */
 function mailRows(category,target){if(!mail||mail.status!=='ready'){target.innerHTML='<div class="muted">Mail-Snapshot nicht synchronisiert.</div>';return}const rows=(mail.threads||[]).filter(x=>x.category===category);target.innerHTML=rows.map(x=>'<div class="mailrow"><span class="mailflag">'+(x.critical?'!!':x.important?'!':'•')+'</span><div><b>'+esc(x.subject||'(ohne Betreff)')+'</b><div class="muted">'+esc(x.sender||'')+'</div></div><time class="muted">'+(x.received_at?new Date(x.received_at*1000).toLocaleDateString():'')+'</time></div>').join('')||'<div class="muted">Keine wichtigen Einträge im aktuellen Snapshot.</div>'}
+/** Update mail counts and all four category views from the current mail snapshot. */
 function renderMail(){
  $('mailHeadline').textContent=mail?.status==='ready'?(mail.unread+' ungelesen · '+mail.important+' wichtig · '+mail.critical+' kritisch'):'Mail-Snapshot nicht synchronisiert';mailRows('sales',$('salesMail'));mailRows('sponsoring',$('sponsorMail'));mailRows('general',$('generalMail'));mailRows('system',$('systemMail'));
 }
+/** Refresh mail independently; request, HTTP, JSON, or rendering errors show it as unavailable. */
 async function loadMail(){
  try{const r=await fetch('/api/mail',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);mail=await r.json();renderMail()}
  catch(e){mail=null;renderMail()}
 }
+/**
+ * Fetch and render project status, preserving a running batch's button lock.
+ * Request, HTTP, JSON, or rendering errors clear stale status views and actions,
+ * disable batch checks, and show an error while retaining visible action output.
+ */
 async function loadStatus(){
  try{
  const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);state=await r.json();
@@ -123,11 +158,22 @@ async function loadStatus(){
  if($('poutput').hidden)$('panel').classList.remove('open');
  }
 }
+/** Refresh status and mail concurrently, resolving after both refreshes finish. */
 async function load(){await Promise.all([loadStatus(),loadMail()])}
+/** Bind current status controls to details, optional checks, and confirmed command copies. */
 function wire(){document.querySelectorAll('[data-item]').forEach(b=>b.onclick=()=>openPanel(b.dataset.item,'Statusdetails und sichere Aktion für '+b.dataset.item,actionFor[b.dataset.item]));document.querySelectorAll('[data-gate]').forEach(b=>b.onclick=()=>openPanel(b.dataset.gate+' '+b.dataset.name,b.dataset.detail,null));document.querySelectorAll('[data-research]').forEach(b=>b.onclick=()=>openPanel(b.dataset.research,b.dataset.reason+'\nQuelle: '+b.dataset.source,null));document.querySelectorAll('[data-cmd]').forEach(b=>b.onclick=async()=>{if(await copyText(b.dataset.cmd)){const old=b.textContent;b.textContent='✓ Kopiert';setTimeout(()=>b.textContent=old,1200)}});document.querySelectorAll('[data-resume-cmd]').forEach(b=>b.onclick=async()=>{if(await copyText(b.dataset.resumeCmd)){const old=b.textContent;b.textContent='✓ Kopiert';setTimeout(()=>b.textContent=old,1200)}});document.querySelectorAll('[data-resume-action]').forEach(b=>b.onclick=()=>openPanel('Wiedereinstieg','Sichere Prüfung starten.',b.dataset.resumeAction))}
+/**
+ * Refresh agent cards and bind their copy/check controls, skipping overlapping loads.
+ * Request, HTTP, JSON, or rendering errors show an unavailable notice and release the lock.
+ */
 async function loadAgents(){if(agentsLoading)return;agentsLoading=true;try{const r=await fetch('/api/agents',{cache:'no-store'});if(!r.ok)throw Error();const d=await r.json();$('agentCards').innerHTML=d.agents.map(a=>{const models=(a.models||[]).map(m=>'<div class="item"><b>'+esc(m.name)+'</b><small>'+esc(m.purpose)+'<br>Geprüft: '+esc(m.verified_on||'ungeprüft')+'</small><div class="actions"><button data-agent-cmd="'+esc(m.term_command)+'">'+esc(m.button_label)+'</button></div></div>').join('');const link=a.url?'<a class="btn" href="'+esc(a.url)+'" target="_blank" rel="noopener noreferrer">'+esc(a.url_label)+'</a>':'';const cmd=a.command?'<button data-agent-cmd="'+esc(a.command)+'">TERM</button>':'';const action=a.action?'<button data-agent-check="'+esc(a.action)+'">Prüfen</button>':'';const disabled=a.disabled_label?'<button disabled>'+esc(a.disabled_label)+'</button>':'';return '<article class="agent"><h3>'+esc(a.name)+'</h3>'+badge(a.status)+' <span class="muted">'+esc(a.status_label||'')+'</span><p>'+esc(a.detail)+'</p>'+(a.note?'<p>'+esc(a.note||'')+'</p>':'')+models+'<div class="actions">'+link+cmd+action+disabled+'</div></article>'}).join('');document.querySelectorAll('[data-agent-cmd]').forEach(b=>b.onclick=async()=>{if(await copyText(b.dataset.agentCmd)){b.textContent='✓ Kopiert · in Termius einfügen'}});document.querySelectorAll('[data-agent-check]').forEach(b=>b.onclick=()=>{openPanel('Installation prüfen','Lokale Prüfung ohne Modellauftrag.',b.dataset.agentCheck);runAction(b.dataset.agentCheck)})}catch(e){$('agentCards').textContent='Agentenstatus derzeit nicht erreichbar.'}finally{agentsLoading=false}}
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));b.classList.add('active');$(b.dataset.tab).classList.add('active')});
 $('pclose').onclick=()=>$('panel').classList.remove('open');$('panel').onclick=e=>{if(e.target===$('panel'))$('panel').classList.remove('open')};$('prun').onclick=()=>runAction($('prun').dataset.action);
+/**
+ * Run priority actions in order until one fails, displaying results or request errors.
+ * Ignore duplicate clicks; keep the batch locked through refresh, then enable it only
+ * with valid status. Invalid action-list JSON and refresh rejections propagate.
+ */
 $('runAll').onclick=async()=>{
  if($('runAll').disabled)return;
  const acts=JSON.parse($('runAll').dataset.actions||'[]');if(!acts.length){openPanel('Nächste Schritte','Keine automatisch ausführbare Prüfung in den Top-Prioritäten.',null);return}openPanel('Checks','Allowlist-Prüfungen werden nacheinander ausgeführt.',null);$('poutput').hidden=false;$('poutput').textContent='';

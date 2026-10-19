@@ -139,6 +139,8 @@ def tool_status(name: str) -> dict[str, str]:
 
     Gemini prefers Antigravity's model listing; a standalone Gemini CLI
     is reported as installed with authentication unverified.
+    Invalid Claude auth JSON is treated as logged out, but a non-object
+    JSON value raises AttributeError. Output decoding errors propagate.
     """
     if name == "gemini":
         agy = _which("agy")
@@ -185,6 +187,8 @@ def gate_status(repo: Path, ref: str | None) -> str:
 
     Return red for absent evidence, green for an ancestor of origin/main,
     and yellow for available evidence whose ancestry check did not pass.
+    Accept a 40-character lowercase commit hash or a remote branch name
+    with an optional origin/ prefix; no fetch is performed.
     """
     if ref is None:
         return "red"
@@ -220,7 +224,7 @@ def commands_for(repo: Path) -> dict[str, str]:
 
 
 def _login_needs_action(state: dict[str, str]) -> bool:
-    """Require login action for non-green states except unverified authentication."""
+    """Require login action for non-green states except yellow with unverified auth."""
     return state["status"] != "green" and not (
         state["status"] == "yellow" and state.get("auth_status") == "unverified"
     )
@@ -326,6 +330,8 @@ def snapshot(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
 
     Keep implementation ancestry separate from pending review and
     operational evidence so merged code can still remain on hold.
+    Output decoding errors and non-object Claude auth or research JSON
+    propagate as UnicodeError and AttributeError, respectively.
     """
     gates = []
     for gate, name, ref in BETA_GATES:
