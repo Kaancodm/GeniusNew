@@ -1,10 +1,15 @@
 # Entwurf: Audit-Kette inkrementell (P-01) — DRAFT
 
-**Status:** Entwurf, keine Entscheidung. Er ist die in `docs/STATUS.md` Punkt 7 vorgesehene
-Design-Stufe nach der Messung (`docs/BENCH-AUDIT-2026-10-19.md`) und Eingabe für den
-`DATABASE.md`-Abschnitt (ChatGPT in Kaans Auftrag, Sicherheitsreview Claude,
-Design-Vorprüfung Gemini, Freigabe Kaan). Kein Code in diesem Dokument ist gebaut;
-Abschnitt 7 listet die offenen Entscheidungen.
+**Status:** Schritt 1 gebaut (Draft-PR #174), Rest Entwurf. Er ist die in
+`docs/STATUS.md` Punkt 7 vorgesehene Design-Stufe nach der Messung
+(`docs/BENCH-AUDIT-2026-10-19.md`) und Eingabe für den `DATABASE.md`-Abschnitt
+(ChatGPT in Kaans Auftrag, Sicherheitsreview Claude, Design-Vorprüfung Gemini,
+Freigabe Kaan). Die Vorschläge D1–D5 (Abschnitt 7) wurden mit Kaans „go“ am
+19.10.2026 als Arbeitsgrundlage übernommen; endgültig entscheidet der Merge
+des jeweiligen Schritts. Gebaut ist bisher nur Schritt 1 (Abschnitt 6): das
+Delta-Protokoll existiert additiv neben v1, wird aber noch von keinem Pfad
+benutzt — Laufzeitverhalten und Sicherheitsaussagen sind daher unverändert,
+bis Schritt 2 den Versand umstellt.
 
 ## 1. Problem (gemessen, nicht geschätzt)
 
@@ -133,7 +138,13 @@ Neu: **Epochen** der Länge E (Vorschlag E = 4 096, D2).
 
 1. **Protokoll v2 im Anker:** `verify_extension` + `commit2` (Anker-Kind und
    `anchor_process serve`), v1 bleibt. Tests: Lücken-/Replay-/Fremdketten-Deltas,
-   Delta-Grenzen, Idempotenz.
+   Delta-Grenzen, Idempotenz. — **Gebaut in PR #174** (`AuditAnchor.commit_delta`,
+   `verify_extension`, `commit2` in `_handle` für Kind und Dienst-Anker,
+   `commit_delta` an `AnchorProcess`/`AnchorClient`; Grenzen nach D5:
+   `_MAX_DELTA_RECORDS = 8192`, `_MAX_DELTA_REQUEST_BYTES = 8 MiB`, beidseitig
+   erzwungen. Der Anker leitet die Basis aus seinem eigenen Zustand ab;
+   `from_count` ist nur ein Desync-Cross-Check. Alle 15 neuen Ablehnungen sind
+   per Mutationslauf als testbemerkt nachgewiesen.)
 2. **Delta-Versand:** `tip()`/`records_from()` an beiden Ketten, Client/Wiring senden
    Deltas; B7-Crashpunkte um „zwischen DB-Commit und Delta-ACK" erweitern.
 3. **DB Tip-Cache + Verlängerungs-Read** (`audit_store`) — **Claude DB Review**
