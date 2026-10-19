@@ -139,7 +139,9 @@ des Helfermodells (`docs/DECISIONS.md`, 18. und 19.10.2026).
 
 **Gerät Laptop, von Kaan gemeldet am 19.10.2026** (Zusammenfassung ohne Rohausgabe, die
 letzte Zeile kam abgeschnitten an): Ollama 0.40.6, Port 11434, Bindung `127.0.0.1`,
-lokale API PASS. `OLLAMA_HOST` in der Prüfsitzung: UNKNOWN.
+lokale API PASS. `OLLAMA_HOST` ist laut Kaan in den untersuchten Terminalsitzungen nicht
+gesetzt; maßgeblich ist die geprüfte Bindung `127.0.0.1` (ein Wert auf Dienst- oder
+Systemebene ist damit nicht ausgeschlossen). Es wurden keine Einstellungen verändert.
 
 **Nicht geprüft (UNKNOWN):** Rohbelege vom Laptop, Auth und WLAN-Erreichbarkeit der
 iPad-App (ai.local). Das Prüfskript `ai-check.sh` liegt nicht im Repository.
