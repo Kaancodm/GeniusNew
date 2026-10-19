@@ -120,6 +120,28 @@ class E3FreshCloneTest(unittest.TestCase):
             self.assertIn(stage.name, text)
         self.assertIn("not claimed by this protocol", text)
 
+    def test_failed_commit_lookup_cannot_become_a_pass(self):
+        class RevParseFails(FakeRun):
+            def __call__(self, command, *, cwd=None, env=None):
+                if command[:2] == ["git", "rev-parse"]:
+                    return Completed(1, "fatal: simulated failure")
+                return super().__call__(command, cwd=cwd, env=env)
+
+        stages, sha = self.run_it(fake=RevParseFails())
+        self.assertEqual(sha, "")
+        self.assertEqual({s.name: s.status for s in stages}["clone"], FAIL)
+        self.assertEqual(verdict(stages), FAIL)
+
+    def test_blocked_clone_still_writes_protocol_in_new_parent(self):
+        protocol = Path(self.tmp.name) / "logs" / "e3" / "PROTOCOL.md"
+        self.assertEqual(
+            main(["--repo", "https://example.invalid/repo.git",
+                  "--dir", str(self.target), "--protocol", str(protocol)],
+                 Run=FakeRun(), env_info=environment(git=None), when="2026-10-19"),
+            3)
+        self.assertTrue(protocol.is_file())
+        self.assertIn("**BLOCKED**", protocol.read_text(encoding="utf-8"))
+
     def test_verdict_ignores_info_but_not_blocked(self):
         self.assertEqual(verdict([Stage("a", PASS), Stage("b", INFO)]), PASS)
         self.assertEqual(verdict([Stage("a", PASS), Stage("b", BLOCKED)]), BLOCKED)

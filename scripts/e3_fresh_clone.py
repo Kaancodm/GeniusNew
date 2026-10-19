@@ -38,6 +38,7 @@ import ctypes
 import ctypes.util
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -204,7 +205,10 @@ def run_e3(*, repo: str, ref: str, target: Path, env_info: Environment,
                                     "--single-branch", repo, str(target)])
         if clone.status == PASS:
             done = Run(["git", "rev-parse", "HEAD"], cwd=target)
-            sha = done.output.strip()
+            candidate = done.output.strip()
+            sha = (candidate if done.returncode == 0
+                   and re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", candidate)
+                   else "")
             clone.evidence.append(f"HEAD {sha}" if sha else "HEAD unreadable")
             if not sha:
                 clone.status = FAIL
@@ -328,7 +332,12 @@ def main(argv: list[str] | None = None, *, Run: Run = _run,
     text = render_protocol(repo=args.repo, ref=args.ref, sha=sha, when=when,
                            env_info=info, stages=stages)
     if args.protocol:
-        args.protocol.write_text(text)
+        try:
+            args.protocol.parent.mkdir(parents=True, exist_ok=True)
+            args.protocol.write_text(text, encoding="utf-8")
+        except OSError as exc:
+            print(f"e3_fresh_clone: cannot write protocol: {exc}", file=sys.stderr)
+            return 2
     for stage in stages:
         print(f"{stage.name}: {stage.status}")
     result = verdict(stages)
