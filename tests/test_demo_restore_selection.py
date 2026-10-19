@@ -39,6 +39,22 @@ class RestoreSelectionTest(unittest.TestCase):
             with self.subTest(port=port):
                 self.assertEqual(self.select(port), "a" * 64)
 
+    def test_duplicate_dsn_parameters_are_refused(self):
+        canonical = (
+            "host=127.0.0.1 port=49153 "
+            "dbname=geniusnew_test_admin user=postgres"
+        )
+        for dsn in (
+            "host=evil " + canonical,
+            "port=5432 " + canonical,
+            "user=other " + canonical,
+            "dbname=other " + canonical,
+            canonical + " host=127.0.0.1",
+            canonical + " port=49153",
+        ):
+            with self.subTest(dsn=dsn), self.assertRaises(ContractError):
+                self.select(GENIUSNEW_TEST_ADMIN_DSN=dsn)
+
     def test_missing_invalid_or_defaulted_ports_are_refused(self):
         for port in ("", "0", "65536", "-1", "005432", "5432,5433",
                      "5432\nINJECTED=yes"):
