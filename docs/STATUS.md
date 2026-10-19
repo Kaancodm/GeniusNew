@@ -1,7 +1,8 @@
 # GeniusNew — Projektstand
 
-**Stand: 08.10.2026, `main` `7f81e240f6ec4b16d876f081249afb3d47240901`.** Nachtrag nur
-zu D1 (Entscheidungen vom 18.10.2026, #158); die Gesamtpflege seit 08.10.2026 steht aus. Teil der
+**Stand: 08.10.2026, `main` `7f81e240f6ec4b16d876f081249afb3d47240901`.** Nachträge nur
+zu D1 (Entscheidungen vom 18.10.2026, #158) und zum lokalen KI-Pilot (19.10.2026,
+Issue #166); die Gesamtpflege seit 08.10.2026 steht aus. Teil der
 Wissensdatenbank, geführt von Claude Code (`docs/COLLABORATION.md`); NotebookLM gibt
 Auskunft. Entscheidungen stehen in `docs/DECISIONS.md`. Dieses Dokument ist in sich
 geschlossen gedacht: als Quelle für NotebookLM, Microsoft 365 Copilot oder jeden anderen
@@ -111,6 +112,34 @@ Nicht übernommen: DB-Tests ohne `GENIUSNEW_TEST_ADMIN_DSN` überspringen.
 `tests/postgres_support.py` wertet fehlende Infrastruktur bewusst als Fehler, und kein
 Test wird übersprungen (`AGENTS.md`, Regel 4).
 
+## Lokaler KI-Pilot (Stand 19.10.2026, Issue #166)
+
+Ein beratender Pilot auf dem Server: Qwen 3.5 4B schlägt einen Plan vor, genau ein
+Helfer führt ihn aus, der Server-Code prüft deterministisch. Er ist **nicht** Teil von
+v0.2, nicht implementiert (kein Code unter `tools/`) und berührt `geniusnew/` nicht.
+Der Sicherheitsvertrag steht als Entwurf von Claude Code in Issue #166 und ist keine
+Entscheidung von Kaan; entschieden sind Modellwahl, Wechselbetrieb und der Download
+des Helfermodells (`docs/DECISIONS.md`, 18. und 19.10.2026).
+
+**Gerät Server, belegt am 19.10.2026** (Ausgaben aus Kaans Terminal, nur lesend):
+
+- Ollama 0.40.1 läuft als User-Dienst `genius-local-ai.service` unter dem Nutzer `kaan`
+  und lauscht nur auf `127.0.0.1:11434`.
+- Cgroup des Prozesses: `memory.max` 6442450944 (6 GiB), `memory.high` 5368709120
+  (5 GiB). `systemctl show genius-local-ai` ohne `--user` zeigt `infinity` und ist
+  dafür der falsche Weg.
+- `OLLAMA_NUM_PARALLEL=1`, `OLLAMA_MAX_LOADED_MODELS=1`, `OLLAMA_KEEP_ALIVE=2m`.
+- Modelle: `qwen3.5:4b-q4_K_M` 3.3 GB, `qwen3.5:9b` 6.6 GB, `gemma4:e2b` 4.6 GB,
+  `qwen2.5-coder:3b` 1.9 GB, dazu `qwen2.5-coder:1.5b` (geladen 1.03 GiB).
+- Mini-Inferenz mit `qwen3.5:4b-q4_K_M`: Antwort `OK`, 13 s. Qwen 4B allein erreicht
+  `memory.high`; im Test stieg der `high`-Zähler um 1571. Beide Modelle gleichzeitig
+  sind nicht gemessen (UNKNOWN), im Wechselbetrieb gab es kein OOM.
+- Tailscale läuft; Peers nach Gerätetyp: iOS online ×2, Windows online ×1, Android
+  offline ×1, Linux offline ×1.
+
+**Nicht geprüft (UNKNOWN):** Ollama-Bindung auf dem Laptop, Auth und WLAN-Erreichbarkeit
+der iPad-App (ai.local). Das Prüfskript `ai-check.sh` liegt nicht im Repository.
+
 ## Nächste Schritte
 
 Reihenfolge laut `docs/ROADMAP-V02.md`; Entscheidungen von Kaan sind dort unter „Offene
@@ -136,6 +165,11 @@ Jobs, Annahmen und Policy).
    eigener `SECURITY.md`-PR, Zahlen fürs Lastbudget zur Freigabe, erneuter Review am
    neuen Head (Gate 6); erst dann D1-Code (Codex), danach D2 und D3.
 10. E2: Security-Review des vollständigen Heads (Claude und Copilot).
+11. KI-Pilot P1 (nur Server): Umsetzung unter `tools/` mit den sechs Negativtests und
+    Eval-Suite (Codex, eigenes Issue); Tailscale-ACL, `tailscale serve` und
+    ai.local-Prüfliste (ChatGPT, eigenes Issue); Laptop- und iPad-Prüfung auf den
+    Geräten (Kaan). Security-Review am exakten Head (Claude) plus Gemini-Zweitmeinung
+    wegen der neuen Netzgrenze.
 
 ## Zusammenarbeit der Werkzeuge
 
