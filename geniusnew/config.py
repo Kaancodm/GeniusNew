@@ -57,7 +57,7 @@ from .approvals import ApproverPolicy
 from .contracts import ContractError, Grant, Policy
 from .http_entry import HttpLimits
 from .worker_service import WorkerServiceProfile
-from .workers import DeterministicSummarizer, Worker
+from .workers import DeterministicSummarizer, TextDigest, Worker
 
 # Published in scripts/demo.py. Refused here so it cannot become a real key.
 DEMO_ROOT_SECRET = b"demo-root-secret-not-for-real-use!!!"
@@ -84,6 +84,7 @@ _GRANT_KEYS = frozenset({"subject", "user_id", "worker_agent_id", "tier", "tools
 # advertised and then fail per request, so it is refused at start instead.
 BUILTIN_WORKERS: Mapping[str, type[Worker]] = {
     DeterministicSummarizer.tool: DeterministicSummarizer,
+    TextDigest.tool: TextDigest,
 }
 
 
