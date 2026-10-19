@@ -57,7 +57,7 @@ from .approvals import ApproverPolicy
 from .contracts import ContractError, Grant, Policy
 from .http_entry import HttpLimits
 from .worker_service import WorkerServiceProfile
-from .workers import DeterministicSummarizer, Worker
+from .workers import DeterministicSummarizer, TextDigest, Worker
 
 # Published in scripts/demo.py. Refused here so it cannot become a real key.
 DEMO_ROOT_SECRET = b"demo-root-secret-not-for-real-use!!!"
@@ -84,6 +84,7 @@ _GRANT_KEYS = frozenset({"subject", "user_id", "worker_agent_id", "tier", "tools
 # advertised and then fail per request, so it is refused at start instead.
 BUILTIN_WORKERS: Mapping[str, type[Worker]] = {
     DeterministicSummarizer.tool: DeterministicSummarizer,
+    TextDigest.tool: TextDigest,
 }
 
 
@@ -137,7 +138,9 @@ def _loopback_host(value: Any) -> str:
         address = ipaddress.ip_address(value)
     except ValueError as exc:
         raise ContractError("service.listen_host must be a literal IP address") from exc
-    if not address.is_loopback:
+    # As in http_entry.serve: an IPv4-mapped IPv6 address is refused on
+    # every Python version, although newer ones call it loopback.
+    if not address.is_loopback or getattr(address, "ipv4_mapped", None) is not None:
         _fail("service.listen_host must be a loopback address; "
               "put a TLS reverse proxy in front instead")
     return value
