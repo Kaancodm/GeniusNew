@@ -1,3 +1,6 @@
+# NICHT INSTALLIEREN: HOLD bis zur A2/C5-Systemabnahme und zum
+# unabhaengigen Security-Review der Namespace-Haertung (PR #140).
+# Keine Schutzoption eigenmaechtig entfernen. docs/OPERATIONS-C5-DRAFT.md.
 [Unit]
 Description=GeniusNew core
 After=network.target geniusnew-anchor.service
@@ -9,7 +12,7 @@ User=geniusnew
 Group=geniusnew
 SupplementaryGroups=geniusnew-audit geniusnew-db
 WorkingDirectory=/opt/geniusnew
-ExecStart=/opt/geniusnew/.venv/bin/python -m geniusnew serve --config /etc/geniusnew/geniusnew.toml
+ExecStart=/opt/geniusnew/.venv/bin/python -I -m geniusnew serve --config /etc/geniusnew/geniusnew.toml
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=60

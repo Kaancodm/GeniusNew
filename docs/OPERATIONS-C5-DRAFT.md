@@ -8,8 +8,11 @@ Testcluster ist keine Produktivdatenbank.
 Kaan hat am 04.10.2026 für C5 entschieden: Der unabhängig gesicherte Ankerstand
 ist eine nicht absenkbare Untergrenze. Fehlt bei einem älteren DB-Backup die
 Historie bis zu diesem Stand und ist sie nicht rekonstruierbar, bleibt der Dienst
-im Zustand **HOLD**. Die eigene Worker-OS-UID wird für C5 ausdrücklich
-verschoben; bis zur gesonderten Umsetzung gilt das getestete Landlock-Mindestziel.
+im Zustand **HOLD**. Am 04.10.2026 wurde die eigene Worker-OS-UID zunächst
+zurückgestellt. Seit dem Merge von PR #140 am 17.10.2026 (Commit
+`9b11f7a89fe948d65d6b2eb3337111a5b11d3a57`) existiert der getrennte
+Worker-Dienstpfad im Code. Die echte UID-/systemd-Systemabnahme und die
+C5-Integration sind weiterhin **HOLD**; ein Merge beweist keinen Betrieb.
 Am 05.10.2026 legte Kaan Backblaze B2 EU Central mit Object Lock und zunächst
 30 Tagen Aufbewahrung als Offsite-Ziel fest. Ein Konto oder Bucket wurde damit
 noch nicht angelegt.
@@ -31,20 +34,52 @@ Das Programm liegt unter /opt/geniusnew, Secrets in privaten Dateien außerhalb
 von Git. Migrationen laufen separat mit der Migrationsrolle; der Kern bekommt
 ausschließlich die geprüfte Runtime-DSN. Ein fehlendes Feld verhindert den Start.
 
-Die Worker laufen heute noch als Kindprozess des Kerns. Eine eigene systemd-
-User-Zeile allein ändert ihre Identität nicht. Der gesonderte Worker-OS-Nutzer
-braucht einen tatsächlich unterstützten Startpfad und einen Negativtest.
-Bis dahin ist lediglich das Landlock-Mindestziel belegt. Diese Verschiebung ist
-Kaans Entscheidung für C5 vom 04.10.2026, keine Behauptung über den Ist-Zustand.
+Der getrennte Worker-Dienst aus PR #140 verwendet systemd-Socketaktivierung
+und eine eigene feste UID. Die verbindlichen Vorlagen und der Bootstrap-Vertrag
+stehen unter [`ops/worker/README.md`](../ops/worker/README.md). Der Core
+verlangt die geprüften Kernel-Identitäten, den exklusiven Lifecycle-Lease und
+den bootgebundenen, durch Host-Root erzeugten Beleg
+`/run/geniusnew-worker/ipc/host-state.json`. Ohne diese Voraussetzungen
+verweigert er den Auftrag; es gibt keinen lokalen Worker-Fallback.
+
+### Abgleich mit A2/PR #140 (19.10.2026) — HOLD
+
+Die ältere Core-Unit `docs/examples/geniusnew-core.service` ist noch **keine
+betriebsfähige Vorlage für den getrennten Worker**. Insbesondere erzeugen ihre
+Härtungsoptionen `ProtectSystem=strict`, `ProtectHome=yes` und
+`PrivateTmp=yes` voraussichtlich eine private Mount-Namespace. Der
+Worker-Hostnachweis fordert aber, dass der Core in der geprüften Host-Namespace
+bleibt (siehe `ops/worker/README.md`). Dieser Widerspruch ist auf dem Zielhost
+noch nicht abgenommen. Die Optionen dürfen nicht einfach entfernt werden:
+Zuerst braucht es einen unabhängig sicherheitsgeprüften Ersatzvertrag ohne
+schwächere Schutzwirkung.
+
+Zusätzlich fehlen im bisherigen Installationsablauf die fest zugeordneten
+numerischen Core-/Worker-/Socket-Gruppenidentitäten, die separat geschützte,
+root-kontrollierte Python-Laufzeit, der Boot-Referenz-Erzeuger und die echte
+Systemprobe. Eine vorhandene Datei oder systemd-Unit ist kein Nachweis ihrer
+korrekten Bereitstellung. Die gesonderten Worker-Vorlagen unter `ops/worker/`
+werden nicht durch die Core-/Anker-Beispiele ersetzt.
+
+**Bis zum geprüften Ersatz der Core-Unit und zum bestandenen Test von
+[PR #144](https://github.com/Kaancodm/GeniusNew/pull/144) sowie den
+Worker-Absturztests aus [PR #150](https://github.com/Kaancodm/GeniusNew/pull/150):
+keine Core-/Worker-Aktivierung, keine produktive Peer-DB-Anbindung und kein
+C5-PASS.** Auch nach erfolgreicher technischer Prüfung bleibt Deployment ein
+eigenes Kaan-GO.
 
 ### Dienst-Installation nach Freigabe
 
-Die zwei Beispiele unter `docs/examples/` sind Vorlagen für einen eigens
-freigegebenen Host, keine ausführbare Erstinstallation. Der geprüfte Commit wird
-unveränderlich unter `/opt/geniusnew` bereitgestellt. Danach legt der Operator
-die beiden Systemnutzer `geniusnew-anchor` und `geniusnew` sowie die gemeinsame
-Socketgruppe `geniusnew-audit` an. Der Kernnutzer erhält diese Gruppe ergänzend,
-der Ankernutzer bekommt keinen Zugriff auf die Core-DB oder das Root-Secret.
+Die zwei älteren Core-/Anker-Beispiele unter `docs/examples/` sind
+**Entwurfsartefakte**, nicht installierbar, solange das A2/C5-HOLD besteht.
+Die separat geprüften Worker-`.in`-Vorlagen liegen unter `ops/worker/`.
+Der geprüfte Commit muss später unveränderlich in einer root-kontrollierten
+Python-Laufzeit unter `/opt/geniusnew` bereitstehen. Die geplanten
+Systemnutzer `geniusnew-anchor` und `geniusnew` und die Audit-Socketgruppe
+`geniusnew-audit` bleiben getrennt. Zusätzlich sind eine exklusive Worker-UID,
+eine feste Core-UID und eine dedizierte Worker-Socket-GID zu prüfen; nur der
+Core erhält Zugang zur Worker-Socketgruppe. Der Ankernutzer bekommt weder
+Core-DB-/Root-Secret-Zugriff noch den Worker-Socketzugang.
 
 `/var/lib/geniusnew-anchor` gehört nur `geniusnew-anchor` und ist `0700`;
 `/etc/geniusnew` gehört `geniusnew` und ist `0700`. Darin liegen
@@ -55,17 +90,11 @@ Modus `0600` und keine Symlinks. Die TOML nennt ausschließlich
 Ihr `listen_host` wird privat auf Loopback gesetzt; der Reverse-Proxy aus
 `docs/REVERSE-PROXY.md` übernimmt TLS und äußere Limits.
 
-Nach Abgleich von Pfaden, Nutzern, Schlüsseln und vollständigem Commit-SHA:
-
-```sh
-sudo install -m 0644 docs/examples/geniusnew-anchor.service /etc/systemd/system/geniusnew-anchor.service
-sudo install -m 0644 docs/examples/geniusnew-core.service /etc/systemd/system/geniusnew-core.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now geniusnew-anchor.service
-sudo systemctl is-active geniusnew-anchor.service
-sudo systemctl enable --now geniusnew-core.service
-sudo systemctl is-active geniusnew-core.service
-```
+Der bisherige Ablauf zum Kopieren und Aktivieren dieser beiden Units ist
+**gesperrt**: Die Core-Unit ist nicht mit dem Boot-/Namespace-Vertrag von
+PR #140 abgeglichen. Nach unabhängigem Review sind ein neuer Installations-
+und Reboot-Probelauf sowie die vollständige A2/C5-Abnahme erforderlich. Hier
+stehen absichtlich keine ausführbaren `systemctl enable --now`-Kommandos.
 
 Der Platzhalter `AUDIT_PUBLIC_KEY_HEX` in der Anker-Unit muss vorher durch den
 öffentlichen Audit-Schlüssel ersetzt sein; seine private Hälfte und das
@@ -162,13 +191,14 @@ nötige Gruppenzugehörigkeit. Die Core-Unit nennt zusätzlich `geniusnew-db`;
 der Ankernutzer gehört **nicht** hinein. Gruppen, Verzeichnis und Neustart sind
 spätere, ausdrücklich freizugebende Operatorhandlungen.
 
-**Offene Worker-Grenze:** Ein Worker läuft derzeit mit Core-UID und kann durch
-`peer` nicht vom Kern unterschieden werden. `SECURITY.md` dokumentiert für
-Unix-Sockets nur den Python-Audit-Hook, keine rohe Syscall-Sperre. Socketmodus,
-DSN-Geheimhaltung und Connection-Limit schließen diese Grenze nicht. Vor
-Deployment muss Claude diesen Pfad bewerten; ohne belastbaren Negativnachweis
-oder Kaans ausdrückliche Entscheidung zum konkreten Restrisiko bleibt die
-Peer-Installation in HOLD. Keine Sandbox-Abschwächung als Lösung.
+**Worker-/Peer-Grenze nach PR #140:** Der getrennte Dienstpfad fordert
+verschiedene feste Core-/Worker-UIDs, Socketgruppe, geprüfte Unit, Boot-Beleg,
+Kernel-Credentials und Lifecycle-Lease. Die C5-Peer-Anbindung ist erst zulässig,
+wenn die echte Hostprobe nachweist, dass der Worker die Runtime-DB-Socketdatei
+auch mit rohen nativen Syscalls nicht nutzen kann und weder Root-Secret noch
+Ankerzustand lesen kann. Eine reine Python-Audit-Hook-Probe genügt nicht.
+Das aktuelle C5-Betriebsmodell bleibt bis dahin **HOLD**; keine zusätzliche
+Worker-Gruppenberechtigung und keine Sandbox-Abschwächung als Abkürzung.
 
 ### Getrennte Hosts: ausschließlich TLS und SCRAM
 
@@ -597,9 +627,9 @@ ersetzen diese neuen Gates nicht. Kaan mergt; keine automatische Freigabe.
 Offen sind insbesondere Peer-/Worker-Negativnachweis, isolierte HBA/TLS-/Rollen-/
 Checksum-Prüfung, Monitoring-Exportprüfung und die regelmäßige Restore-Planung.
 
-Nach den fertigen Code-/Review-Nachweisen: Anker/Core-Installation mit eigenen
-OS-Nutzern, dauerhafte Schlüsselverwaltung und Abschluss der oben beschriebenen
-Offsite-Probe durch die externe Kopie des Wiederherstellungspakets. Die
-Worker-UID ist für C5 ausdrücklich verschoben;
-sie bleibt eine offene Sicherheitsgrenze.
+Nach den fertigen Code-/Review-Nachweisen: eine mit PR #140 kompatible,
+unabhängig geprüfte Core-Unit, der echte Worker-/Peer-/Reboot-Negativnachweis,
+getrennte Anker-/Core-/Worker-UIDs, dauerhafte Schlüsselverwaltung und die
+externe Kopie des Wiederherstellungspakets. Die Worker-UID ist als Codepfad
+vorhanden, aber **nicht betrieblich abgenommen**. Für C5 und E3 bleibt HOLD.
 AGENTS.md verlangt für Deployment, Zugriffsrechte und Secret-Rotation Kaans OK.
