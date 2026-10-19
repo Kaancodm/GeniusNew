@@ -21,6 +21,7 @@ import sys
 import threading
 from typing import Callable, Sequence
 
+from .advisory import build_advisory
 from .anchor_process import AnchorClient
 from .audit import AuditAuthority
 from .audit_chain import AuditChain
@@ -87,6 +88,7 @@ def _run_service(config: ServiceConfig, *, job_ledger: JobLedger,
                         acceptance_ledger=acceptance_ledger,
                         database_connection=database_connection,
                         audit_chain_factory=audit_chain_factory,
+                        advisory=build_advisory(config.advisory),
                         worker_service_profile=(config.worker_service if runner_factory is None
                                                 else None), runner_factory=runner_factory)
     else:
@@ -97,6 +99,7 @@ def _run_service(config: ServiceConfig, *, job_ledger: JobLedger,
                         job_ledger=job_ledger, acceptance_ledger=acceptance_ledger,
                         database_connection=database_connection,
                         audit_chain_factory=audit_chain_factory,
+                        advisory=build_advisory(config.advisory),
                         worker_service_profile=(config.worker_service if runner_factory is None
                                                 else None), runner_factory=runner_factory)
     try:
