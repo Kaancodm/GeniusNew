@@ -5,7 +5,8 @@ from geniusnew.approvals import ApprovalStore
 from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, issue, validate
 from geniusnew.gateway import Gateway
 from geniusnew.results import WorkerAuthority, accept
-from geniusnew.workers import (DeterministicSummarizer, Worker, WorkerRunner)
+from geniusnew.workers import (DeterministicSummarizer, Worker, WorkerRunner,
+                               WorkerBoundaryError)
 
 # Zero-entropy and self-describing. Its job is to be distinctive enough that
 # finding it in a signed result would be unambiguous evidence of a leak.
@@ -153,6 +154,17 @@ class WorkerBoundaryTest(unittest.TestCase):
                 taken = self.taken(self.run_with(ExplodingWorker(exception)))
                 self.assertFalse(taken.succeeded)
                 self.assertEqual(taken.reason_code, 'WORKER_FAILED')
+
+    def test_a_service_boundary_failure_cannot_be_signed_as_worker_failed(self):
+        """Require transport or lifecycle failures to escape without a signed outcome."""
+        class FailedService(WorkerRunner):
+            def _run_worker(self, payload):
+                """Simulate an unconfirmed worker lifecycle at the service boundary."""
+                raise WorkerBoundaryError("unconfirmed worker lifecycle")
+
+        runner = FailedService(DeterministicSummarizer(), authority=self.authority)
+        with self.assertRaises(WorkerBoundaryError):
+            runner.execute(self.permit_for(), now=110)
 
     def test_an_exception_message_never_reaches_the_result(self):
         """A failure path that carries text is a leak with an error around it."""
