@@ -17,8 +17,6 @@ import subprocess
 import sys
 import tempfile
 
-from psycopg import ProgrammingError
-from psycopg.conninfo import conninfo_to_dict
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -31,10 +29,6 @@ from geniusnew.contracts import ContractError  # noqa: E402
 from postgres_support import PostgresDatabase  # noqa: E402
 
 _CONTAINER_ID = re.compile(r"\A[0-9a-f]{64}\Z")
-_ADMIN_DSN = {
-    "host": "127.0.0.1", "dbname": "geniusnew_test_admin", "user": "postgres",
-}
-
 
 def require(condition: bool, message: str) -> None:
     if not condition:
@@ -47,15 +41,16 @@ def ci_container() -> str:
     if (os.environ.get("GITHUB_ACTIONS") != "true"
             or not _CONTAINER_ID.fullmatch(container)):
         raise ContractError("restore drill requires the disposable CI PostgreSQL service")
-    try:
-        parameters = conninfo_to_dict(dsn)
-    except ProgrammingError as exc:
-        raise ContractError("restore drill requires the disposable CI PostgreSQL service") from exc
-    port = parameters.pop("port", "")
-    if (parameters != _ADMIN_DSN
-            or not re.fullmatch(r"[1-9][0-9]{0,4}", port)
-            or int(port) > 65535):
+    # Only the canonical DSN emitted by verify.yml is supported here.
+    # Parsing into a dict would silently discard duplicate connection keys.
+    match = re.fullmatch(
+        r"host=127[.]0[.]0[.]1 port=([1-9][0-9]{0,4}) "
+        r"dbname=geniusnew_test_admin user=postgres",
+        dsn,
+    )
+    if match is None or int(match.group(1)) > 65535:
         raise ContractError("restore drill requires the disposable CI PostgreSQL service")
+    port = match.group(1)
     # The dynamic DSN must resolve to this exact disposable service container.
     try:
         inspected = subprocess.run(
