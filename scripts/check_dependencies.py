@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Callable
 
 _PIN = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;\\]+)")
+_HASH_LINE = re.compile(r"^\s*--hash=sha256:[0-9a-fA-F]+\s*\\?\s*$")
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _MAX_SUMMARY_CHARS = 200
 _TIMEOUT_SECONDS = 20
@@ -39,12 +40,22 @@ Fetch = Callable[[str], bytes]
 
 
 def parse_pins(text: str) -> list[tuple[str, str]]:
-    """The pinned (name, version) set, in file order, hashes ignored."""
+    """Extract pins; unsupported requirement syntax is UNKNOWN, never clean."""
     pins = []
-    for line in text.splitlines():
+    for number, line in enumerate(text.splitlines(), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
         match = _PIN.match(line)
         if match:
+            suffix = line[match.end():].strip()
+            if suffix not in ("", "\\") and not suffix.startswith((";", "#")):
+                raise ValueError(f"unsupported requirement syntax on line {number}")
             pins.append((match.group(1), match.group(2)))
+        elif pins and _HASH_LINE.fullmatch(line):
+            continue
+        else:
+            raise ValueError(f"unsupported requirement syntax on line {number}")
     return pins
 
 
@@ -57,6 +68,11 @@ def advisories(record: bytes) -> list[tuple[str, str]]:
     found = []
     for entry in listed:
         if not isinstance(entry, dict):
+            raise ValueError("release record contains malformed advisory")
+        withdrawn = entry.get("withdrawn")
+        if withdrawn is not None:
+            if type(withdrawn) is not str or not withdrawn:
+                raise ValueError("release record contains malformed withdrawal")
             continue
         identifier = str(entry.get("id") or "UNKNOWN-ID")
         summary = " ".join(str(entry.get("summary") or "").split())
@@ -103,8 +119,9 @@ def main(argv: list[str] | None = None, *, fetch: Fetch = _fetch) -> int:
     path = Path(arguments[0]) if arguments else Path("requirements.txt")
     try:
         pins = parse_pins(path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        print(f"check_dependencies: cannot read {path}: {exc}", file=sys.stderr)
+    except (OSError, ValueError) as exc:
+        print(f"check_dependencies: UNKNOWN ({type(exc).__name__}): {exc}",
+              file=sys.stderr)
         return 2
     code, lines = check(pins, fetch=fetch)
     for line in lines:

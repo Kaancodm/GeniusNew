@@ -1,9 +1,13 @@
 """The dependency watcher without a workflow: unknown is never clean."""
 
+import io
 import json
+import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 
-from scripts.check_dependencies import advisories, check, parse_pins
+from scripts.check_dependencies import advisories, check, main, parse_pins
 
 REQUIREMENTS = """\
 # a comment
@@ -57,6 +61,37 @@ class CheckDependenciesTest(unittest.TestCase):
     def test_no_pins_is_unknown_not_a_pass(self):
         code, _ = check([], fetch=lambda url: record())
         self.assertEqual(code, 2)
+
+    def test_unknown_requirement_syntax_cannot_be_silently_ignored(self):
+        for unsupported in ("-r extra-requirements.txt", "package~=1.0",
+                            "--extra-index-url https://example.com/simple"):
+            with self.subTest(unsupported=unsupported):
+                with self.assertRaisesRegex(ValueError, "unsupported"):
+                    parse_pins("cryptography==50.0.1\n" + unsupported + "\n")
+
+    def test_unknown_requirement_syntax_exits_two_from_the_cli(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "requirements.txt"
+            path.write_text("cryptography==50.0.1\n-r extra.txt\n", encoding="utf-8")
+            err = io.StringIO()
+            with redirect_stderr(err), redirect_stdout(io.StringIO()):
+                result = main([str(path)], fetch=lambda _: record())
+            self.assertEqual(result, 2)
+            self.assertIn("UNKNOWN", err.getvalue())
+
+    def test_a_null_advisory_entry_must_be_unknown(self):
+        code, lines = check([("sample", "1.0")],
+                            fetch=lambda _: record(None))
+        self.assertEqual(code, 2)
+        self.assertIn("UNKNOWN", lines[-1])
+
+    def test_a_withdrawn_advisory_is_not_an_active_vulnerability(self):
+        withdrawn = {"id": "GHSA-retracted", "summary": "withdrawn",
+                     "withdrawn": "2026-10-01T00:00:00Z"}
+        code, lines = check([("sample", "1.0")],
+                            fetch=lambda _: record(withdrawn))
+        self.assertEqual(code, 0)
+        self.assertNotIn("GHSA-retracted", " ".join(lines))
 
     def test_summaries_are_truncated(self):
         found = advisories(record({"id": "X", "summary": "y" * 5000}))
