@@ -50,7 +50,7 @@ Audit-Kette festgehalten.
 | --- | --- | --- |
 | A1, A2 | Seccomp gegen Prozessstart; Landlock-Allowlist (Mindestziel). Offen: eigener OS-Nutzer für den Worker | #57, #76 |
 | B0–B3 | `docs/DATABASE.md`, PostgreSQL-Fundament, persistentes Job- und Annahme-Ledger | #70, #78, #90, #93 |
-| B4, B5 | Wartende Jobs und Approval-Speicher, persistente Audit-Kette. **Ohne** `Claude DB Review: APPROVED` am Head gemergt, Nachholung offen (Entscheidung 6) | #94, #95 |
+| B4, B5 | Wartende Jobs und Approval-Speicher, persistente Audit-Kette. **Ohne** `Claude DB Review: APPROVED` am Head gemergt, kein separates Nachholen des `Claude DB Review`, E2 deckt es ab (Entscheidung 6, `docs/DECISIONS.md` 18.10.2026); das Gemini-Sicherheitsreview bleibt offen | #94, #95 |
 | B6 | Ledger und Approval-Speicher manipulationssichtbar, Abgleich gegen die verankerte Kette | #97 |
 | B7 | Absturztest mit `SIGKILL` an jeder Zustandsgrenze | #106 |
 | C1, C2 | `python -m geniusnew serve`; Anker als eigener Dienst mit signierten Antworten | #61, #62 |
@@ -153,7 +153,7 @@ Entscheidungen“ gelistet (Portal in der Beta, Portal→Kern-Authentisierung, a
 Jobs, Annahmen und Policy).
 
 1. Roadmap-Spalte „Stand“ an die gemergten PRs angleichen (Docs-PR #130).
-2. `Claude DB Review` für B4 (#94) und B5 (#95) am gemergten Stand nachholen.
+2. ~~`Claude DB Review` für B4 (#94) und B5 (#95) nachholen~~ — entschieden am 18.10.2026: nicht separat, E2 deckt es ab. Offen bleibt das Gemini-Sicherheitsreview zu B4/B5.
 3. Kaan entscheidet: Python-Version der CI (3.13 zusätzlich oder statt 3.11) und ob
    Linter, Typprüfung, Coverage und `pip-audit` als Entwicklungswerkzeuge dazukommen.
 4. Server einrichten (`ops/server/genius-server`, Kaan) und Landlock dort prüfen.
