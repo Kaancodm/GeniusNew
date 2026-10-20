@@ -18,6 +18,7 @@ Nur tatsächlich ausgeführte Prüfungen eintragen; nicht Geprüftes als `UNKNOW
 | Demo (`./scripts/demo.sh`) | |
 | Refusal-Guard der geänderten Module | |
 | CI auf dem aktuellen Head | |
+| Gemini-Review am aktuellen Head (Format „Gemini-Review“ in `docs/COLLABORATION.md`; seit 20.10.2026 statt Copilot) | |
 | Claude DB Review (nur DB-Code-PRs von Codex: `Claude DB Review: APPROVED` / `Claude DB Review: CHANGES REQUESTED`; exakter geprüfter Head-SHA Pflicht. ChatGPTs `docs/DATABASE.md`-Entwurf braucht stattdessen Claudes Sicherheitsreview und Kaans Freigabe, siehe `docs/COLLABORATION.md`) | |
 
 ## Für die Wissensdatenbank

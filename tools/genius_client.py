@@ -22,6 +22,7 @@ Exit codes: 0 digest produced, 1 job refused or failed (reason on stderr),
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import sys
@@ -59,15 +60,26 @@ def read_api_key(*, key_file: Path | None, environ: dict[str, str]) -> bytes:
         key.decode("ascii")
     except UnicodeDecodeError:
         raise ValueError("API key must be ASCII (it travels in a header)") from None
+    if any(byte < 32 or byte == 127 for byte in key):
+        # HTTP header errors can echo the credential; refuse before transport.
+        raise ValueError("API key must not contain control characters")
     return key
 
 
 def build_request(base_url: str, api_key: bytes, text: str) -> urllib.request.Request:
     parts = urlsplit(base_url)
-    if parts.scheme not in ("http", "https") or not parts.netloc or parts.username:
+    if (parts.scheme not in ("http", "https") or not parts.netloc
+            or parts.username is not None or parts.password is not None):
         raise ValueError("--url must look like http://127.0.0.1:8080 or https://host")
     if parts.path not in ("", "/") or parts.query or parts.fragment:
         raise ValueError("--url names the service, not a route; /jobs is added here")
+    if parts.scheme == "http":
+        try:
+            host = ipaddress.ip_address(parts.hostname or "")
+        except ValueError:
+            raise ValueError("http requires a literal loopback IP address") from None
+        if not host.is_loopback or getattr(host, "ipv4_mapped", None) is not None:
+            raise ValueError("http requires a literal loopback IP address")
     body = json.dumps({"text": text}, ensure_ascii=True,
                       separators=(",", ":")).encode("ascii")
     if len(body) > _MAX_BODY_BYTES:
@@ -104,9 +116,22 @@ def parse_outcome(status_code: int, raw: bytes) -> Outcome:
                    job_id=job_id)
 
 
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    """Never copy an Authorization header to a redirected request."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def _open(request: urllib.request.Request, *, timeout: int) -> tuple[int, bytes]:
+    handlers = [_RejectRedirects()]
+    if request.type == "http":
+        # The only allowed cleartext endpoint is a literal loopback address.
+        # A configured proxy must not receive its bearer credential.
+        handlers.insert(0, urllib.request.ProxyHandler({}))
+    opener = urllib.request.build_opener(*handlers)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             return response.status, response.read()
     except urllib.error.HTTPError as error:  # a refusal is still an answer
         return error.code, error.read()
@@ -145,7 +170,11 @@ def main(argv: list[str] | None = None, *, opener: Opener = _open,
             print(json.dumps({"job_id": outcome.job_id, "status": "SUCCEEDED",
                               "digest": outcome.text}, ensure_ascii=False, indent=2))
         elif args.out:
-            args.out.write_text(outcome.text, encoding="utf-8")
+            try:
+                args.out.write_text(outcome.text, encoding="utf-8")
+            except OSError as exc:
+                print(f"genius_client: cannot write output: {exc}", file=sys.stderr)
+                return 2
             print(f"digest written to {args.out} (job {outcome.job_id})",
                   file=sys.stderr)
         else:
