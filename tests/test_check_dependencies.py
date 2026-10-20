@@ -93,6 +93,37 @@ class CheckDependenciesTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertNotIn("GHSA-retracted", " ".join(lines))
 
+    def test_malformed_withdrawal_is_unknown_never_clean(self):
+        malformed = ("", " ", "not-a-timestamp", "2026-10-01",
+                     "2026-10-01T00:00:00", "2026-02-30T00:00:00Z",
+                     "2026-10-01T24:00:00Z", "2026-10-01T00:00:00+00:60",
+                     "2026-10-01T00:00:00Z\n", True, 0, [], {})
+        for withdrawn in malformed:
+            with self.subTest(withdrawn=withdrawn):
+                code, lines = check([("sample", "1.0")], fetch=lambda _: record(
+                    {"id": "GHSA-demo", "withdrawn": withdrawn}))
+                self.assertEqual(code, 2)
+                self.assertIn("UNKNOWN", lines[-1])
+                self.assertNotIn("no known advisories", " ".join(lines))
+
+    def test_withdrawal_timestamp_accepts_offsets_and_fractional_seconds(self):
+        for withdrawn in ("2026-10-01T00:00:00Z",
+                          "2026-10-01T02:30:00.123456789+02:30",
+                          "2026-10-01t00:00:00z"):
+            with self.subTest(withdrawn=withdrawn):
+                code, _ = check([("sample", "1.0")], fetch=lambda _: record(
+                    {"id": "GHSA-demo", "withdrawn": withdrawn}))
+                self.assertEqual(code, 0)
+
+    def test_missing_or_null_withdrawal_keeps_an_advisory_active(self):
+        for entry in ({"id": "GHSA-demo"},
+                      {"id": "GHSA-demo", "withdrawn": None}):
+            with self.subTest(entry=entry):
+                code, lines = check([("sample", "1.0")],
+                                    fetch=lambda _: record(entry))
+                self.assertEqual(code, 1)
+                self.assertIn("GHSA-demo", lines[0])
+
     def test_summaries_are_truncated(self):
         found = advisories(record({"id": "X", "summary": "y" * 5000}))
         self.assertLessEqual(len(found[0][1]), 200)

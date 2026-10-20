@@ -26,11 +26,16 @@ import re
 import sys
 import urllib.error
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
 _PIN = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;\\]+)")
 _HASH_LINE = re.compile(r"^\s*--hash=sha256:[0-9a-fA-F]+\s*\\?\s*$")
+_WITHDRAWAL_TIMESTAMP = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt]"
+    r"[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?"
+    r"(?:[Zz]|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])")
 _MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 _MAX_SUMMARY_CHARS = 200
 _TIMEOUT_SECONDS = 20
@@ -71,8 +76,12 @@ def advisories(record: bytes) -> list[tuple[str, str]]:
             raise ValueError("release record contains malformed advisory")
         withdrawn = entry.get("withdrawn")
         if withdrawn is not None:
-            if type(withdrawn) is not str or not withdrawn:
+            if (type(withdrawn) is not str
+                    or _WITHDRAWAL_TIMESTAMP.fullmatch(withdrawn) is None):
                 raise ValueError("release record contains malformed withdrawal")
+            # PyPI specifies RFC 3339, not merely a nonempty string. The
+            # calendar check also keeps impossible dates UNKNOWN, never clean.
+            datetime.fromisoformat(withdrawn.upper())
             continue
         identifier = str(entry.get("id") or "UNKNOWN-ID")
         summary = " ".join(str(entry.get("summary") or "").split())
