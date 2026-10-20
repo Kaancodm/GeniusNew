@@ -14,6 +14,8 @@ PYTHON = "/opt/geniusnew/.venv/bin/python"
 PACKAGE = Path("/opt/geniusnew/.venv/lib/python3.13/site-packages/geniusnew")
 UNITS = ("/etc/systemd/system/geniusnew-worker.socket",
          "/etc/systemd/system/geniusnew-worker@.service")
+MIGRATIONS = ("0001_core_foundation.sql", "0002_pending_jobs.sql",
+              "0003_approval_store.sql", "0004_audit_chain.sql")
 CORE_UID, CORE_GID, WORKER_UID, WORKER_GID, SOCKET_GID = 20001, 20001, 20002, 20002, 20003
 CASES = ("baseline", "lease", "raw_nonce", "raw_extra", "raw_limits",
          "raw_noncanonical", "raw_oversized", "raw_truncated", "raw_trailing",
@@ -91,9 +93,16 @@ def verify_installed(manifest: dict) -> None:
     """Hash all installed package sources before the first GeniusNew import."""
     protected(PACKAGE, directory=True)
     sources = manifest["expected_sources"]
-    actual = {"geniusnew/" + item.name for item in PACKAGE.glob("*.py")}
-    if actual != set(sources) or any(PACKAGE.glob("*/__init__.py")):
+    expected = {Path(name).relative_to("geniusnew") for name in sources}
+    expected.add(Path("migrations"))
+    expected.update(Path("migrations") / name for name in MIGRATIONS)
+    actual = {item.relative_to(PACKAGE) for item in PACKAGE.rglob("*")}
+    # -B only prevents writing bytecode; pre-existing pyc and extension modules
+    # can still load. No unlisted package entry may survive the manifest check.
+    if actual != expected:
         _fail("SOURCE_MISMATCH")
+    for entry in actual:
+        protected(PACKAGE / entry, directory=entry == Path("migrations"))
     for name, expected in sources.items():
         path = PACKAGE / Path(name).name
         protected(path)

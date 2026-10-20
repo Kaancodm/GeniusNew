@@ -115,6 +115,11 @@ class ManifestTest(unittest.TestCase):
             package = Path(temporary)
             for name in ("__init__.py", "worker_service.py"):
                 (package / name).write_text("safe source\n")
+            migrations = package / "migrations"
+            migrations.mkdir()
+            for name in ("0001_core_foundation.sql", "0002_pending_jobs.sql",
+                         "0003_approval_store.sql", "0004_audit_chain.sql"):
+                (migrations / name).write_text("-- fixture\n")
             value = manifest()
             value["expected_sources"] = {"geniusnew/" + name: common.digest(package / name)
                                           for name in ("__init__.py", "worker_service.py")}
@@ -129,7 +134,17 @@ class ManifestTest(unittest.TestCase):
                 (package / "untracked.py").write_text("unexpected")
                 with self.assertRaisesRegex(common.Refused, "SOURCE_MISMATCH"):
                     common.verify_installed(value)
-            (package / "untracked.py").unlink()
+                (package / "untracked.py").unlink()
+                for extra in (package / "worker_service.so",
+                              package / "__pycache__" / "worker_service.cpython-313.pyc"):
+                    with self.subTest(extra=extra.name):
+                        extra.parent.mkdir(exist_ok=True)
+                        extra.write_bytes(b"unhashed import candidate")
+                        with self.assertRaisesRegex(common.Refused, "SOURCE_MISMATCH"):
+                            common.verify_installed(value)
+                        extra.unlink()
+                        if extra.parent != package:
+                            extra.parent.rmdir()
             with patch.object(common, "PACKAGE", package), patch.object(common, "protected"), \
                     patch.object(common, "digest", side_effect=lambda p: common.hashlib.sha256(p.read_bytes()).hexdigest()
                                  if p.parent == package else "d" * 64):
@@ -555,13 +570,23 @@ class DriverGuardRegressionTest(unittest.TestCase):
             calls["mkdtemp"].assert_not_called()
             calls["open"].assert_not_called()
 
-    def test_run_invalid_host_metadata_refuses_after_cleanup_before_report_creation(self):
+    def test_run_invalid_host_metadata_refuses_before_staging(self):
         context, calls = self.run_context(hostname="contains space")
         with context:
             with self.assertRaisesRegex(common.Refused, "^HOST_METADATA_INVALID$"):
                 driver.run(Path("/manifest.json"), driver.HERE.parent.parent / "reports", True)
-        calls["suite"].cleanup.assert_called_once_with()
-        calls["rmtree"].assert_called_once_with(Path("/example/inert-stage"))
+        calls["mkdtemp"].assert_not_called()
+        calls["suite"].cleanup.assert_not_called()
+        calls["rmtree"].assert_not_called()
+        calls["open"].assert_not_called()
+
+    def test_existing_report_refuses_before_live_cases(self):
+        context, calls = self.run_context()
+        with context, patch.object(driver.os.path, "lexists", return_value=True):
+            with self.assertRaisesRegex(common.Refused, "^REPORT_EXISTS$"):
+                driver.run(Path("/manifest.json"), driver.HERE.parent.parent / "reports", True)
+        calls["mkdtemp"].assert_not_called()
+        calls["suite"].baseline.assert_not_called()
         calls["open"].assert_not_called()
 
     def test_fake_successful_run_reports_every_case_and_keeps_operational_hold(self):

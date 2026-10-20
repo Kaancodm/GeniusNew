@@ -16,7 +16,7 @@ Ohne `--run` gilt `--check`. Das prüft nur Manifest und Syntax der Helfer. Es i
 python3 -I -B tools/worker_acceptance/driver.py --check --manifest /absoluter/pfad/manifest.json
 ```
 
-Das Manifest enthält `source_commit`, `expected_sources` (alle 23 `geniusnew/*.py` mit SHA-256) und `expected_units` (die beiden tatsächlich gerenderten `/etc/systemd/system/geniusnew-worker*`-Dateien mit SHA-256). Der Livepfad verweigert abweichende Quellen, Unit-Dateien, ungeschützte Pfade oder fremde bereits laufende Core-/Worker-Prozesse.
+Das Manifest enthält `source_commit`, `expected_sources` (alle 23 `geniusnew/*.py` mit SHA-256) und `expected_units` (die beiden tatsächlich gerenderten `/etc/systemd/system/geniusnew-worker*`-Dateien mit SHA-256). Der Livepfad verlangt außerdem exakt die vier bekannten SQL-Migrationsdateien; zusätzliche Paketdateien wie Erweiterungsmodule oder Bytecode werden vor dem Import verweigert. Er verweigert abweichende Quellen, Unit-Dateien, ungeschützte Pfade oder fremde bereits laufende Core-/Worker-Prozesse.
 
 ## Ausdrücklich aktivierter Livepfad
 
@@ -41,6 +41,8 @@ Vor jedem Worker-Signal bindet der Driver PIDFD/PID, alle UID-/GID-Werte, tatsä
 ## Bericht und verbleibende Grenzen
 
 Der vollständige JSON-Bericht wird nach `reports/worker-acceptance.json` und auf stdout ausgegeben. Er enthält nur feste Statuscodes, Prüfungsnamen, Hashes, Zeiten und begrenzte Hostmetadaten (UTC, Hostname, Kernel, Architektur, Boot-ID, Python-Version). Keine Payloads, Geheimnisse, Umgebungsvariablen oder beliebigen Exceptiontexte. Fehlerausgaben der Kinder werden nicht weitergegeben.
+
+Ein bereits vorhandener Bericht und ungültige Hostmetadaten werden vor dem ersten Livefall verweigert. Beim abschließenden Schreiben verhindert `O_EXCL | O_NOFOLLOW` weiterhin Überschreiben und Symlink-Folgen.
 
 Exit 0 bedeutet ausschließlich, dass alle 13 begrenzten Fälle plus Cleanup bestanden sind (`bounded_suite=PASS`). Exit 2 bedeutet HOLD/unklare oder fehlgeschlagene Evidenz. **`operational_acceptance` bleibt auch bei Exit 0 immer `HOLD`.**
 

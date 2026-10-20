@@ -351,6 +351,17 @@ def run(manifest_path: Path, report_dir: Path, acknowledge: bool) -> tuple[dict,
     manifest = inspect(manifest_path, report_dir)
     verify_installed(manifest)
     ensure_no_foreign_processes()
+    destination = report_dir / "worker-acceptance.json"
+    if os.path.lexists(destination):
+        _fail("REPORT_EXISTS")
+    uname = os.uname()
+    boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+    metadata = {"hostname": uname.nodename, "kernel": uname.release,
+                "machine": uname.machine, "boot_id": boot_id,
+                "python": ".".join(map(str, sys.version_info[:3]))}
+    if any(type(value) is not str or re.fullmatch(r"[A-Za-z0-9._+-]{1,128}", value) is None
+           for value in metadata.values()):
+        _fail("HOST_METADATA_INVALID")
     stage = Path(tempfile.mkdtemp(prefix="gn-worker-acceptance-", dir="/run"))
     suite = Suite(stage)
     cases = []
@@ -392,19 +403,10 @@ def run(manifest_path: Path, report_dir: Path, acknowledge: bool) -> tuple[dict,
         cleanup = suite.cleanup()
         shutil.rmtree(stage)
     report = aggregate(cases, cleanup)
-    uname = os.uname()
-    boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
-    metadata = {"hostname": uname.nodename, "kernel": uname.release,
-                "machine": uname.machine, "boot_id": boot_id,
-                "python": ".".join(map(str, sys.version_info[:3]))}
-    if any(type(value) is not str or re.fullmatch(r"[A-Za-z0-9._+-]{1,128}", value) is None
-           for value in metadata.values()):
-        _fail("HOST_METADATA_INVALID")
     metadata["utc"] = datetime.now(timezone.utc).isoformat()
     report["host"] = metadata
     report["manifest_sha256"] = digest(manifest_path)
     report["harness_sha256"] = {name: digest(HERE / name) for name in ("driver.py", "common.py", "core.py")}
-    destination = report_dir / "worker-acceptance.json"
     descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     with os.fdopen(descriptor, "wb") as handle:
         handle.write(canonical(report) + b"\n")
