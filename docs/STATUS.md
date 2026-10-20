@@ -193,7 +193,7 @@ Jobs, Annahmen und Policy).
 
 1. Offene PRs, Konflikte und Merge-Gates bereinigen (Abschnitt „Aufräumen“ unten),
    parallel zur Weiterentwicklung; die Pause entfällt (Entscheidung 20.10.2026).
-2. ~~`Claude DB Review` für B4 (#94) und B5 (#95) nachholen~~ — entschieden am 18.10.2026: nicht separat, E2 deckt es ab. Offen bleibt das Gemini-Sicherheitsreview zu B4/B5.
+2. ~~`Claude DB Review` für B4 (#94) und B5 (#95) nachholen~~ — entschieden am 18.10.2026: nicht separat, E2 deckt es ab. Das Gemini-Sicherheitsreview zu B4/B5 ist am 20.10.2026 nachgeholt (B5 ohne Befund; B4: Test-PR für Negativzweige, Codex).
 3. CI nach der Entscheidung vom 20.10.2026: Matrix 3.11/3.13 und `ruff`-Job mit
    `requirements-dev.txt` (Codex, ein PR); `pip-audit`-Vorlage nach
    `.github/workflows/audit.yml` verschieben (Kaan, braucht Workflow-Rechte).
@@ -265,7 +265,7 @@ Auftrag an Codex steht in beiden PRs. #147: Copilot-Review am älteren Head gilt
 | A1 | PASS | #57 |
 | A2 | Code PASS (#76, #140); Betriebsabnahme HOLD; synthetische VM-Probe PASS (#173, nur synthetisch, Security-Review dort CHANGES REQUIRED) | #140, #150, #173 |
 | B0–B3, B6 | PASS | `docs/ROADMAP-V02.md` |
-| B4, B5 | gemergt; `Claude DB Review` durch E2 abgedeckt (Entscheidung 18.10.2026); Gemini-Sicherheitsreview offen | #94, #95 |
+| B4, B5 | gemergt; `Claude DB Review` durch E2 abgedeckt (Entscheidung 18.10.2026). Gemini-Sicherheitsreview am 20.10.2026 nachgeholt: B5 ohne Befund; B4 mit Testlücken in den Negativzweigen von `reserve_admitted`/`dispatch_available` und `_expire` (Folgeauftrag an Codex in #94). Pro-Modell-Frage offen | #94, #95 |
 | B7 | gemergt; unabhängiges Review UNKNOWN | #106 |
 | C1, C2, C4 | PASS | #61, #62, #71 |
 | C3 | PASS | #111 |
