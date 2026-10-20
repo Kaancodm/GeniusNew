@@ -40,6 +40,11 @@ zur manuellen Übernahme, etwa auf dem iPhone. Agenten werden damit nicht gestar
 Einzelprüfungen und „Prüfkette starten“ sperren ihren jeweiligen Button
 während des Laufs. HTTP-, Netzwerk- und Antwortfehler erscheinen mit `FAIL` und Grund
 im Panel. Danach wird der Button wieder freigegeben und der Status neu geladen.
+Das Panel lässt sich auch während eines ausstehenden HTTP-Aufrufs schließen.
+Das schließt nur die Ansicht; die Aktion gilt damit weder als beendet noch als
+abgebrochen, und weitere Aktionen bleiben bis zur Antwort gesperrt.
+Die Browser-Regression für diesen Fall läuft mit vorhandenem Node.js ohne
+Zusatzpakete: `node tests/control_deck_ui.test.cjs`.
 
 Für Gemini wird bei vorhandenem Antigravity weiterhin `agy models` abgefragt.
 Ohne `agy` prüft das Deck ausschließlich, ob die Gemini-CLI im Suchpfad vorhanden
@@ -52,9 +57,24 @@ starten keinen Gemini-Modellauftrag und belegen weder Anmeldung noch Kontingent.
 Die Statuskorrekturen aus PR #115 sind übernommen: Nachweise verwenden den lokalen
 Verweis `refs/remotes/origin/main`; HTTP-Refresh führt weder Git-Fetch noch eine
 GitHub-CI-Abfrage aus. CI bleibt „nicht live abgefragt“. Gemergter Code zählt als
-Implementierung, offene Gemini-Sicherheitsreviews (B4/B5) und Betriebsnachweise
-(A2/C2) bleiben HOLD. Der gesonderte Claude-DB-Review für B4/B5 entfällt nach
-der Entscheidung vom 18.10.2026; das E2-Gesamtreview ist noch offen (`docs/DECISIONS.md`). C3 hat
+Implementierung. B4/B5 bleiben wegen offener Reviewbedingungen HOLD, die
+Betriebsnachweise A2/C2 ebenfalls. Die historischen Gemini-Reviews wurden am
+20.10.2026 mit Antigravity-CLI `agy`, Modell `gemini-4-argon-high`, durchgeführt:
+
+- [B4 / PR #94](https://github.com/Kaancodm/GeniusNew/pull/94#issuecomment-6300363737):
+  Head `0fd43b63ea788905522b21cf49a7aae08fa66a60`, ganzer Tree identisch zum Merge
+  `18381c2237856c93b14c283a1bda636cb398d1a1`; A–D PASS, E/Testabdeckung FAIL.
+  Die heutige Restabdeckung ist gezielt im E2 zu klären. Die historischen
+  `_expire`- und doppelten `now()`-Befunde wurden inzwischen durch B6 beziehungsweise
+  `refusal.occurred_at` überholt.
+- [B5 / PR #95](https://github.com/Kaancodm/GeniusNew/pull/95#issuecomment-6300364390):
+  Head `937fa449ee1a3417347ab0c0625fdddfb645cfa6`, ganzer Tree identisch zum Merge
+  `a3f2a3c55fb112a872b872d065e3c9d10df53a83`; A–E PASS, kein Befund.
+
+Die Pro-Modell-Anerkennung außerhalb #151 und das vollständige E2-Gesamtreview
+bleiben offen; historische Reviews ergeben kein neues Gate-PASS.
+Der gesonderte Claude-DB-Review für B4/B5 entfällt nach der Entscheidung vom
+18.10.2026 (`docs/DECISIONS.md`). C3 hat
 einen dokumentierten Claude-DB-Review am Merge-Head und wird bei gemergtem Code
 nicht mehr als fehlender Review angezeigt.
 C5 zählt seinen gemergten Probe-Code, bleibt ohne Betriebsnachweis HOLD; E3 kommt vor den Portal-Schritten D1–D3.

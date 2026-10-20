@@ -35,9 +35,15 @@ BETA_GATES = [
     ("E2", "Security-Review final", None),
 ]
 
-# Gemini security reviews remain open for B4/B5; E2 covers their DB review.
+# Historical Gemini reviews exist; model recognition and current E2 evidence remain open.
 # C3 has a documented Claude DB review at its merge head (docs/DECISIONS.md).
 PENDING_REVIEWS = {"B4": 94, "B5": 95}
+REVIEW_EVIDENCE = {
+    "B4": "Gemini-Review durchgeführt (historische Testabdeckung FAIL); "
+          "HOLD: heutige B4-Restabdeckung im E2 zu klären; Pro-Modell-Anerkennung offen",
+    "B5": "Gemini-Review ohne Befund durchgeführt (historischer Head); "
+          "HOLD: Pro-Modell-Anerkennung offen",
+}
 PENDING_OPERATIONS = {
     "C5": "Restore-Probe-Code gemergt; HOLD: produktiver Backup-/Restore-Betrieb nicht nachgewiesen",
     "A2": "Landlock implementiert; HOLD: eigener Worker-OS-Nutzer im Betrieb nicht nachgewiesen",
@@ -345,7 +351,7 @@ def snapshot(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
             status = "yellow"
         if implementation_status == "green" and review_pr:
             detail = (f"PR #{review_pr} gemergt; "
-                      "HOLD: Gemini-Sicherheitsreview zu B4/B5 noch offen; "
+                      f"{REVIEW_EVIDENCE[gate]}; "
                       "separater DB-Review entfällt; E2-Gesamtreview noch offen")
         elif implementation_status == "green" and gate in PENDING_OPERATIONS:
             detail = PENDING_OPERATIONS[gate]

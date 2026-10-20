@@ -72,7 +72,7 @@ class ControlDeckTest(unittest.TestCase):
 
     @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
     @patch("tools.control_deck.checks.tool_status", return_value={"status": "green"})
-    def test_merged_code_keeps_missing_review_and_operational_evidence_open(self, _tools, _run):
+    def test_merged_code_keeps_review_conditions_and_operational_evidence_open(self, _tools, _run):
         """Keep review and operational holds open despite merged implementations."""
         snapshot = checks.snapshot(checks.DEFAULT_REPO)
         gates = {gate["id"]: gate for gate in snapshot["gates"]}
@@ -83,10 +83,14 @@ class ControlDeckTest(unittest.TestCase):
         self.assertEqual(gates["E1"]["status"], "green")
         self.assertEqual(gates["C5"]["implementation_status"], "green")
         for gate in ("B4", "B5"):
-            self.assertIn("Gemini-Sicherheitsreview zu B4/B5 noch offen", gates[gate]["detail"])
+            self.assertIn("Pro-Modell-Anerkennung offen", gates[gate]["detail"])
+            self.assertIn("durchgeführt", gates[gate]["detail"])
+            self.assertNotIn("Gemini-Sicherheitsreview zu B4/B5 noch offen", gates[gate]["detail"])
             self.assertIn("E2-Gesamtreview noch offen", gates[gate]["detail"])
             self.assertNotIn("Claude-DB-Review am PR-Head", gates[gate]["detail"])
-            self.assertNotIn("vorhanden", gates[gate]["detail"])
+        self.assertIn("historische Testabdeckung FAIL", gates["B4"]["detail"])
+        self.assertIn("heutige B4-Restabdeckung im E2 zu klären", gates["B4"]["detail"])
+        self.assertIn("ohne Befund", gates["B5"]["detail"])
         state = snapshot["project"]
         self.assertGreater(state["merged_gates"],
                            sum(gate["status"] == "green" for gate in gates.values()))
