@@ -129,8 +129,10 @@ Implementierer.
    `PENDING_APPROVAL_EXPIRED` in derselben Transaktion, `docs/DATABASE.md` §4.4) noch in
    B6 oder als eigener PR danach? Bis dahin bleiben abgelaufene Zeilen liegen und
    belegen nur keinen Platz mehr (Mindestfix aus #98).
-6. **Entschieden (Kaan, 18.10.2026, `docs/DECISIONS.md`):** B4 (#94), B5 (#95) und C3 (#111) sind ohne
+6. **Entschieden (Kaan, 18.10.2026, `docs/DECISIONS.md`):** B4 (#94), B5 (#95) und C3 (#111) galten als ohne
    `Claude DB Review: APPROVED` am Head gemergt; das Review wird nicht gesondert nachgeholt, E2 deckt es ab.
+   Für C3 ist das APPROVED am Merge-Head inzwischen belegt (`docs/DECISIONS.md`, 04.10.2026, über #145
+   nachgetragen; Zeile C3 oben); offen bleibt es für B4 und B5.
 7. Gespeicherte Annahmen sind an die aktuelle Policy und die aktuellen Schlüssel
    gebunden (`SECURITY.md`, Review auf #93: (a) nur Integrität prüfen, (b)
    Policy-Historie, (c) so lassen). Mit der Principal-Bindung aus Audit v2 (B6) wird (a)
