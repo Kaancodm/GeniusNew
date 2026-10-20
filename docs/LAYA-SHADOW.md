@@ -3,7 +3,7 @@
 Status: **Experiment, keine Autorität.**
 
 Ziel ist zu messen, ob ein lokaler Jev-kompatibler Decision-Service bei der Auswahl
-zwischen `kiro`, `copilot`, `gemini` und `abacus` nützlich ist. Die bestehende
+zwischen `kiro`, `copilot`, `gemini`, `abacus`, `kimi` und `grok` nützlich ist. Die bestehende
 GeniusNew-Policy, Gateway-Prüfung, Approvals, Signaturen und Audit-Entscheidungen werden
 dadurch nicht verändert.
 
