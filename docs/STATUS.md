@@ -11,12 +11,25 @@ geschlossen gedacht: als Quelle für NotebookLM, Microsoft 365 Copilot oder jede
 Assistenten, der das Repository nicht selbst lesen kann. Verbindlich bleiben der Code,
 `SECURITY.md` und `docs/ROADMAP-V02.md`. Bei Widerspruch gilt das Repository.
 
-**Sichtbarkeit und Quellenweg (07.10.2026):** Das Repository ist aktuell **privat**
-(GitHub-Stand; keine Aussage zur Dauer, Kaan klärt die Regeln); Raw-Links auf `main` liefern HTTP 404. NotebookLM bekommt Quellen
-nur über von Kaan hochgeladene, geprüfte Dateien aus einem exakten Commit
-(`docs/COLLABORATION.md`, „NotebookLM-Quellenpaket“). **Blocker:** Es gibt noch kein
-dokumentiertes, hochgeladenes Quellenpaket; eine NotebookLM-Importprüfung wurde nicht
-durchgeführt (UNKNOWN).
+**Sichtbarkeit und Quellenweg (geprüft 20.10.2026):** GitHub meldet für
+`Kaancodm/GeniusNew` **public**, passend zu `SECURITY.md` und `README.md`.
+Die Raw-Links für `docs/STATUS.md` auf `main` und am Commit
+`a7308289977d4017cfc1a521100db3e0d01ccc98` liefern ohne Anmeldung HTTP 200.
+Die Privat-/404-Aussage vom 07.10.2026 ist überholt; der Zeitpunkt der
+Sichtbarkeitsänderung ist UNKNOWN. Diese Prüfung ändert keine Zugriffsrechte.
+
+Öffentlich ist der **GeniusNew-Kern**. Die private **GeniusMFBrain-Softwarefabrik**
+und ihre vertraulichen Betriebsartefakte gehören nicht in dieses Repository oder
+dessen Quellenpakete. Für öffentliche Dokumente gilt weiterhin `SECURITY.md`:
+keine Secrets, personenbezogenen oder vertraulichen Daten und keine privaten
+Endpunkte; Beispiele nur mit ungefährlichen Platzhaltern. Öffentliche
+Erreichbarkeit ist keine Freigabe zur Übernahme weiterer Inhalte.
+
+NotebookLM bekommt weiterhin nur von Kaan hochgeladene, einzeln geprüfte Dateien
+aus einem exakten Commit (`docs/COLLABORATION.md`, „NotebookLM-Quellenpaket“).
+HTTP 200 belegt keinen erfolgreichen NotebookLM-Import und keine Aktualisierung
+vorhandener Quellen. **Offene Evidenz:** Ein hochgeladenes Quellenpaket und eine
+NotebookLM-Importprüfung sind hier nicht nachgewiesen (UNKNOWN).
 
 ## In einem Satz
 

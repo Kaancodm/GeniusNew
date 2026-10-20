@@ -56,11 +56,22 @@ Projekts; niemand sonst schreibt sie.
 
 **Quellen in NotebookLM** (Notebook „GeniusNew“): `docs/STATUS.md`,
 `docs/DECISIONS.md`, `docs/DATABASE.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`,
-`docs/COLLABORATION.md`, `AGENTS.md`. Das Repository ist aktuell (GitHub-Stand 07.10.2026) **privat**: Raw-Links auf
-`raw.githubusercontent.com` liefern ohne Anmeldung HTTP 404 und sind **kein** Verfahren.
-Der Weg sind ausdrücklich ausgewählte Datei-Uploads (nächster Abschnitt).
+`docs/COLLABORATION.md`, `AGENTS.md`. Das Repository ist **öffentlich**
+(GitHub-Prüfung 20.10.2026: `visibility = public`; Raw-Link für `docs/STATUS.md`
+auf `main` und am Commit `a7308289977d4017cfc1a521100db3e0d01ccc98` ohne
+Anmeldung HTTP 200). Die Privat-/404-Aussage vom 07.10.2026 ist überholt;
+der Zeitpunkt der Sichtbarkeitsänderung ist UNKNOWN. Das ändert weder
+`SECURITY.md` noch Freigaben oder Notebook-Berechtigungen.
 
-### NotebookLM-Quellenpaket (Verfahren für das private Repository)
+Öffentliche Dokumente enthalten nur für GeniusNew geeignete Inhalte nach
+`SECURITY.md`. Die private GeniusMFBrain-Softwarefabrik und vertrauliche
+Betriebsartefakte bleiben getrennt und gehören nicht in die öffentlichen
+Projektquellen. Vorhandene öffentliche Inhalte sind nicht automatisch als sicher
+geprüft. Der Quellenweg bleibt der ausdrücklich ausgewählte, geprüfte
+Datei-Upload (nächster Abschnitt); ein erreichbarer Raw-Link belegt weder einen
+NotebookLM-Import noch dessen Aktualität und ersetzt dieses Verfahren nicht.
+
+### NotebookLM-Quellenpaket (geprüfte Dateien aus einem exakten Commit)
 
 Die Beschreibung autorisiert keinen tatsächlichen Upload; jeder Upload ist Kaans Handlung.
 
