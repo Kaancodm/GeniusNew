@@ -207,9 +207,11 @@ Jobs, Annahmen und Policy).
     ai.local-Prüfliste (ChatGPT, eigenes Issue); Laptop- und iPad-Prüfung auf den
     Geräten (Kaan). Security-Review am exakten Head (Claude) plus Gemini-Zweitmeinung
     wegen der neuen Netzgrenze.
-12. Nach #179 und #174: unabhängiges Security-Review (Claude) und Gemini-Pro-Zweitmeinung
-    zur neuen `SECURITY.md`-Zeile nachholen; offene Befunde des Implementierers (#179:
-    1 Medium, 2 Low; CodeRabbit: Engine-Fehlertext in Tracebacks, Doku zum Start).
+12. Nach #179 (Reviews am 20.10.2026: Claude 2 Medium/2 Low, Gemini M1 **High**, M2 Medium;
+    #174: Claude 2 Low): (a) M1 sofort beheben, Engine-Exception ohne `__context__` (Codex,
+    eigener PR); (b) Pilot in eigenen Prozess unter eigener UID, erst Gemini-Design-
+    Vorprüfung, dann Code (Codex, Entscheidung 20.10.2026). `enabled = true` bleibt im
+    Betrieb STOP.
 13. Roadmap: C3-Zelle auf den Beleg aus `docs/DECISIONS.md` korrigieren und #140 in den
     Zellen A2 und C5 nachtragen (eigener Docs-PR).
 
