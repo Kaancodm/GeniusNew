@@ -32,6 +32,20 @@ from typing import Callable
 
 _PIN = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;\\]+)")
 _HASH_LINE = re.compile(r"^\s*--hash=sha256:[0-9a-fA-F]+\s*\\?\s*$")
+# Dependency-specifier grammar, restricted to environment fields available here.
+# Extras/group fields require a containing layer this standalone audit lacks.
+_MARKER_FIELD = (
+    r"(?:python_version|python_full_version|os_name|sys_platform|platform_release|"
+    r"platform_system|platform_version|platform_machine|"
+    r"platform_python_implementation|implementation_name|implementation_version)\b")
+_MARKER_CHARS = r"A-Za-z0-9 \t().{}\-_*#:;,/?\[\]!~`@$%^&=+|<>"
+_MARKER_STRING = rf'''(?:'[{_MARKER_CHARS}"]*'|"[{_MARKER_CHARS}']*")'''
+_MARKER_OP = (r"(?:[ \t]*(?:===|==|!=|<=|>=|<|>|~=)[ \t]*|"
+              r"[ \t]+(?:not[ \t]+)?in[ \t]+)")
+_MARKER_COMPARISON = re.compile(
+    rf"(?:{_MARKER_FIELD}{_MARKER_OP}{_MARKER_STRING}|"
+    rf"{_MARKER_STRING}{_MARKER_OP}{_MARKER_FIELD})")
+_MARKER_BOOLEAN = re.compile(r"(?:and|or)\b")
 _WITHDRAWAL_TIMESTAMP = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt]"
     r"[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?"
@@ -44,6 +58,45 @@ _PYPI = "https://pypi.org/pypi/{name}/{version}/json"
 Fetch = Callable[[str], bytes]
 
 
+def _valid_marker(marker: str) -> bool:
+    """Validate the whole marker without evaluating it or skipping any pin.
+
+    Support field/string comparisons, and/or and balanced groups. Constant-only
+    and field/field comparisons are unsupported. Comments after markers are
+    unsupported too; '#' inside a quoted value is ordinary marker text.
+    Iteration avoids a recursion limit for nested untrusted expressions.
+    """
+    if marker.endswith("\\"):
+        marker = marker[:-1]
+    position, depth = 0, 0
+    expect_expression = True
+    while position < len(marker):
+        char = marker[position]
+        if char in " \t":
+            position += 1
+            continue
+        if expect_expression:
+            if char == "(":
+                depth += 1
+                position += 1
+                continue
+            match = _MARKER_COMPARISON.match(marker, position)
+            if match is None:
+                return False
+            position = match.end()
+            expect_expression = False
+        elif char == ")" and depth:
+            depth -= 1
+            position += 1
+        else:
+            match = _MARKER_BOOLEAN.match(marker, position)
+            if match is None:
+                return False
+            position = match.end()
+            expect_expression = True
+    return not expect_expression and depth == 0
+
+
 def parse_pins(text: str) -> list[tuple[str, str]]:
     """Extract pins; unsupported requirement syntax is UNKNOWN, never clean."""
     pins = []
@@ -54,7 +107,10 @@ def parse_pins(text: str) -> list[tuple[str, str]]:
         match = _PIN.match(line)
         if match:
             suffix = line[match.end():].strip()
-            if suffix not in ("", "\\") and not suffix.startswith((";", "#")):
+            if suffix.startswith(";"):
+                if not _valid_marker(suffix[1:]):
+                    raise ValueError(f"unsupported requirement marker on line {number}")
+            elif suffix not in ("", "\\") and not suffix.startswith("#"):
                 raise ValueError(f"unsupported requirement syntax on line {number}")
             pins.append((match.group(1), match.group(2)))
         elif pins and _HASH_LINE.fullmatch(line):

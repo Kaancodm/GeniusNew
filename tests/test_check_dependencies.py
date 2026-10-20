@@ -79,6 +79,70 @@ class CheckDependenciesTest(unittest.TestCase):
             self.assertEqual(result, 2)
             self.assertIn("UNKNOWN", err.getvalue())
 
+    def test_invalid_or_unsupported_markers_are_unknown_before_fetch(self):
+        markers = (
+            "", " ", "garbage", "# comment", "\\",
+            'python_version', 'python_version <', 'python_version < 3.13',
+            'python_version < "3.13', 'python_version = "3.13"',
+            'unknown_variable == "value"', 'python_version < "3.13" garbage',
+            'python_version < "3.13" ; os_name == "posix"',
+            'python_version < "3.13" and', 'or os_name == "posix"',
+            '()', '(os_name == "posix"', 'os_name == "posix")',
+            '(os_name == "posix") (sys_platform == "linux")',
+            'os_name == "posix" and or sys_platform == "linux"',
+            'os_name == "posix" # ignored garbage',
+            'os_name == "posix" \\ garbage',
+            'os_name == "posix\\"', 'os_name == "pösix"',
+            '"posix" == "posix"', 'os_name == sys_platform',
+            'os_name in"posix"', 'os_name == "posix" android == "x"',
+            'extra == "test"', 'extras == "test"',
+            'dependency_groups == "test"',
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "requirements.txt"
+            for marker in markers:
+                with self.subTest(marker=marker):
+                    text = 'sample==1.0 ; ' + marker + '\n'
+                    with self.assertRaisesRegex(ValueError, "unsupported"):
+                        parse_pins(text)
+                    path.write_text(text, encoding="utf-8")
+                    err, out = io.StringIO(), io.StringIO()
+                    calls = []
+                    with redirect_stderr(err), redirect_stdout(out):
+                        result = main(
+                            [str(path)], fetch=lambda url: calls.append(url) or record())
+                    self.assertEqual(result, 2)
+                    self.assertIn("UNKNOWN", err.getvalue())
+                    self.assertEqual(out.getvalue(), "")
+                    self.assertEqual(calls, [])
+
+    def test_valid_marker_grammar_keeps_every_pin_in_the_audit(self):
+        markers = (
+            'python_version < "3.13"', "python_full_version >= '3.11.0'",
+            'os_name == "posix"', 'sys_platform != "win32"',
+            'platform_release > "1"', 'platform_system <= "Windows"',
+            'platform_version === "custom"', 'platform_machine in "arm64,x86_64"',
+            'platform_python_implementation not in "PyPy"',
+            'implementation_name == "cpython"', 'implementation_version ~= "3.11"',
+            '"linux" == sys_platform',
+            '(python_version < "3.13" and os_name == "posix") or '
+            '(sys_platform == "win32" and (platform_machine == "ARM64"))',
+            'os_name=="posix" and sys_platform=="linux" and python_version>="3"',
+            'os_name == "a#b;c"',
+            '(' * 1500 + 'os_name == "posix"' + ')' * 1500,
+        )
+        for marker in markers:
+            for suffix in ("", " \\\n    --hash=sha256:abc"):
+                with self.subTest(marker=marker, suffix=suffix):
+                    pins = parse_pins('sample==1.0 ; ' + marker + suffix + '\n')
+                    self.assertEqual(pins, [("sample", "1.0")])
+                    calls = []
+                    code, _ = check(pins, fetch=lambda url: calls.append(url) or record())
+                    self.assertEqual(code, 0)
+                    self.assertEqual(len(calls), 1)
+                    code, _ = check(pins, fetch=lambda _: record({"id": "GHSA-demo"}))
+                    self.assertEqual(code, 1)
+
     def test_a_null_advisory_entry_must_be_unknown(self):
         code, lines = check([("sample", "1.0")],
                             fetch=lambda _: record(None))
