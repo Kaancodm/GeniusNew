@@ -10,6 +10,9 @@ from urllib.parse import urlparse
 from .actions import allowed_actions, run_action
 from .checks import DEFAULT_REPO, snapshot, agent_hub
 from .mail_center import snapshot as mail_snapshot
+from .decisions import snapshot as decision_snapshot
+from .command_journal import snapshot as command_snapshot
+from .operating_context import snapshot as operating_snapshot
 
 STATIC = Path(__file__).with_name("static")
 
@@ -32,6 +35,18 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/":
             self._file("index.html", "text/html; charset=utf-8")
+            return
+        if path == "/decisions":
+            self._file("decisions.html", "text/html; charset=utf-8")
+            return
+        if path == "/api/decisions":
+            self._json(decision_snapshot())
+            return
+        if path == "/api/command-journal":
+            self._json(command_snapshot(self.server.repo))
+            return
+        if path == "/api/operating-context":
+            self._json(operating_snapshot())
             return
         if path == "/api/status":
             self._json(snapshot(self.server.repo))

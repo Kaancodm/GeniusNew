@@ -1,0 +1,18 @@
+const fs = require('node:fs');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const source = fs.readFileSync(__dirname + '/static/decisions.html', 'utf8');
+const part = source.split('// BEGIN_GENERAL_CONFLICT_PROMPT')[1].split('// END_GENERAL_CONFLICT_PROMPT')[0];
+const context = vm.createContext({});
+vm.runInContext(part, context);
+const base = {kind:'KI-Aussagen',partyA:'Claude',positionA:'Review erforderlich',partyB:'Codex',positionB:'Review bereits vorhanden',sources:'PR #7 · Head '+ 'a'.repeat(40),goal:'Versionsstände abgleichen'};
+const result = context.buildConflictPrompt(base);
+assert(result.includes('Claude') && result.includes('Codex'));
+assert(result.includes('a'.repeat(40)));
+assert(result.includes('Empfangsbestätigungen'));
+assert(result.includes('keine Merge-'));
+assert.throws(() => context.buildConflictPrompt({...base,positionB:''}));
+assert.throws(() => context.buildConflictPrompt({...base,kind:'unsupported'}));
+assert.throws(() => context.buildConflictPrompt({...base,positionA:'x'.repeat(6001)}));
+assert(context.buildConflictPrompt({...base,sources:''}).includes('UNBEKANNT'));
+console.log('Conflict prompt behavior: PASS');
