@@ -100,8 +100,16 @@ def _valid_marker(marker: str) -> bool:
 def parse_pins(text: str) -> list[tuple[str, str]]:
     """Extract pins; unsupported requirement syntax is UNKNOWN, never clean."""
     pins = []
+    hash_continuation = False
     for number, line in enumerate(text.splitlines(), start=1):
         stripped = line.strip()
+        # Only an explicit continuation may attach hashes to the current pin.
+        # Other continuation forms (including intervening comments) are unsupported.
+        if hash_continuation:
+            if not _HASH_LINE.fullmatch(line):
+                raise ValueError(f"unsupported hash continuation on line {number}")
+            hash_continuation = stripped.endswith("\\")
+            continue
         if not stripped or stripped.startswith("#"):
             continue
         match = _PIN.match(line)
@@ -112,11 +120,14 @@ def parse_pins(text: str) -> list[tuple[str, str]]:
                     raise ValueError(f"unsupported requirement marker on line {number}")
             elif suffix not in ("", "\\") and not suffix.startswith("#"):
                 raise ValueError(f"unsupported requirement syntax on line {number}")
+            # A backslash in a comment must not grant a hash continuation.
+            hash_continuation = (suffix == "\\" or
+                                 (suffix.startswith(";") and suffix.endswith("\\")))
             pins.append((match.group(1), match.group(2)))
-        elif pins and _HASH_LINE.fullmatch(line):
-            continue
         else:
             raise ValueError(f"unsupported requirement syntax on line {number}")
+    if hash_continuation:
+        raise ValueError("unsupported unterminated hash continuation at end of file")
     return pins
 
 

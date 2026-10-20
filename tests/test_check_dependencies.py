@@ -30,6 +30,66 @@ class CheckDependenciesTest(unittest.TestCase):
                           ("typing-extensions", "4.16.0"),
                           ("psycopg", "3.3.3")])
 
+    def test_orphaned_or_incomplete_hash_continuations_are_unknown_before_fetch(self):
+        pin = "sample==1.0"
+        hashed = "    --hash=sha256:abc"
+        malformed = (
+            hashed,
+            pin + "\n" + hashed,
+            pin + "\n# comment\n" + hashed,
+            pin + " \\\n" + hashed + "\n" + hashed,
+            pin + " # comment \\\n" + hashed,
+            pin + " \\\n# comment\n" + hashed,
+            pin + " \\\n\n" + hashed,
+            pin + " \\\nother==2.0",
+            pin + " \\\n" + hashed + " \\\nother==2.0",
+            pin + " \\",
+            pin + " \\\n" + hashed + " \\",
+            pin + " \\\n" + hashed + " \\\n\n",
+            pin + ' ; python_version < "3.13" \\\n' + hashed + "\n" + hashed,
+            pin + " \\\n    --hash=sha512:abc",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "requirements.txt"
+            for text in malformed:
+                with self.subTest(text=text):
+                    with self.assertRaisesRegex(ValueError, "unsupported"):
+                        parse_pins(text)
+                    path.write_text(text, encoding="utf-8")
+                    err, out, calls = io.StringIO(), io.StringIO(), []
+                    with redirect_stderr(err), redirect_stdout(out):
+                        code = main(
+                            [str(path)], fetch=lambda url: calls.append(url) or record())
+                    self.assertEqual(code, 2)
+                    self.assertIn("UNKNOWN", err.getvalue())
+                    self.assertEqual(out.getvalue(), "")
+                    self.assertEqual(calls, [])
+
+    def test_valid_hash_chains_and_markers_keep_every_pin_in_the_audit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "requirements.txt"
+            for marker in ("", ' ; python_version < "3.13"'):
+                for hashes in (1, 2, 4):
+                    with self.subTest(marker=marker, hashes=hashes):
+                        lines = ["sample==1.0" + marker + " \\"]
+                        lines += ["    --hash=sha256:abc \\"] * (hashes - 1)
+                        lines += ["    --hash=sha256:def", "", "# next pin",
+                                  "other==2.0 # comment \\"]
+                        text = "\n".join(lines) + "\n"
+                        self.assertEqual(parse_pins(text),
+                                         [("sample", "1.0"), ("other", "2.0")])
+                        path.write_text(text, encoding="utf-8")
+                        calls = []
+                        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                            code = main([str(path)],
+                                        fetch=lambda url: calls.append(url) or record())
+                        self.assertEqual(code, 0)
+                        self.assertEqual(len(calls), 2)
+                        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                            code = main([str(path)],
+                                        fetch=lambda _: record({"id": "GHSA-demo"}))
+                        self.assertEqual(code, 1)
+
     def test_a_clean_set_passes_and_says_for_how_many(self):
         code, lines = check(parse_pins(REQUIREMENTS), fetch=lambda url: record())
         self.assertEqual(code, 0)
