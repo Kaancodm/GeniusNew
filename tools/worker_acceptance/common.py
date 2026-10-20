@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import stat
 
-SOURCE_COMMIT = "9b11f7a89fe948d65d6b2eb3337111a5b11d3a57"
+SOURCE_COMMIT = "a7308289977d4017cfc1a521100db3e0d01ccc98"
 PYTHON = "/opt/geniusnew/.venv/bin/python"
 PACKAGE = Path("/opt/geniusnew/.venv/lib/python3.13/site-packages/geniusnew")
 UNITS = ("/etc/systemd/system/geniusnew-worker.socket",

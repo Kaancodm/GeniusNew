@@ -62,3 +62,11 @@ requires_approval = false
 # SHA-256 of an API key, from: python -m geniusnew digest-api-key < key-file
 # The key itself is never written here.
 REPLACE_WITH_SHA256_OF_THE_API_KEY = "subject-example"
+
+# Advisory inference (geniusnew/advisory.py): off unless this table says
+# otherwise, and even then the bridge only returns untrusted text — no key, no
+# signature, no permit, no audit write, no HTTP route. Turning it on requires
+# the pilot in tools/ai_pilot to be importable by the service interpreter and
+# a local Ollama on 127.0.0.1:11434 with both pinned models installed.
+[ai_advisory]
+enabled = false

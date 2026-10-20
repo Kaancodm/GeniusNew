@@ -2,7 +2,7 @@
 
 Status: Implementiertes Prüfwerkzeug, noch kein Live-Abnahmenachweis. Die vollständige Betriebsabnahme bleibt ausdrücklich **HOLD**.
 
-Das Werkzeug verwendet die unveränderte, installierte GeniusNew-Implementierung aus Main-Commit `9b11f7a89fe948d65d6b2eb3337111a5b11d3a57`. Es ersetzt keine Produktionsklassen oder Worker durch synthetische Programme. Testdaten und der nur zur Runner-Konstruktion nötige Ergebnisschlüssel sind neu erzeugte, nicht produktive Werte; `_run_worker` erzeugt keine signierten HTTP-/DB-Aufträge.
+Das Werkzeug verwendet die unveränderte, installierte GeniusNew-Implementierung aus Main-Commit `a7308289977d4017cfc1a521100db3e0d01ccc98`; alle installierten Quellen werden vor dem Lauf gegen das Manifest geprüft. Es ersetzt keine Produktionsklassen oder Worker durch synthetische Programme. Testdaten und der nur zur Runner-Konstruktion nötige Ergebnisschlüssel sind neu erzeugte, nicht produktive Werte; `_run_worker` erzeugt keine signierten HTTP-/DB-Aufträge.
 
 ## Dateien und Standardverhalten
 
@@ -16,7 +16,7 @@ Ohne `--run` gilt `--check`. Das prüft nur Manifest und Syntax der Helfer. Es i
 python3 -I -B tools/worker_acceptance/driver.py --check --manifest /absoluter/pfad/manifest.json
 ```
 
-Das Manifest enthält `source_commit`, `expected_sources` (alle 22 `geniusnew/*.py` mit SHA-256) und `expected_units` (die beiden tatsächlich gerenderten `/etc/systemd/system/geniusnew-worker*`-Dateien mit SHA-256). Der Livepfad verweigert abweichende Quellen, Unit-Dateien, ungeschützte Pfade oder fremde bereits laufende Core-/Worker-Prozesse.
+Das Manifest enthält `source_commit`, `expected_sources` (alle 23 `geniusnew/*.py` mit SHA-256) und `expected_units` (die beiden tatsächlich gerenderten `/etc/systemd/system/geniusnew-worker*`-Dateien mit SHA-256). Der Livepfad verweigert abweichende Quellen, Unit-Dateien, ungeschützte Pfade oder fremde bereits laufende Core-/Worker-Prozesse.
 
 ## Ausdrücklich aktivierter Livepfad
 

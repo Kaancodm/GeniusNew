@@ -19,6 +19,7 @@ from unittest.mock import patch
 from geniusnew.database import migrate
 from postgres_support import PostgresDatabase
 
+from geniusnew.advisory import AdvisoryBridge
 from geniusnew.contracts import ContractError, Grant, Policy
 from geniusnew.wiring import build
 from geniusnew.workers import DeterministicSummarizer
@@ -450,6 +451,57 @@ class ServeTest(unittest.TestCase):
         result = run_module("serve", "--config", str(self.config))
         self.assertEqual(result.returncode, 2)
         self.assertIn(b"SHA-256 digests", result.stderr)
+
+
+class AdvisoryWiringTest(unittest.TestCase):
+    """What `serve` passes to `build` for the advisory bridge, without a database."""
+
+    def setUp(self):
+        self._directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self._directory.cleanup)
+        root = Path(self._directory.name)
+        self.secret = root / "root_secret"
+        self.secret.write_bytes(ROOT_SECRET)
+        os.chmod(self.secret, 0o600)
+        self.dsn = root / "database_dsn"
+        self.dsn.write_text("host=127.0.0.1 dbname=unused user=unused")
+        os.chmod(self.dsn, 0o600)
+        self.config = root / "geniusnew.toml"
+        self.port = free_port()
+
+    def write_config(self, advisory=""):
+        self.config.write_text(configuration(
+            secret_path=str(self.secret),
+            anchor_path=str(self.config.parent / "anchor.state"),
+            port=self.port, digest=hashlib.sha256(API_KEY).hexdigest(),
+            database_dsn_file=str(self.dsn)) + advisory)
+
+    def build_arguments(self, config):
+        from geniusnew.__main__ import _run_service
+        from geniusnew.orchestrator import ProcessLocalJobLedger
+        from geniusnew.verifier import ProcessLocalAcceptanceLedger
+        with patch("geniusnew.__main__.build") as build_service, \
+                patch("geniusnew.__main__.serve", side_effect=RuntimeError("stop here")):
+            build_service.return_value.anchor.committed = (0, None)
+            build_service.return_value.chain.records = ()
+            with self.assertRaisesRegex(RuntimeError, "stop here"):
+                _run_service(config, job_ledger=ProcessLocalJobLedger(),
+                             acceptance_ledger=ProcessLocalAcceptanceLedger())
+        return build_service.call_args.kwargs
+
+    def test_the_service_starts_with_a_disabled_bridge(self):
+        from geniusnew.config import load_config
+        self.write_config()
+        advisory = self.build_arguments(load_config(str(self.config)))["advisory"]
+        self.assertIsInstance(advisory, AdvisoryBridge)
+        self.assertFalse(advisory.enabled)
+
+    def test_an_enabled_table_reaches_the_service_as_an_enabled_bridge(self):
+        from geniusnew.config import load_config
+        self.write_config(advisory='\n[ai_advisory]\nenabled = true\n')
+        advisory = self.build_arguments(load_config(str(self.config)))["advisory"]
+        self.assertIsInstance(advisory, AdvisoryBridge)
+        self.assertTrue(advisory.enabled)
 
 
 class DigestApiKeyTest(unittest.TestCase):

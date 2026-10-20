@@ -48,7 +48,9 @@ a worker that never ran.
 
 from __future__ import annotations
 
+import re
 import time
+from collections import Counter
 from typing import Any, Mapping
 
 from .contracts import ContractError, Handoff
@@ -115,6 +117,241 @@ class DeterministicSummarizer(Worker):
         words = len(text.split())
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
         return {"text": f"{words} words; sha256:{digest[:16]}"}
+
+
+# --- TextDigest: the first worker that is meant to be useful -----------------
+#
+# Everything below is a pure function of the text: no clock, no entropy, no
+# network (the isolation boundary would refuse it anyway), no model. The
+# methods are deliberately simple statistics — extractive sentence scoring,
+# keyword frequencies, a Flesch estimate — whose output a reader can recompute
+# and a test can assert exactly. A learned summarizer can replace the scoring
+# later without changing the tool's contract: one text in, one digest out.
+#
+# Output sizes are bounded by construction (at most three shortened
+# sentences, ten keywords, eight figures, fixed statistics), so a maximal
+# 16 KiB payload still produces a result that fits the result wire instead
+# of dying as OUTPUT_REJECTED at the signing boundary.
+
+_WORD = re.compile(r"[^\W\d_]+(?:[-'][^\W\d_]+)*", re.UNICODE)
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+|\n+")
+_VOWEL_GROUPS = re.compile(r"[aeiouäöü]+", re.IGNORECASE)
+_FIGURE = re.compile(
+    r"\d+(?:[.\u00a0 ]\d{3})*(?:,\d+)?"
+    r"(?:\s?(?:%|€|\$|CHF|EUR|USD|Prozent|ms|MiB|GiB|MB|GB|TB|km|kg|"
+    r"Minuten|Stunden|Tage|Monate|Jahre|Records?|Jobs?))?")
+
+_MAX_SUMMARY_SENTENCES = 3
+_MAX_SENTENCE_CHARS = 320
+_MAX_KEYWORDS = 10
+_MAX_FIGURES = 8
+_MAX_OUTPUT_CHARS = 6000
+_WORDS_PER_MINUTE = 200
+
+_STOP_DE = frozenset("""
+aber als am an auch auf aus bei bin bis bist da damit dann das dass dem den
+der des dich die dies dir doch dort du durch ein eine einem einen einer eines
+er es etwas für haben hat hatte haben hier ich ihr im in ins ist ja jede
+jeder kann kein keine man mehr mein mich mir mit muss nach nicht noch nun nur
+oder ohne schon sehr sein seine sich sie sind so soll und uns unter vom von
+vor war warum was weil wenn wer wie wieder wir wird wo zu zum zur über
+""".split())
+_STOP_EN = frozenset("""
+a about above after again all am an and any are as at be because been before
+being below between both but by could did do does down during each few for
+from further had has have having he her here hers herself him himself his how
+i if in into is it its itself let me more most my nor of on once only or other
+ought our ours out over own same she should so some such than that the their
+theirs them then there these they this those through to too under until up
+very was we were what when where which while who whom why with would you your
+""".split())
+
+_LABELS = {
+    "de": {
+        "title": "Text-Digest", "language": "Sprache", "unknown": "nicht sicher erkannt",
+        "words": "Wörter", "sentences": "Sätze", "reading_time": "Lesezeit",
+        "readability": "Lesbarkeit (Flesch, ca.)", "core": "Kern in Sätzen",
+        "keywords": "Schlüsselbegriffe", "figures": "Zahlen im Text",
+        "stats": "Kennzahlen", "avg_sentence": "Ø Wörter pro Satz",
+        "avg_word": "Ø Zeichen pro Wort", "truncated": "[gekürzt]",
+        "bands": ("leicht", "mittel", "anspruchsvoll", "schwer"),
+    },
+    "en": {
+        "title": "Text digest", "language": "Language", "unknown": "not detected with confidence",
+        "words": "words", "sentences": "sentences", "reading_time": "Reading time",
+        "readability": "Readability (Flesch, approx.)", "core": "Core sentences",
+        "keywords": "Keywords", "figures": "Figures in the text",
+        "stats": "Statistics", "avg_sentence": "Avg. words per sentence",
+        "avg_word": "Avg. characters per word", "truncated": "[truncated]",
+        "bands": ("easy", "medium", "demanding", "hard"),
+    },
+}
+
+
+def _sentences(text: str) -> list[str]:
+    parts = [part.strip() for part in _SENTENCE_SPLIT.split(text)]
+    return [part for part in parts if _WORD.search(part)]
+
+
+def _words(text: str) -> list[str]:
+    return _WORD.findall(text)
+
+
+def _syllables(word: str) -> int:
+    # Vowel groups, at least one per word: an estimate, labelled as such.
+    return max(1, len(_VOWEL_GROUPS.findall(word)))
+
+
+def _language(lowered: list[str]) -> str:
+    de = sum(word in _STOP_DE for word in lowered)
+    en = sum(word in _STOP_EN for word in lowered)
+    if de >= 3 and de >= 1.5 * en:
+        return "de"
+    if en >= 3 and en >= 1.5 * de:
+        return "en"
+    return "unknown"
+
+
+def _flesch(words: int, sentences: int, syllables: int, language: str) -> int:
+    per_sentence = words / sentences
+    per_word = syllables / words
+    if language == "en":
+        score = 206.835 - 1.015 * per_sentence - 84.6 * per_word
+    else:  # Amstad's German adaptation; also the fallback for "unknown".
+        score = 180 - per_sentence - 58.5 * per_word
+    return max(0, min(100, round(score)))
+
+
+def _band(score: int, bands: tuple[str, ...]) -> str:
+    if score >= 70:
+        return bands[0]
+    if score >= 50:
+        return bands[1]
+    if score >= 30:
+        return bands[2]
+    return bands[3]
+
+
+def _keywords(lowered: list[str]) -> list[tuple[str, int]]:
+    content = [word for word in lowered
+               if len(word) >= 4 and word not in _STOP_DE and word not in _STOP_EN]
+    counts = Counter(content)
+    # (-count, word): frequency decides, alphabet breaks ties, nothing else can.
+    return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:_MAX_KEYWORDS]
+
+
+def _core_sentences(sentences: list[str],
+                    keywords: list[tuple[str, int]]) -> list[str]:
+    if not keywords or not sentences:
+        return []
+    strongest = keywords[0][1]
+    weight = {word: count / strongest for word, count in keywords}
+    scored = []
+    for index, sentence in enumerate(sentences):
+        words = [word.lower() for word in _words(sentence)]
+        if not words:
+            continue
+        score = sum(weight.get(word, 0.0) for word in words) / len(words) ** 0.5
+        scored.append((-score, index))
+    keep = sorted(index for _, index in sorted(scored)[:_MAX_SUMMARY_SENTENCES])
+    chosen = []
+    for index in keep:
+        sentence = sentences[index]
+        if len(sentence) > _MAX_SENTENCE_CHARS:
+            sentence = sentence[:_MAX_SENTENCE_CHARS - 2].rstrip() + " …"
+        chosen.append(sentence)
+    return chosen
+
+
+def _figures(text: str) -> list[str]:
+    seen: list[str] = []
+    for match in _FIGURE.findall(text):
+        figure = " ".join(match.split())
+        if figure and figure not in seen:
+            seen.append(figure)
+        if len(seen) >= _MAX_FIGURES:
+            break
+    return seen
+
+
+def _number(value: int, language: str) -> str:
+    rendered = f"{value:,}"
+    return rendered.replace(",", ".") if language != "en" else rendered
+
+
+def _reading_time(words: int, language: str) -> str:
+    seconds = round(words * 60 / _WORDS_PER_MINUTE)
+    minutes, rest = divmod(seconds, 60)
+    if language == "en":
+        return f"{minutes} min {rest} s" if minutes else f"{rest} s"
+    return f"{minutes} Min {rest} Sek" if minutes else f"{rest} Sek"
+
+
+def render_digest(text: str) -> str:
+    """The digest as Markdown: core sentences, keywords, figures, statistics."""
+    sentences = _sentences(text)
+    words = _words(text)
+    if not words or not sentences:
+        raise ValueError("text contains no words")
+    lowered = [word.lower() for word in words]
+    language = _language(lowered)
+    labels = _LABELS["en" if language == "en" else "de"]
+    syllables = sum(_syllables(word) for word in words)
+    score = _flesch(len(words), len(sentences), syllables, language)
+    keywords = _keywords(lowered)
+    shown_language = language if language != "unknown" else labels["unknown"]
+
+    lines = [
+        f"# {labels['title']}",
+        "",
+        f"{labels['language']}: {shown_language} · "
+        f"{_number(len(words), language)} {labels['words']} · "
+        f"{len(sentences)} {labels['sentences']} · "
+        f"{labels['reading_time']}: {_reading_time(len(words), language)} · "
+        f"{labels['readability']}: {score} ({_band(score, labels['bands'])})",
+        "",
+        f"## {labels['core']}",
+        "",
+    ]
+    lines.extend(_core_sentences(sentences, keywords) or [sentences[0]])
+    if keywords:
+        lines += ["", f"## {labels['keywords']}", "",
+                  ", ".join(f"{word} ({count})" for word, count in keywords)]
+    figures = _figures(text)
+    if figures:
+        lines += ["", f"## {labels['figures']}", ""]
+        lines.extend(f"- {figure}" for figure in figures)
+    lines += [
+        "",
+        f"## {labels['stats']}",
+        "",
+        f"- {labels['words']}: {_number(len(words), language)}",
+        f"- {labels['sentences']}: {len(sentences)}",
+        f"- {labels['avg_sentence']}: {len(words) / len(sentences):.1f}",
+        f"- {labels['avg_word']}: {sum(len(word) for word in words) / len(words):.1f}",
+    ]
+    rendered = "\n".join(lines) + "\n"
+    if len(rendered) > _MAX_OUTPUT_CHARS:  # unreachable by construction; held anyway
+        rendered = rendered[:_MAX_OUTPUT_CHARS - 16].rstrip() + f"\n{labels['truncated']}\n"
+    return rendered
+
+
+class TextDigest(Worker):
+    """Turn one text into a compact, verifiable digest — the first product tool.
+
+    Extractive and deterministic by design (see the notes above
+    `render_digest`): it quotes the text's own core sentences instead of
+    inventing new ones, so every line of the digest can be checked against
+    the input by hand. German and English are recognised for labels,
+    stopwords and the readability variant; any other text still gets
+    statistics and sentence scores, with the language reported as not
+    detected rather than guessed.
+    """
+
+    tool = "digest"
+
+    def run(self, payload: Mapping[str, str]) -> Mapping[str, str]:
+        return {"text": render_digest(payload["text"])}
 
 
 class WorkerRunner:
