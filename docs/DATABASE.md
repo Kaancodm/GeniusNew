@@ -364,7 +364,8 @@ create table d1_replay_reservations (
     domain text collate "C" not null
         check (domain = 'geniusnew.portal-core.request.d1'),
     issuer text collate "C" not null
-        check (issuer ~ '^[A-Za-z0-9._-]{1,64}$'),
+        check (length(issuer) between 1 and 64
+               and issuer !~ '[^A-Za-z0-9._-]'),
     nonce bytea not null check (octet_length(nonce) = 32),
     expires_at bigint not null
         check (expires_at > 0 and expires_at < 4102444800),
@@ -457,6 +458,13 @@ Bis dahin ist diese Prüfung eine Entwurfsanforderung, keine stillschweigende
 
 Portal-Tabellen sind keine Autorität für Core-Policy oder Worker-Rechte.
 
+**Sperre vor Implementierung:** Die SQL-Vorlagen in §5.1–5.5 sind ein älterer
+Entwurfsstand und werden durch den HOLD-Vertrag in §5.6 in Bezug auf
+Identität, Sessions und Migrationen überholt. **Nicht als Migration 0005/0006
+übernehmen**, bis die D3-/Restore-Gates geschlossen und das Schema explizit
+neu geprüft sind. Das bestehende lokale Portal-Schema ist zusätzlich ein
+separater Istzustand und darf keinesfalls still migriert werden.
+
 ### 5.1 Nutzer
 
 ```sql
@@ -539,6 +547,170 @@ create table portal_jobs (
 ```
 
 Diese Tabelle ist nur UX-Zustand. Bei Widerspruch gewinnt der Kern.
+
+
+### 5.6 Portal-D2/D3-Wiring und Eigentumsgrenzen (Vorschlag, HOLD)
+
+**Status: Doku-Entwurf, keine Migrations-/Runtime-Freigabe.** Das bereits
+akzeptierte dunkelblaue GeniusNew-Portal ist eine UI-Vorlage für **ein**
+bestehendes privates Portal, kein eigenständiges Produktivsystem. Der
+Prototyp liefert Mock-Daten. Echte Statuswerte dürfen nur über den
+authentisierten, serverseitigen Datenprovider dieses Portals kommen;
+bis dahin bleiben sie UNKNOWN. Öffentliche Design-Vorschauen erhalten
+keine Portal-DB-DSN, Core-URL oder Signier- und Auth-Schlüssel; dort sind
+nur klar als MOCK/UNKNOWN gekennzeichnete Beispieldaten erlaubt.
+
+**Read-only-Bestandsaufnahme 19.10.2026:** Auf dem Server wurde ein vorhandenes,
+separat betriebenes Python-/Gunicorn-Portal auf Loopback mit einer
+PostgreSQL-Verbindung beobachtet. Seine vorhandene SQL-Quelldefinition
+enthält acht Tabellen (users, sessions, jobs, approvals, api_keys, quotas,
+login_attempts, audit_events) und weicht deutlich von §5.1–5.5 ab.
+Die tatsächlich angewandten Migrationen und der Schema-/Datenzustand
+wurden **nicht** durch DB-Abfragen verifiziert (UNKNOWN). Das Portal ist
+nicht mit dem signierten GeniusNew-Core- oder externen Ankerpfad verbunden.
+Weder die Live-DB noch ihre Zugangsdaten werden in diesem PR berührt.
+Vor jedem DB-Code ist die Migration vom Ist- zum Zielmodell getrennt zu
+entwerfen und gegen eine Wegwerfkopie zu testen; **kein CREATE/ALTER am Server**.
+
+**Wichtiger Konflikt mit 5.1–5.5:** Die vorhandenen Tabellen verwenden
+für Portal-Konten den Schlüssel user_id und sogar subject. Der **selbst noch auf HOLD stehende**
+D3-Entwurf vom 18.10.2026 nennt dagegen eine eigene, zufällige und
+unveränderliche portal_user_ref aus 16 Bytes (= 32 lowercase Hex-Zeichen).
+Diese Referenz ist weder eine Core-Personen-ID noch ein Core-Subject.
+Die im D3-Entwurf beschriebene Bestätigung durch Kaan ersetzt keinen
+noch ausstehenden Eintrag in DECISIONS.md und keinen Security-Review.
+Die SQL-Vorlagen 5.1–5.5 sind daher noch **nicht** unmittelbar als
+Migration 0005/0006 zu implementieren. Vor DB-Code sind sie nach
+Security-Review entsprechend zu überarbeiten. Kein stilles Umbenennen
+bereits angewandter Migrationen (derzeit sind Portal-Migrationen nicht
+als auf main implementiert belegt).
+
+**Vorgeschlagener relationaler Schlüsselwechsel (Review-Gate):**
+
+- Portal users: portal_user_ref als 128-Bit-CSPRNG-Schlüssel, einmalig,
+  unveränderlich, nie einer zweiten Person zuweisbar. Deaktivierte
+  Konten bleiben als Tombstones; E-Mail ist nur Login-/UX-Attribut,
+  niemals Identitätsbeweis für den Core.
+- Sessions: SHA-256-Digest des 32-Byte-Tokens als einziger Schlüssel,
+  Fremdschlüssel auf portal_user_ref, Ablauf und Sperrzeit; niemals
+  das rohe Token, Cookie oder ein CSRF-Secret speichern. Login und
+  Tokenrotation in einer Transaktion. Gesperrte/abgelaufene Sessions,
+  DB-Ausfall und unsichere Zeit sind REFUSE.
+- Rollen: weiterhin USER/APPROVER/ADMIN als reine Portal-UI-Rollen,
+  keine Autorität für Core-Policy, C3-Approvals oder Job-Eigentum.
+- Quoten und Nutzung: Schlüssel portal_user_ref; HOUR/MONTH und separater
+  Dienst-Bucket werden in fester Reihenfolge in **einer** Transaktion
+  belastet. Pro Fenster atomarer Upsert mit bedingter Erhöhung und
+  RETURNING; null Zeilen bedeutet REFUSE. Nach Belastung und Versuch
+  gibt es auch bei Core-REFUSED/UNKNOWN keine stille Erstattung.
+  Core-Personen-Quoten bleiben **autoritativ** über Neueinladungen und
+  Portalreferenz-Wechsel hinweg. Das Pending-Limit aus §5.4 benötigt
+  einen eigenen synchronisierten Zähler/registrierte Core-Abfrage:
+  bis dahin kein positives Pending-Limit-Versprechen. Beträge,
+  Zeitquelle, Dienstbudget und Recovery-Grenze aus #161 sind offen;
+  bei unbekanntem Budget wird keine Anfrage signiert.
+- Portal-History: (portal_user_ref, job_id) nur nichtautoritativer
+  Anzeige-/UX-Cache. Vor dem Netzwerkaufruf wird eine dauerhafte
+  Submission-Zeile (neuer, getrennt zu reviewender Entwurf) mit
+  zufälliger submission_id, Alias, Envelope-Digest und einem strikt
+  validierten Zustand SUBMITTING/ACCEPTED/REFUSED/UNKNOWN angelegt.
+  Ein Crash nach Core-COMMIT kann dadurch als UNKNOWN angezeigt und
+  später nur durch eine neue signierte Core-Leseoperation abgeglichen
+  werden; **keine erneute Core-Joberzeugung**. last_status benötigt
+  ebenfalls einen geschlossenen Zustands-Check. Fremde Aufträge
+  antworten einheitlich 404; der Browser darf Job-Eigentum oder
+  Status nicht selbst festlegen.
+
+**Identitäts- und Datenfluss:**
+
+~~~text
+Browser (untrusted)
+  -> privates GeniusNew Portal Backend
+    -> eigene Portal-PostgreSQL (Sessions/Konten/UX, Rolle genius_portal)
+    -> signierte versionierte Portal->Core HTTP-Operation (D1/v2 HOLD)
+      -> Core-seitig verwaltete Personenbindung und Policy
+      -> persistenter Ledger, Audit-Kette und separater Anker
+~~~
+
+Der Core verwaltet die Bindung des Tupels
+(portal_service_principal_id, portal_user_ref) an den Core-Subject
+und die kanonische Personen-ID. Die Portal-Datenbank darf diese
+Core-Registry nicht duplizieren oder als Autorität ersetzen.
+Ein deaktivierter oder mehrfach gemappter Alias: REFUSE. Die
+Portal-Signatur stellt die Dienstidentität sicher, nicht die
+persönliche Approver-Identität. Ein zweiter Benutzer und Freigaben
+bleiben ohne D3-v2-Gate gesperrt. D1s begrenzte Ein-Nutzer-Ausnahme
+bleibt auf risikoarme Tools ohne Approvals beschränkt.
+
+**Transaktions- und Recovery-Gates vor Code:**
+
+1. Login: Argon2id aus PR #151, Token/CSRF aus PR #152; Session
+   wird nur bei ACTIVE-Konto, gültigem Digest und Zeitfenster
+   akzeptiert. Stateful Login-Drosselung gegen unbekannte Adressen
+   wie gegen falsche Passwörter; nicht prozesslokal. Alle mutierenden
+   Aktionen inkl. Login/Logout benötigen Origin-Prüfung und einen
+   serverseitig HMAC-gebundenen CSRF-Header; der HMAC bindet die
+   aktive Session und wird nach Rotation ungültig. __Host-Cookie,
+   Secure, HttpOnly, Host-only, Path=/; für die geschlossene Beta
+   SameSite=Strict **vorgeschlagen** (PR #152 beschreibt Lax;
+   Profilentscheidung und Test noch ausstehend). Keine Mutation
+   per GET und kein automatisches Demo-Login.
+2. Kontosperrung wird erst nach **bestätigter Core-Registry-Sperre**
+   endgültig, danach Portal-Konto DISABLED und Sessions atomar
+   widerrufen. Ist die Core-Sperre unbestätigt, meldet das System
+   PENDING/HOLD, niemals erfolgreichen Abschluss. Ein Job-Request
+   hält das Portal-Konto nur während Session-/Quote-/Signaturprüfung
+   (transaktionslokale Row-Sperre), **niemals während des HTTP-Aufrufs**.
+   Bei Core-Annahme wird die aktuelle gesperrte Registry erneut geprüft.
+   DISABLED ist terminal; DB-Test/Trigger verweigert DISABLED->ACTIVE.
+   Alte portal_user_ref bleibt unveränderlich und wird nie recycelt.
+3. Job: sichere Session -> in einer Transaktion persistente Quoten
+   plus Submission-/Envelope-Digest -> Portal-Signatur über den nur
+   serverseitig ermittelten Alias -> Core-Signatur-/Replay-/Policy-/
+   Registry-Prüfung -> atomare Core-Annahme/Audit -> erst nach
+   bestätigtem Ergebnis UX-Caching. Ungewisser COMMIT-Ausgang oder
+   Netzverlust bleibt in der Submission-Zeile UNKNOWN/HOLD und wird
+   nur durch signierten Core-Status abgeglichen, **niemals still neu
+   signiert/abgesendet**.
+4. Eine Core-Jobsignatur autorisiert nicht automatisch History,
+   Approval oder API-Key-Verwaltung. Jede dieser Operationen
+   braucht einen gesondert versionierten Vertrag und Test.
+5. Portal-Laufzeit ohne Core-DB-DSN, Root-/Anker-Secret, DDL-,
+   TRIGGER-, TRUNCATE-, Owner- oder Superuser-Recht. Die separate
+   Portal-Migrationsrolle besitzt ausschließlich Portal-DDL.
+   Die Runtime-Rolle erhält DML nur je tatsächlich benötigter
+   Portal-Tabelle/Spalte; kein DELETE auf users und kein unkontrolliertes
+   Rollen-/Statusupdate. Server-Konfiguration ist die einzige
+   Quelle von Secrets; nie Browser-Bundle/Repo.
+6. PostgreSQL-Integration nur in isolierter Wegwerf-DB:
+   Sessionablauf, Rotation, Logout, parallele Sperre und Core-Block,
+   fremdes Job-404, Budget-Race, Replay, DB-Ausfall, Restore und
+   unbekannter COMMIT. Nach Restore werden **alle alten Sessions
+   unabhängig vom wiederhergestellten DB-Inhalt ungültig**; Core-
+   Sperrstatus und extern verankerte Sicherheitszustände gewinnen.
+   Unbekanntes Budget: REFUSE. Verfahren für einen externen
+   Session-Epochenanker/Rotation und Core-Reconciliation ist **HOLD**.
+   Rote Negativtests zuerst, dann CI/Refusal-Guard, unabhängiges
+   Claude DB Review am exakten SHA, Kaan-Merge.
+7. OFFENE ARCHITEKTURFRAGEN: §2.2 und die bisherigen
+   DECISIONS.md-Einträge sehen Vercel vor. Am 19.10.2026 beschrieb
+   Kaan die neue UI-Vorschau als spätere Einbindung in ein einzelnes
+   privates selbst gehostetes Portal. Dieser noch nicht nach
+   DECISIONS.md übertragene Betriebsort-Widerspruch ist ausdrücklich
+   **HOLD**; bis zu Kaans dokumentierter Entscheidung kein Wechsel
+   von Host, TLS, Pooler oder Zugang. Bei Vercel nur transaktionslokale
+   Locks und TLS-DB verify-full, bei gemeinsamem Host getrennte
+   OS-Nutzer und separate DB-Cluster/Secrets als zu prüfende
+   Anforderungen. Weiter offen: Einladungs-/E-Mail-Kanonisierung
+   (Wiederaufnahme darf an unique Email nicht scheitern),
+   Token-Formate und Session-Epochen, Quoten-/Zeitanker, Retention,
+   administrative Core-Registry-Sperr- und Restore-Transaktionen.
+8. Core-seitiger, eigener Datenbankentwurf (§4.10 als Folgethema)
+   für kanonische Personen-ID, unveränderliche gesperrte Aliasse,
+   getrennte D3/v2-Replay-Domäne und Schlüsselrotation ist vor
+   D3-Code verpflichtend. §4.9 ist ausschließlich für D1 bestimmt
+   und darf nicht still als v2-Tabelle umgedeutet werden.
+
 
 ## 6. Audit-Commit und Anchor-Crashfenster
 
@@ -629,6 +801,14 @@ Reihenfolge:
 5. `0005_portal_identity`: users, sessions, roles, quotas;
 6. `0006_portal_history`.
 
+**HOLD für 0005/0006:** §5.1–5.5 beschreiben ein veraltetes Schema,
+§5.6 den noch zu reviewenden D3-Identitätsvertrag. Die existierende
+Portal-PostgreSQL-Installation hat ein abweichendes Schema; weder
+bestehende Daten noch Migrationen dürfen ohne eigenständige
+Bestands-/Rollback-/Restore-Prüfung überschrieben werden.
+Einladung, Konto-Sperrlebenszyklus, Submission/UNKNOWN und Kosten-
+Budget gehören in den freizugebenden neuen Portal-Migrationsvertrag.
+
 Eine spätere, separat freizugebende D1-Migration legt die Tabelle aus 4.9 an.
 Sie erhält eine neue Version nach den bestehenden Migrationen, ist aber vom
 automatischen Lauf ausgenommen. D1-Code darf nicht vorher aktiviert und die
@@ -647,6 +827,16 @@ Mindestens getrennte Rollen:
 - **`genius_core`:** Runtime, ausdrücklich **nicht** Eigentümerin der Tabellen und ohne
   DDL/`TRIGGER`/`TRUNCATE`/`REFERENCES`;
 - **`genius_portal`:** nur Portal-Tabellen, ohne Zugriff auf Core-Tabellen.
+
+**Portal-Rechte-Gate (vor Implementierung):** Ein eigenständiger
+Portal-Migrationseigentümer besitzt DDL nur für das separate Portal-Schema.
+Die Laufzeitrolle `genius_portal` hat keinen Superuser-, Owner-,
+TRUNCATE-, CREATE-, REFERENCES- oder Core-DB-Zugang. SELECT und eng
+begrenzte INSERT/UPDATE-Rechte werden je Portal-Tabelle begründet;
+users sind für die Runtime nicht löschbar und Kernidentität bleibt
+außerhalb der Portal-DB. Rollen-/Statuswechsel benötigen geprüfte
+Administration statt freiem UPDATE. Diese Minimalbeschreibung ist
+noch **keine** überprüfte produktive GRANT-Matrix (HOLD).
 
 Mindest-Rechte der Core-Runtime pro Tabelle:
 
@@ -705,5 +895,7 @@ Implementierungsreihenfolge:
 4. Pending Jobs;
 5. Approval Store;
 6. Audit Chain + Startup-Reconciliation mit Anchor;
-7. Portal-Identität und Sessions;
-8. Portal.
+7. Portal-Identität und Sessions erst nach §5.6-D3-Baseline,
+   Schema-/Migrationsreview, sicherer Session-Epoche/Restore-Regel;
+8. Portal erst nach signierter Core-Identitätsanbindung und
+   Ende-zu-Ende-Prüfung der unter D1/D3 getrennten Autorität.

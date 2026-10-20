@@ -30,6 +30,11 @@ fabricated chain one record longer and take over the anchor, locking the real lo
 out for being too short. Both `AuditAnchor.commit` and `verify` therefore require
 the records themselves and check that the record at the committed position still
 hashes to the committed hash. Extension is proved, not inferred from a number.
+`AuditAnchor.commit_delta` proves the same extension from the suffix alone —
+each new record links to and recomputes from the committed hash up to the newly
+signed head (`verify_extension`) — which is what lets a long chain stop paying
+for its whole history on every commit; what it does not do is re-prove the
+prefix, whose full verification happened when it was committed.
 
 ## Separation of authority
 
@@ -79,6 +84,12 @@ _SIGNATURE = re.compile(r"\A[0-9a-f]{128}\Z")
 # "process-local"; `docs/ROADMAP-V01.md` leaves durable storage to a later phase,
 # and raising this belongs to that phase rather than to this module.
 _MAX_COUNT = min(1_000_000, sys.maxsize - 1)
+
+# One extension commit (`commit_delta`) may carry at most this many records.
+# The bound is what keeps a single delta — and the frame it travels in —
+# small enough to verify in one pass without trusting the sender's count: a
+# client further behind syncs in several deltas or with one full `commit`.
+_MAX_DELTA_RECORDS = 8192
 
 
 def _fail(message: str) -> None:
@@ -269,6 +280,39 @@ class AuditAnchor:
             self._count, self._head_hash = head.count, head.head_hash
             return self._count, self._head_hash
 
+    def commit_delta(self, head: AuditHead, records: Iterable[AuditRecord], *,
+                     authority: AuditAuthority | AuditVerifier) -> tuple[int, str]:
+        """Record a head from only the records since the committed one.
+
+        `records` are exactly those after this anchor's committed count —
+        not the whole chain `commit` takes — so a caller slices by the
+        count `committed` last told it, and a refusal here means that view
+        is stale and to ask again.
+
+        The incremental counterpart of `commit` (protocol step 1 of
+        `docs/AUDIT-INCREMENTAL-DRAFT.md`): the committed prefix was verified
+        in full when it was committed, so what has to be proven now is that
+        these records descend from it — which `verify_extension` checks
+        against this anchor's own count and hash, never against a base the
+        caller names. The base is read before the check and compared again
+        before anything moves: an anchor that advanced meanwhile to this same
+        head answers as already committed, and one that moved anywhere else
+        refuses rather than apply a proof made against a stale base.
+        """
+        with self._lock:
+            base_count, base_hash = self._count, self._head_hash
+        verify_extension(records, head, from_count=base_count,
+                         from_hash=base_hash, authority=authority)
+        with self._lock:
+            if (self._count, self._head_hash) == (base_count, base_hash):
+                self._count, self._head_hash = head.count, head.head_hash
+                return self._count, self._head_hash
+            if (head.count == self._count
+                    and hmac.compare_digest(head.head_hash, self._head_hash)):
+                return self._count, self._head_hash
+            _fail(f"anchor moved to {self._count} records while the extension "
+                  f"from {base_count} was checked; extend its committed state instead")
+
 
 class AuditChain:
     """Append-only in memory. Durable storage is a separate, later decision."""
@@ -416,4 +460,58 @@ def verify(records: Iterable[AuditRecord], head: AuditHead, *,
             if not hmac.compare_digest(chain[committed_count - 1].record_hash, committed_hash):
                 _fail(f"chain does not contain the {committed_count} records the "
                       f"anchor committed")
+    return len(chain)
+
+
+def verify_extension(records: Iterable[AuditRecord], head: AuditHead, *,
+                     from_count: int, from_hash: str,
+                     authority: AuditAuthority | AuditVerifier) -> int:
+    """Check only the records after a prefix that was already verified in full.
+
+    The prefix is named by its signed position — `from_count` records ending
+    at `from_hash` (the empty hash for an empty prefix) — and must have passed
+    `verify` (or a commit that did) when it became the base. What is checked
+    here is descent from that base: the first record links to `from_hash`,
+    indices continue from `from_count`, every record hash recomputes, and
+    the last one ends where the newly signed head says. Nothing before the
+    base is re-read; that is the saving, and also the boundary of the claim:
+    this proves the extension fits the base, not that the base is intact.
+
+    Raises `ContractError` on the first problem found, like `verify`.
+    Returns how many records the extension holds.
+    """
+    head = _verify_head(head, authority=authority)
+    from_count = _count(from_count, "from_count")
+    from_hash = _digest(from_hash, "from_hash")
+    if head.count < from_count:
+        _fail(f"signed head claims {head.count} records but the extension "
+              f"base already holds {from_count}")
+    extension = head.count - from_count
+    if extension > _MAX_DELTA_RECORDS:
+        _fail(f"extension holds {extension} records, more than the "
+              f"{_MAX_DELTA_RECORDS} one delta may carry")
+    chain = _bounded_chain(records, extension + 1)
+    if len(chain) > extension:
+        _fail(f"extension holds more than the {extension} records the signed "
+              f"head adds to its base")
+    if len(chain) != extension:
+        _fail(f"extension holds {len(chain)} records but the signed head adds "
+              f"{extension} to its base")
+
+    for offset, value in enumerate(chain):
+        position = from_count + offset
+        record = _checked_record(value, position)
+        if record.index != position:
+            _fail(f"record at position {position} claims index {record.index}")
+        expected_previous = chain[offset - 1].record_hash if offset else from_hash
+        if not hmac.compare_digest(record.previous_hash, expected_previous):
+            _fail(f"record {position} does not link to its predecessor")
+        recomputed = _record_hash(index=record.index, event=record.event,
+                                  previous_hash=record.previous_hash)
+        if not hmac.compare_digest(record.record_hash, recomputed):
+            _fail(f"record {position} has been altered")
+
+    actual_head = chain[-1].record_hash if chain else from_hash
+    if not hmac.compare_digest(actual_head, head.head_hash):
+        _fail("extension does not end where the signed head says it does")
     return len(chain)
