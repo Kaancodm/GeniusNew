@@ -215,7 +215,9 @@ def ensure_no_foreign_processes() -> None:
             continue
         try:
             status = read_status(int(path.name))
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
+            # A process reaped during the read cannot still own the worker;
+            # every readable status remains subject to the identity check.
             continue
         if set(status) != {"Uid", "Gid"}:
             _fail("PROCESS_INVENTORY_UNKNOWN")

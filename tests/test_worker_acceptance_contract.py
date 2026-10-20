@@ -347,6 +347,22 @@ class DriverSafetyTest(unittest.TestCase):
             with self.assertRaises(common.Refused):
                 driver.ensure_no_foreign_processes()
 
+    def test_disappeared_process_does_not_hide_later_foreign_process(self):
+        entries = [Path("/proc/123"), Path("/proc/124")]
+        for uid, refused in ((1000, False), (20002, True)):
+            with self.subTest(uid=uid), \
+                    patch.object(Path, "iterdir", return_value=entries), \
+                    patch.object(driver, "read_status", side_effect=[
+                        ProcessLookupError("process exited"),
+                        {"Uid": [uid] * 4, "Gid": [uid] * 4},
+                    ]) as read:
+                if refused:
+                    with self.assertRaisesRegex(common.Refused, "^FOREIGN_PROCESS_PRESENT$"):
+                        driver.ensure_no_foreign_processes()
+                else:
+                    driver.ensure_no_foreign_processes()
+                self.assertEqual(read.call_count, 2)
+
 
 class DriverGuardRegressionTest(unittest.TestCase):
     def test_root_bootstrap_rejects_untrusted_parent_and_helper_file(self):
