@@ -697,7 +697,8 @@ class AgentControlTest(unittest.TestCase):
     @patch("tools.control_deck.checks.agent_session", return_value={"status": "yellow", "detail": "stopped"})
     @patch("tools.control_deck.checks.tool_status", return_value={"status": "green", "detail": "installed"})
     def test_agent_hub_marks_reported_pauses_without_launchers(self, tool, session, which):
-        cards = checks.agent_hub()["agents"]
+        repo = Path("/tmp/genius checkout")
+        cards = checks.agent_hub(repo)["agents"]
         self.assertEqual([c["id"] for c in cards],
                          ["codex", "claude", "gemini", "antigravity", "copilot", "kiro",
                           "grok", "grok_bot", "abacus", "hermes"])
@@ -707,7 +708,7 @@ class AgentControlTest(unittest.TestCase):
         self.assertEqual(by_id["gemini"]["status"], "yellow")
         self.assertNotIn("command", by_id["gemini"])
         self.assertEqual(by_id["antigravity"]["command"],
-                         f"cd {checks.DEFAULT_REPO} && /usr/bin/agy")
+                         f"cd {shlex.quote(str(repo))} && /usr/bin/agy")
         for name in ("copilot", "kiro", "abacus"):
             with self.subTest(name=name):
                 card = by_id[name]
