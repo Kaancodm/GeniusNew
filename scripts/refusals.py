@@ -67,6 +67,7 @@ ROOT = Path(__file__).resolve().parent.parent
 GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/audit.py", "geniusnew/audit_chain.py",
            "geniusnew/results.py", "geniusnew/keys.py",
+           "geniusnew/portal_session_tokens.py",
            "geniusnew/workers.py", "geniusnew/isolation.py",
            "geniusnew/worker_service.py",
            "geniusnew/isolation_child.py", "geniusnew/gateway.py",
@@ -75,7 +76,6 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/anchor_process.py", "geniusnew/config.py",
            "geniusnew/advisory.py",
            "geniusnew/__main__.py", "geniusnew/database.py",
-           "geniusnew/portal_session_tokens.py",
            "geniusnew/audit_store.py", "tools/control_deck/actions.py",
            "tools/ipad_llm.py", "tools/ai_pilot/pilot.py",
            "ops/server/genius-server", "scripts/demo_restore.py")
@@ -89,7 +89,6 @@ GUARDED_TOOL_TESTS = {"tools/ipad_llm.py": "test_ipad_llm.py",
 # still runs all tests; every selected test file must pass for a mutation to
 # survive. A missing refusal test is therefore still a failure of this guard.
 GUARDED_PYTHON = {
-    "geniusnew/portal_session_tokens.py": ("test_portal_session_tokens.py",),
     "geniusnew/http_entry.py": (
         "test_http_entry.py", "test_http_limits.py", "test_approver_routes.py",
     ),
@@ -118,6 +117,7 @@ GUARDED_PYTHON = {
         "test_pending_database.py", "test_b7_crash_recovery.py", "test_serve.py",
     ),
     "geniusnew/config.py": ("test_config.py", "test_approver_config.py"),
+    "geniusnew/portal_session_tokens.py": ("test_portal_session_tokens.py",),
     "geniusnew/__main__.py": ("test_persistent_audit_wiring.py", "test_serve.py"),
 }
 
