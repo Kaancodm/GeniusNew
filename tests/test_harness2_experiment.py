@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import io
+import json
 import subprocess
-import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -36,6 +35,9 @@ def _git(repo: Path, *arguments: str) -> str:
         capture_output=True,
         text=True,
         check=True,
+        stdin=subprocess.DEVNULL,
+        timeout=15,
+        env=harness2_experiment._git_environment(),
     ).stdout.strip()
 
 
@@ -63,7 +65,17 @@ class Harness2ExperimentTest(unittest.TestCase):
 
     def test_runs_committed_demo_even_if_checkout_files_change(self):
         (self.source / "harness2/cli/demo.py").write_text("raise RuntimeError('dirty checkout ran')\n")
-        result = harness2_experiment.run_demo(self.source)
+        def fake_runner(rootfs: Path, package_root: Path, output_root: Path) -> None:
+            self.assertEqual((rootfs / "lib").readlink(), Path("usr/lib"))
+            self.assertEqual((package_root / "harness2/cli/demo.py").read_text(), _FAKE_DEMO)
+            report = output_root / "demo/demo.json"
+            report.parent.mkdir(parents=True)
+            report.write_text(json.dumps({
+                "done": 2, "failed": 0, "execution_count": 4, "editor_calls": 3,
+            }))
+
+        with patch.object(harness2_experiment, "_run_sandboxed_demo", side_effect=fake_runner):
+            result = harness2_experiment.run_demo(self.source)
         self.assertEqual(result, {
             "upstream_commit": self.commit,
             "done": 2,
@@ -88,31 +100,98 @@ class Harness2ExperimentTest(unittest.TestCase):
         with self.assertRaisesRegex(harness2_experiment.ExperimentError, "checkout root"):
             harness2_experiment.verify_source(self.source / "harness2")
 
-    def test_demo_has_no_model_or_cloud_environment(self):
-        original = harness2_experiment._DEMO_CODE
-        probe = (
-            "import os, sys, json; from pathlib import Path; "
-            "assert 'GOOGLE_CLOUD_PROJECT' not in os.environ; "
-            "assert 'OPENAI_API_KEY' not in os.environ; "
-            "sys.path.insert(0, sys.argv[1]); "
-            "from harness2.cli.demo import main; raise SystemExit(main(sys.argv[2:]))"
+    def test_sandbox_command_is_closed_to_host_and_network(self):
+        command = harness2_experiment._sandbox_command(
+            Path("/tmp/rootfs"), Path("/tmp/package"), Path("/tmp/output"),
+            Path("/usr/bin/python3.13"), "/usr/bin/bwrap",
         )
-        with patch.object(harness2_experiment, "_DEMO_CODE", probe), patch.dict(
-            "os.environ", {"GOOGLE_CLOUD_PROJECT": "sensitive", "OPENAI_API_KEY": "sensitive"}
-        ):
-            result = harness2_experiment.run_demo(self.source)
-        self.assertEqual(result["done"], 2)
-        self.assertEqual(harness2_experiment._DEMO_CODE, original)
+        self.assertIn("--unshare-all", command)
+        self.assertIn("--unshare-user", command)
+        self.assertIn("--disable-userns", command)
+        self.assertIn("--die-with-parent", command)
+        self.assertIn("--clearenv", command)
+        self.assertNotIn("--share-net", command)
+        self.assertNotIn("/home/kaan", command)
+        mounts = [command[index:index + 3] for index, item in enumerate(command)
+                  if item in ("--ro-bind", "--bind")]
+        self.assertEqual(mounts, [
+            ["--ro-bind", "/tmp/rootfs", "/"],
+            ["--ro-bind", "/usr", "/usr"],
+            ["--ro-bind", "/tmp/package", "/source"],
+            ["--bind", "/tmp/output", "/output"],
+        ])
+        self.assertNotIn("/proc", command)
+        self.assertNotIn("/dev", command)
 
-    def test_archive_rejects_a_symlink(self):
-        archive = io.BytesIO()
-        with tarfile.open(fileobj=archive, mode="w:") as bundle:
-            member = tarfile.TarInfo("harness2/cli/demo.py")
-            member.type = tarfile.SYMTYPE
-            member.linkname = "/tmp/outside.py"
-            bundle.addfile(member)
-        with self.assertRaisesRegex(harness2_experiment.ExperimentError, "unexpected"):
-            harness2_experiment._extract_package(archive.getvalue(), Path(self.temporary.name))
+    def test_missing_sandbox_is_rejected(self):
+        with patch.object(harness2_experiment.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(harness2_experiment.ExperimentError, "unavailable"):
+                harness2_experiment._run_sandboxed_demo(
+                    Path("/tmp/rootfs"), Path("/tmp/package"), Path("/tmp/output")
+                )
+
+    def test_git_tree_rejects_a_symlink(self):
+        (self.source / "harness2/cli/external.py").symlink_to("/tmp/outside.py")
+        _git(self.source, "add", "harness2/cli/external.py")
+        _git(self.source, "commit", "-qm", "Symlink in source")
+        with patch.object(harness2_experiment, "UPSTREAM_COMMIT", _git(self.source, "rev-parse", "HEAD")):
+            with self.assertRaisesRegex(harness2_experiment.ExperimentError, "unexpected"):
+                harness2_experiment._extract_package(self.source, Path(self.temporary.name) / "copy")
+
+    def test_git_tree_rejects_an_oversized_blob(self):
+        (self.source / "harness2/large.bin").write_bytes(
+            b"x" * (harness2_experiment._MAX_FILE_BYTES + 1)
+        )
+        _git(self.source, "add", "harness2/large.bin")
+        _git(self.source, "commit", "-qm", "Oversized source")
+        with patch.object(harness2_experiment, "UPSTREAM_COMMIT", _git(self.source, "rev-parse", "HEAD")):
+            with self.assertRaisesRegex(harness2_experiment.ExperimentError, "unexpected"):
+                harness2_experiment._extract_package(self.source, Path(self.temporary.name) / "copy")
+
+    def test_local_attributes_cannot_filter_pinned_blobs(self):
+        marker = Path(self.temporary.name) / "filter-ran"
+        filter_script = Path(self.temporary.name) / "filter.py"
+        filter_script.write_text(
+            "import pathlib, sys\n"
+            f"pathlib.Path({str(marker)!r}).write_text('ran')\n"
+            "sys.stdout.buffer.write(sys.stdin.buffer.read())\n"
+        )
+        attributes = self.source / ".git/info/attributes"
+        attributes.write_text("harness2/cli/demo.py filter=evil export-subst\n")
+        _git(self.source, "config", "filter.evil.smudge", f"python3 {filter_script}")
+        copy = Path(self.temporary.name) / "copy"
+        harness2_experiment._extract_package(self.source, copy)
+        self.assertEqual((copy / "harness2/cli/demo.py").read_text(), _FAKE_DEMO)
+        self.assertFalse(marker.exists())
+
+    def test_report_rejects_symlinks_and_invalid_counters(self):
+        output = Path(self.temporary.name) / "output"
+        demo = output / "demo"
+        demo.mkdir(parents=True)
+        target = Path(self.temporary.name) / "target.json"
+        target.write_text(json.dumps({
+            "done": 2, "failed": 0, "execution_count": 4, "editor_calls": 3,
+        }))
+        link = demo / "demo.json"
+        link.symlink_to(target)
+        with self.assertRaisesRegex(harness2_experiment.ExperimentError, "unavailable"):
+            harness2_experiment._read_demo_report(output)
+        link.unlink()
+        demo.rmdir()
+        demo.symlink_to(target.parent, target_is_directory=True)
+        with self.assertRaisesRegex(harness2_experiment.ExperimentError, "unavailable"):
+            harness2_experiment._read_demo_report(output)
+        demo.unlink()
+        demo.mkdir()
+        report = demo / "demo.json"
+        report.write_text(json.dumps({
+            "done": True, "failed": 0, "execution_count": 4, "editor_calls": 3,
+        }))
+        with self.assertRaisesRegex(harness2_experiment.ExperimentError, "invalid counters"):
+            harness2_experiment._read_demo_report(output)
+        report.write_bytes(b"x" * (harness2_experiment._MAX_REPORT_BYTES + 1))
+        with self.assertRaisesRegex(harness2_experiment.ExperimentError, "bounded"):
+            harness2_experiment._read_demo_report(output)
 
 
 if __name__ == "__main__":
