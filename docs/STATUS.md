@@ -1,7 +1,8 @@
 # GeniusNew — Projektstand
 
-**Stand: 19.10.2026, `main` `dde20f2bd1726a2a00005f0b3c8614155c2888dc`.** Gesamtpflege
-über #145: Gates, Messwerte, Risiken, Aufräumen der offenen PRs. Die Abschnitte zu D1
+**Stand: 20.10.2026, `main` `a7308289977d4017cfc1a521100db3e0d01ccc98`.** Gesamtpflege
+über #145 (Stand `dde20f2`): Gates, Messwerte, Risiken, Aufräumen der offenen PRs.
+Nachgetragen am 20.10.2026 aus den Wissensblöcken bzw. PR-Texten: #174, #154, #179, #180. Die Abschnitte zu D1
 (Entscheidungen vom 18.10.2026, #158) und zum lokalen KI-Pilot (19.10.2026, Issue #166)
 stammen aus früheren Pflege-PRs und sind hier nicht neu geprüft; der Portal-DB-Vertrag
 aus #176 (D2/D3, HOLD) ist nur als gemergt erfasst. Teil der
@@ -64,6 +65,10 @@ Audit-Kette festgehalten.
 | D1 (Kern) | HTTP-Eingang lehnt doppelte Header vor Body und Mapping ab | #162 |
 | D3 (nur Doku) | Entwurf der administrierten Personenbindung mit neuer Envelope-Version; Portal-DB-Wiring D2/D3 mit sicheren Identitätsgrenzen. Beide HOLD, kein Code aktiv | #148, #176 |
 | E1 | Demo mit Persistenz-Angriffen | #112 |
+| Härtung, E3-Werkzeug, Audit-Delta (Arena 19.10.) | `serve()` verweigert Nicht-Loopback und IPv4-mapped IPv6 selbst; `scripts/check_dependencies.py`, Audit-Workflow nur als Beispiel (`docs/examples/audit-workflow.yml`, nicht aktiv); Benchmark `scripts/bench_audit.py` (Decke 62.137 Records); Fresh-Clone-Runner `scripts/e3_fresh_clone.py` (E3 selbst offen); Worker `TextDigest` in `BUILTIN_WORKERS` mit `tools/genius_client.py`; `AuditAnchor.commit_delta`/`commit2` als Protokoll-Schritt 1, **nicht** im Store-/Serve-Pfad verdrahtet. Unabhängiges Security-Review der Kernänderungen: UNKNOWN | #174 |
+| CI | Test-PostgreSQL nur an `127.0.0.1` mit validiertem dynamischem Port; Restore-Drill bindet den Admin-DSN an genau diesen Container | #154 |
+| KI-Advisory im Kern | `geniusnew/advisory.py`: standardmäßig aus (`[ai_advisory] enabled = true`), keine Autorität, kein HTTP-Weg; Antwort ist untrusted Text plus SHA-256. Pilot unter `tools/ai_pilot/` (aus #172). Neue Zeile in `SECURITY.md`. Merge auf Kaans Anweisung (`docs/DECISIONS.md` 19.10.2026); Gemini-Pro-Zweitmeinung und unabhängiges Security-Review offen | #179 |
+| Client | `tools/genius_client.py`: HTTP nur zu literalem Loopback, keine Redirects, Proxy-Umgehung für Loopback, Steuerzeichen im API-Key verweigert | #180 |
 | Werkzeuge | Server-Einrichtung `ops/server/genius-server`, Deck, Reviewkanäle Abacus und Kiro; manueller iPad-Modellclient über Tailscale (`tools/ipad_llm.py`, Live-Test am Gerät UNKNOWN); Refusal-Guard für drei langsame Module fokussiert; Project Deck | #110, #114, #116, #142, #153, #156 |
 
 **Noch offen:** C5 (Betriebsanleitung mit systemd, Rotation und Betriebsabnahme des
@@ -75,6 +80,11 @@ dort noch. Die C3-Zelle nennt `Claude DB Review` UNKNOWN; belegt ist APPROVED am
 Merge-Head `cc95586ca27e6f9d76fd737967d87cdb2e8a44d5` (`docs/DECISIONS.md`, 04.10.2026).
 Die Zellen A2 und C5 nennen #140 noch nicht (getrennter Worker-Dienst mit
 Unit-Vorlagen gemergt, Betriebsabnahme HOLD). Das korrigiert ein eigener Docs-PR.
+
+**Messbar laut CI am Head von #180 (`ea5456c`, Python 3.11, PostgreSQL 17):** 1398 Tests
+OK, HTTP-Demo 15/15, Persistenz-Demo 3/3, Restore PASS. Der Refusal-Guard enthält neu
+`geniusnew/advisory.py` und `tools/ai_pilot/pilot.py` (#179); die Gesamtzahl der
+`GUARDED`-Einträge ist hier nicht neu gezählt: UNKNOWN.
 
 **Messbar (am 19.10.2026 auf dem Stand von `main` `dde20f2` ausgeführt, Python 3.13.16,
 lokales PostgreSQL 16):**
@@ -133,8 +143,10 @@ Test wird übersprungen (`AGENTS.md`, Regel 4).
 
 Ein beratender Pilot auf dem Server: Qwen 3.5 4B schlägt einen Plan vor, genau ein
 Helfer führt ihn aus, der Server-Code prüft deterministisch. Er ist **nicht** Teil von
-v0.2, nicht implementiert (kein Code unter `tools/`) und berührt `geniusnew/` nicht.
-Der Sicherheitsvertrag steht als Entwurf von Claude Code in Issue #166 und ist keine
+v0.2. **Seit #179 (19.10.2026)** liegt der P1-Code unter `tools/ai_pilot/`, und der Kern
+hat mit `geniusnew/advisory.py` einen standardmäßig ausgeschalteten Aufrufweg ohne
+Autorität; das erweitert die Entscheidung vom 18.10.2026 („ohne Eingriff in
+`geniusnew/`“) auf Kaans Anweisung. Betrieb bleibt STOP. Der Sicherheitsvertrag steht als Entwurf von Claude Code in Issue #166 und ist keine
 Entscheidung von Kaan; entschieden sind Modellwahl, Wechselbetrieb und der Download
 des Helfermodells (`docs/DECISIONS.md`, 18. und 19.10.2026).
 
@@ -195,7 +207,10 @@ Jobs, Annahmen und Policy).
     ai.local-Prüfliste (ChatGPT, eigenes Issue); Laptop- und iPad-Prüfung auf den
     Geräten (Kaan). Security-Review am exakten Head (Claude) plus Gemini-Zweitmeinung
     wegen der neuen Netzgrenze.
-12. Roadmap: C3-Zelle auf den Beleg aus `docs/DECISIONS.md` korrigieren und #140 in den
+12. Nach #179 und #174: unabhängiges Security-Review (Claude) und Gemini-Pro-Zweitmeinung
+    zur neuen `SECURITY.md`-Zeile nachholen; offene Befunde des Implementierers (#179:
+    1 Medium, 2 Low; CodeRabbit: Engine-Fehlertext in Tracebacks, Doku zum Start).
+13. Roadmap: C3-Zelle auf den Beleg aus `docs/DECISIONS.md` korrigieren und #140 in den
     Zellen A2 und C5 nachtragen (eigener Docs-PR).
 
 ## Aufräumen der offenen PRs (Stand 19.10.2026)
