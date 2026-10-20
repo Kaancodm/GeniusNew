@@ -6,8 +6,12 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from urllib.parse import urlsplit
+from unittest.mock import patch
 
-from scripts.check_dependencies import advisories, check, main, parse_pins
+from scripts.check_dependencies import (
+    _MAX_RESPONSE_BYTES, _fetch, advisories, check, main, parse_pins,
+)
 
 REQUIREMENTS = """\
 # a comment
@@ -19,8 +23,11 @@ psycopg==3.3.3
 """
 
 
-def record(*entries):
-    return json.dumps({"vulnerabilities": list(entries)}).encode()
+def record(*entries, url=None, name="sample", version="1.0"):
+    if url is not None:
+        name, version = urlsplit(url).path.split("/")[2:4]
+    return json.dumps({"info": {"name": name, "version": version},
+                       "vulnerabilities": list(entries)}).encode()
 
 
 class CheckDependenciesTest(unittest.TestCase):
@@ -59,7 +66,7 @@ class CheckDependenciesTest(unittest.TestCase):
                     err, out, calls = io.StringIO(), io.StringIO(), []
                     with redirect_stderr(err), redirect_stdout(out):
                         code = main(
-                            [str(path)], fetch=lambda url: calls.append(url) or record())
+                            [str(path)], fetch=lambda url: calls.append(url) or record(url=url))
                     self.assertEqual(code, 2)
                     self.assertIn("UNKNOWN", err.getvalue())
                     self.assertEqual(out.getvalue(), "")
@@ -82,24 +89,26 @@ class CheckDependenciesTest(unittest.TestCase):
                         calls = []
                         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                             code = main([str(path)],
-                                        fetch=lambda url: calls.append(url) or record())
+                                        fetch=lambda url: calls.append(url) or record(url=url))
                         self.assertEqual(code, 0)
                         self.assertEqual(len(calls), 2)
                         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                             code = main([str(path)],
-                                        fetch=lambda _: record({"id": "GHSA-demo"}))
+                                        fetch=lambda url: record({"id": "GHSA-demo"}, url=url))
                         self.assertEqual(code, 1)
 
     def test_a_clean_set_passes_and_says_for_how_many(self):
-        code, lines = check(parse_pins(REQUIREMENTS), fetch=lambda url: record())
+        code, lines = check(parse_pins(REQUIREMENTS),
+                            fetch=lambda url: record(url=url))
         self.assertEqual(code, 0)
         self.assertIn("3 pinned packages", lines[-1])
 
     def test_an_advisory_fails_and_is_named(self):
         def fetch(url):
             if "cryptography" in url:
-                return record({"id": "GHSA-demo", "summary": "bad thing\nin detail"})
-            return record()
+                return record({"id": "GHSA-demo", "summary": "bad thing\nin detail"},
+                              url=url)
+            return record(url=url)
 
         code, lines = check(parse_pins(REQUIREMENTS), fetch=fetch)
         self.assertEqual(code, 1)
@@ -117,6 +126,115 @@ class CheckDependenciesTest(unittest.TestCase):
     def test_a_malformed_record_is_unknown(self):
         code, _ = check([("thing", "1.0")], fetch=lambda url: b"{}")
         self.assertEqual(code, 2)
+
+    def test_release_record_requires_object_and_vulnerabilities_list(self):
+        malformed = (b"[]", b"null", b"1",
+                     json.dumps({"info": {"name": "sample", "version": "1.0"}}).encode(),
+                     json.dumps({"info": {"name": "sample", "version": "1.0"},
+                                 "vulnerabilities": None}).encode())
+        for response in malformed:
+            with self.subTest(response=response):
+                code, lines = check([("sample", "1.0")],
+                                    fetch=lambda _: response)
+                self.assertEqual(code, 2)
+                self.assertIn("UNKNOWN", lines[-1])
+
+    def test_invalid_pin_tokens_are_unknown_before_fetch(self):
+        invalid = (
+            "sample===1.0", "sample==json#", "sample==1.0#comment",
+            "sample==1.0?release", "sample==1.0/../../other/2.0",
+            "sample==1..0", "sample==1.*", "sample-==1.0",
+        )
+        for line in invalid:
+            with self.subTest(line=line):
+                with self.assertRaises(ValueError):
+                    parse_pins(line)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "requirements.txt"
+            for line in invalid:
+                with self.subTest(cli=line):
+                    path.write_text(line + "\n", encoding="utf-8")
+                    calls = []
+                    with redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
+                        code = main([str(path)],
+                                    fetch=lambda url: calls.append(url) or b"{}")
+                    self.assertEqual(code, 2)
+                    self.assertEqual(calls, [])
+        for pin in (("sample", "1.0/json?"), ("sample/other", "1.0")):
+            with self.subTest(pin=pin):
+                calls = []
+                code, lines = check([pin],
+                                    fetch=lambda url: calls.append(url) or b"{}")
+                self.assertEqual(code, 2)
+                self.assertIn("UNKNOWN", lines[-1])
+                self.assertEqual(calls, [])
+
+    def test_inline_suffix_requires_separation_and_is_unknown_before_fetch(self):
+        for line in ("sample==1.0 --hash=sha256:abc", "sample==1.0 garbage",
+                     "sample==1.0#comment"):
+            with self.subTest(line=line):
+                with self.assertRaises(ValueError):
+                    parse_pins(line)
+
+    def test_release_record_must_match_the_requested_name_and_version(self):
+        for info in ({}, {"name": "other", "version": "1.0"},
+                     {"name": "sample", "version": "2.0"},
+                     {"name": 1, "version": "1.0"}):
+            with self.subTest(info=info):
+                response = json.dumps({"info": info, "vulnerabilities": []}).encode()
+                code, lines = check([("sample", "1.0")], fetch=lambda _: response)
+                self.assertEqual(code, 2)
+                self.assertIn("UNKNOWN", lines[-1])
+
+    def test_release_name_uses_pep_503_normalization(self):
+        code, lines = check([("typing-extensions", "4.16.0")],
+                            fetch=lambda _: record(name="Typing_Extensions",
+                                                   version="4.16.0"))
+        self.assertEqual(code, 0)
+        self.assertIn("no known advisories", lines[0])
+
+    def test_partial_audit_cannot_pass_after_one_clean_release(self):
+        def fetch(url):
+            if "/first/" in url:
+                return record(url=url)
+            return record(name="wrong", version="2.0")
+
+        code, lines = check([("first", "1.0"), ("second", "2.0")], fetch=fetch)
+        self.assertEqual(code, 2)
+        self.assertIn("UNKNOWN", lines[-1])
+        self.assertNotIn("No known vulnerabilities", " ".join(lines))
+
+    def test_advisory_fields_have_strict_types(self):
+        malformed = ({}, {"id": ""}, {"id": "   "}, {"id": 1},
+                     {"id": True}, {"id": []}, {"id": "GHSA-x", "summary": 1},
+                     {"id": "GHSA-x", "summary": False},
+                     {"id": "GHSA-x", "summary": []})
+        for entry in malformed:
+            with self.subTest(entry=entry):
+                code, lines = check([("sample", "1.0")],
+                                    fetch=lambda _: record(entry))
+                self.assertEqual(code, 2)
+                self.assertIn("UNKNOWN", lines[-1])
+
+    def test_nested_or_oversized_json_is_unknown(self):
+        nested = b"[" * 10000 + b"0" + b"]" * 10000
+        with self.assertRaisesRegex(ValueError, "nesting limit"):
+            advisories(nested, "sample", "1.0")
+        code, lines = check([("sample", "1.0")], fetch=lambda _: nested)
+        self.assertEqual(code, 2)
+        self.assertIn("UNKNOWN", lines[-1])
+        oversized = b" " * (_MAX_RESPONSE_BYTES + 1)
+        with self.assertRaisesRegex(ValueError, "size"):
+            advisories(oversized, "sample", "1.0")
+        code, lines = check([("sample", "1.0")], fetch=lambda _: oversized)
+        self.assertEqual(code, 2)
+        self.assertIn("UNKNOWN", lines[-1])
+
+    def test_fetch_rejects_oversized_response(self):
+        with patch("scripts.check_dependencies.urllib.request.urlopen",
+                   return_value=io.BytesIO(b"x" * (_MAX_RESPONSE_BYTES + 1))):
+            with self.assertRaisesRegex(ValueError, "size"):
+                _fetch("https://pypi.org/pypi/sample/1.0/json")
 
     def test_no_pins_is_unknown_not_a_pass(self):
         code, _ = check([], fetch=lambda url: record())
@@ -170,7 +288,7 @@ class CheckDependenciesTest(unittest.TestCase):
                     calls = []
                     with redirect_stderr(err), redirect_stdout(out):
                         result = main(
-                            [str(path)], fetch=lambda url: calls.append(url) or record())
+                            [str(path)], fetch=lambda url: calls.append(url) or record(url=url))
                     self.assertEqual(result, 2)
                     self.assertIn("UNKNOWN", err.getvalue())
                     self.assertEqual(out.getvalue(), "")
@@ -197,10 +315,12 @@ class CheckDependenciesTest(unittest.TestCase):
                     pins = parse_pins('sample==1.0 ; ' + marker + suffix + '\n')
                     self.assertEqual(pins, [("sample", "1.0")])
                     calls = []
-                    code, _ = check(pins, fetch=lambda url: calls.append(url) or record())
+                    code, _ = check(pins,
+                                    fetch=lambda url: calls.append(url) or record(url=url))
                     self.assertEqual(code, 0)
                     self.assertEqual(len(calls), 1)
-                    code, _ = check(pins, fetch=lambda _: record({"id": "GHSA-demo"}))
+                    code, _ = check(pins,
+                                    fetch=lambda url: record({"id": "GHSA-demo"}, url=url))
                     self.assertEqual(code, 1)
 
     def test_a_null_advisory_entry_must_be_unknown(self):
@@ -249,7 +369,8 @@ class CheckDependenciesTest(unittest.TestCase):
                 self.assertIn("GHSA-demo", lines[0])
 
     def test_summaries_are_truncated(self):
-        found = advisories(record({"id": "X", "summary": "y" * 5000}))
+        found = advisories(record({"id": "X", "summary": "y" * 5000}),
+                           "sample", "1.0")
         self.assertLessEqual(len(found[0][1]), 200)
 
 

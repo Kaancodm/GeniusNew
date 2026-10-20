@@ -30,7 +30,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-_PIN = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;\\]+)")
+_NAME_PATTERN = r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"
+_NAME = re.compile(_NAME_PATTERN)
+# A conservative PEP 440 subset: unsupported exact pins remain UNKNOWN.
+_VERSION = re.compile(
+    r"(?:[0-9]+!)?[0-9]+(?:\.[0-9]+)*"
+    r"(?:[-_.]?(?:a|b|c|rc|alpha|beta|pre|preview)[-_.]?[0-9]+)?"
+    r"(?:-[0-9]+|[-_.]?(?:post|rev|r)[-_.]?[0-9]+)?"
+    r"(?:[-_.]?dev[-_.]?[0-9]+)?"
+    r"(?:\+[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*)?",
+    re.IGNORECASE | re.ASCII,
+)
+_PIN = re.compile(rf"^\s*({_NAME_PATTERN})==([^\s;\\]+)")
 _HASH_LINE = re.compile(r"^\s*--hash=sha256:[0-9a-fA-F]+\s*\\?\s*$")
 # Dependency-specifier grammar, restricted to environment fields available here.
 # Extras/group fields require a containing layer this standalone audit lacks.
@@ -56,6 +67,16 @@ _TIMEOUT_SECONDS = 20
 _PYPI = "https://pypi.org/pypi/{name}/{version}/json"
 
 Fetch = Callable[[str], bytes]
+
+
+def _valid_pin(name: str, version: str) -> bool:
+    return (type(name) is str and type(version) is str
+            and _NAME.fullmatch(name) is not None
+            and _VERSION.fullmatch(version) is not None)
+
+
+def _normalized_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def _valid_marker(marker: str) -> bool:
@@ -114,11 +135,15 @@ def parse_pins(text: str) -> list[tuple[str, str]]:
             continue
         match = _PIN.match(line)
         if match:
-            suffix = line[match.end():].strip()
+            if not _valid_pin(match.group(1), match.group(2)):
+                raise ValueError(f"unsupported requirement syntax on line {number}")
+            raw_suffix = line[match.end():]
+            suffix = raw_suffix.strip()
             if suffix.startswith(";"):
                 if not _valid_marker(suffix[1:]):
                     raise ValueError(f"unsupported requirement marker on line {number}")
-            elif suffix not in ("", "\\") and not suffix.startswith("#"):
+            elif (suffix not in ("", "\\")
+                  and not (raw_suffix[:1].isspace() and suffix.startswith("#"))):
                 raise ValueError(f"unsupported requirement syntax on line {number}")
             # A backslash in a comment must not grant a hash continuation.
             hash_continuation = (suffix == "\\" or
@@ -131,15 +156,33 @@ def parse_pins(text: str) -> list[tuple[str, str]]:
     return pins
 
 
-def advisories(record: bytes) -> list[tuple[str, str]]:
+def advisories(record: bytes, name: str, version: str) -> list[tuple[str, str]]:
     """(id, one-line summary) pairs from one PyPI release record."""
-    value = json.loads(record.decode("utf-8"))
-    listed = value.get("vulnerabilities") if isinstance(value, dict) else None
-    if not isinstance(listed, list):
+    if type(record) is not bytes or len(record) > _MAX_RESPONSE_BYTES:
+        raise ValueError("release record exceeds the size this check reads")
+    try:
+        value = json.loads(record.decode("utf-8"))
+    except RecursionError:
+        raise ValueError("release record exceeds nesting limit") from None
+    if type(value) is not dict:
+        raise ValueError("release record is not an object")
+    info = value.get("info")
+    if (type(info) is not dict or type(info.get("name")) is not str
+            or type(info.get("version")) is not str
+            or _normalized_name(info["name"]) != _normalized_name(name)
+            or info["version"] != version):
+        raise ValueError("release record does not match requested pin")
+    listed = value.get("vulnerabilities")
+    if type(listed) is not list:
         raise ValueError("release record carries no vulnerabilities list")
     found = []
     for entry in listed:
-        if not isinstance(entry, dict):
+        if type(entry) is not dict:
+            raise ValueError("release record contains malformed advisory")
+        identifier = entry.get("id")
+        summary = entry.get("summary")
+        if (type(identifier) is not str or not identifier.strip()
+                or (summary is not None and type(summary) is not str)):
             raise ValueError("release record contains malformed advisory")
         withdrawn = entry.get("withdrawn")
         if withdrawn is not None:
@@ -150,8 +193,8 @@ def advisories(record: bytes) -> list[tuple[str, str]]:
             # calendar check also keeps impossible dates UNKNOWN, never clean.
             datetime.fromisoformat(withdrawn.upper())
             continue
-        identifier = str(entry.get("id") or "UNKNOWN-ID")
-        summary = " ".join(str(entry.get("summary") or "").split())
+        identifier = " ".join(identifier.split())
+        summary = " ".join((summary or "").split())
         found.append((identifier, summary[:_MAX_SUMMARY_CHARS]))
     return found
 
@@ -172,8 +215,11 @@ def check(pins: list[tuple[str, str]], *, fetch: Fetch = _fetch) -> tuple[int, l
     lines: list[str] = []
     total = 0
     for name, version in pins:
+        if not _valid_pin(name, version):
+            return 2, lines + ["invalid pinned package or version: UNKNOWN"]
         try:
-            found = advisories(fetch(_PYPI.format(name=name, version=version)))
+            found = advisories(fetch(_PYPI.format(name=name, version=version)),
+                               name, version)
         except (OSError, ValueError) as exc:
             return 2, lines + [f"{name}=={version}: UNKNOWN ({type(exc).__name__})"]
         total += len(found)

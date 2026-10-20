@@ -77,12 +77,14 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/__main__.py", "geniusnew/database.py",
            "geniusnew/audit_store.py", "tools/control_deck/actions.py",
            "tools/ipad_llm.py", "tools/ai_pilot/pilot.py",
-           "ops/server/genius-server", "scripts/demo_restore.py")
+           "ops/server/genius-server", "scripts/demo_restore.py",
+           "scripts/check_dependencies.py")
 
 # Guarded shell scripts and the one test module that runs each of them.
 GUARDED_SHELL = {"ops/server/genius-server": "test_server_tool.py"}
 GUARDED_TOOL_TESTS = {"tools/ipad_llm.py": "test_ipad_llm.py",
-                      "tools/ai_pilot/pilot.py": "test_ai_pilot.py"}
+                      "tools/ai_pilot/pilot.py": "test_ai_pilot.py",
+                      "scripts/check_dependencies.py": "test_check_dependencies.py"}
 
 # Mutants run the tests that exercise each boundary. The unmutated baseline
 # still runs all tests; every selected test file must pass for a mutation to
@@ -161,7 +163,7 @@ class Refusal:
         return f"{self.path}:{self.line}"
 
 
-def _is_refusal_body(node: ast.If) -> str | None:
+def _is_refusal_body(node: ast.If, *, value_error: bool = False) -> str | None:
     """Return the refusal's message if this `if` body is a refusal, else None."""
     for statement in node.body:
         call = None
@@ -174,7 +176,8 @@ def _is_refusal_body(node: ast.If) -> str | None:
         if call is None:
             continue
         name = call.func.id if isinstance(call.func, ast.Name) else None
-        if name in _REFUSAL_CALLS or name in _REFUSAL_RAISES or name in _REFUSAL_RETURNS:
+        if (name in _REFUSAL_CALLS or name in _REFUSAL_RAISES
+                or name in _REFUSAL_RETURNS or (value_error and name == "ValueError")):
             if call.args and isinstance(call.args[0], ast.Constant):
                 return str(call.args[0].value)
             return "(no message)"
@@ -236,6 +239,7 @@ def find_refusals(path: Path) -> list[Refusal]:
     source = path.read_text()
     tree = ast.parse(source)
     lines = source.splitlines()
+    value_error = path.relative_to(ROOT).as_posix() == "scripts/check_dependencies.py"
     found: list[Refusal] = []
     for value in _thread_name_actions(tree):
         found.append(Refusal(
@@ -260,7 +264,7 @@ def find_refusals(path: Path) -> list[Refusal]:
                 ))
         if not isinstance(node, ast.If):
             continue
-        message = _is_refusal_body(node)
+        message = _is_refusal_body(node, value_error=value_error)
         if message is None:
             continue
         # `elif` chains and refusals inside `else` are not reached by rewriting
@@ -313,7 +317,8 @@ def _disable(source: str, refusal: Refusal) -> str:
                     return _replace_node(source, statement, "raise")
         if (refusal.kind == "condition" and isinstance(node, ast.If)
                 and node.test.lineno == refusal.line and not node.orelse):
-            if _is_refusal_body(node) is None:
+            if _is_refusal_body(
+                    node, value_error=refusal.path == "scripts/check_dependencies.py") is None:
                 continue
             return _replace_node(source, node.test, "False")
     raise SystemExit(f"could not locate the refusal at {refusal.label()}")
