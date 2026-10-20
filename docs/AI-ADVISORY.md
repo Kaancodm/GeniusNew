@@ -20,8 +20,11 @@ nur die Grenze dazwischen.
   diese Grenze selbst gegen eigene Grenzwerte (Art, Länge, Kodierung, Leere),
   weil die Prüfungen des Piloten dem Piloten gehören und nicht dem Kern — aus
   demselben Grund validiert das Gateway einen Handoff nach, den der Orchestrator
-  signiert hat. Was auch immer die Engine wirft, wird hier **eine** Ablehnung mit
-  fester Meldung; ihre eigene Meldung geht nicht durch.
+  signiert hat. Engine-Fehler werden hier **eine** Ablehnung mit fester Meldung,
+  ohne ihre Ursache oder ihren Exception-Kontext herauszutragen. Nur
+  `KeyboardInterrupt` wird unverändert weitergereicht, damit ein Abbruch durch
+  den Betreiber wirksam bleibt. Auf jedem Fehler- und Abbruchpfad wird der Lock
+  freigegeben.
 - **Aus heißt aus.** Die Brücke ist ohne Konfiguration immer aus. Aktiv wird sie
   nur über `[ai_advisory] enabled = true` **und** eine explizit übergebene
   Engine; `build_advisory` importiert den Piloten erst dann. Es gibt keine

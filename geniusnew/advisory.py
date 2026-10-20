@@ -16,9 +16,10 @@ components that decide something never read it.
 **The engine is not trusted.** Everything the engine returns is re-validated
 here against limits this module owns, because the pilot's own checks belong to
 the pilot, not to the Core — the same reason the gateway revalidates a handoff
-the orchestrator signed. Whatever the engine raises becomes one refusal with a
-fixed message; the engine's own text is not passed through, so it cannot speak
-for the Core. The pilot still writes its specific reason code to its own JSONL
+the orchestrator signed. Engine failures become one refusal with a fixed
+message; only KeyboardInterrupt propagates to preserve operator cancellation.
+The engine's own error text is not passed through, so it cannot speak for the
+Core. The pilot still writes its specific reason code to its own JSONL
 log, which is where an operator looks for the detail.
 
 **Off means off.** The bridge is disabled unless a configuration explicitly
@@ -113,7 +114,7 @@ class AdvisoryBridge:
         return self._enabled
 
     def request(self, kind: Any, text: Any) -> AdvisoryResult:
-        """Ask for advisory text. Every failure is a refusal, never a default."""
+        """Refuse failures without their details; preserve operator cancellation."""
         if not self._enabled:
             _fail("the advisory bridge is disabled")
         _check_kind(kind)
@@ -124,9 +125,11 @@ class AdvisoryBridge:
             failed = False
             try:
                 answer = self._engine.run(kind, text)
-            except Exception:  # noqa: BLE001 - every engine failure is a refusal
-                # The engine stands outside this boundary's trust: whatever it
-                # raises — including a refusal of its own — becomes this one
+            except KeyboardInterrupt:
+                raise
+            except BaseException:  # noqa: BLE001 - untrusted engine failures
+                # The engine stands outside this boundary's trust: its failures
+                # — including a refusal of its own — become this one
                 # refusal. Forwarding its message would let it speak for the
                 # Core. Refuse outside the handler so the engine exception
                 # cannot follow the refusal through __context__.
@@ -145,11 +148,13 @@ def default_engine() -> Any:
     `tools` package being importable at all; an enabled service that cannot
     import the pilot refuses to start instead of falling back to anything.
     """
+    failed = False
     try:
         from tools.ai_pilot.pilot import Pilot
-    except ImportError as exc:
-        raise ContractError(
-            "the advisory engine tools/ai_pilot is not importable") from exc
+    except ImportError:
+        failed = True
+    if failed:
+        _fail("the advisory engine tools/ai_pilot is not importable")
     # The pilot's own switch stays on: the configuration that enabled the
     # bridge is the outer gate, and a pilot reached any other way refuses.
     return Pilot(enabled=True)
@@ -177,6 +182,8 @@ def _check_text(kind: Any, text: Any) -> None:
     try:
         size = len(text.encode("utf-8"))
     except UnicodeError:
+        size = None
+    if size is None:
         _fail(f"advisory input for {kind} must be encodable as UTF-8")
     if size > MAX_ADVISORY_INPUT_BYTES:
         _fail(f"advisory input for {kind} must be at most "
@@ -191,6 +198,8 @@ def _result(kind: str, answer: Any) -> AdvisoryResult:
     try:
         encoded = answer.encode("utf-8")
     except UnicodeError:
+        encoded = None
+    if encoded is None:
         _fail("advisory output must be encodable as UTF-8")
     if len(encoded) > MAX_ADVISORY_TEXT_BYTES:
         _fail(f"advisory output must be at most {MAX_ADVISORY_TEXT_BYTES} bytes")
