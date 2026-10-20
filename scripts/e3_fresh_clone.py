@@ -11,11 +11,12 @@ roles per `docs/POSTGRES-B1.md` and the C5 operations guide) stays an
 operator stage; the runner only reports its prerequisites and never claims
 it for them.
 
-Every stage ends PASS, FAIL or BLOCKED, and the difference matters: BLOCKED
+Every stage ends PASS, FAIL, BLOCKED or UNKNOWN, and the difference matters: BLOCKED
 names the missing prerequisite on this host (Landlock ABI below 4, no libpq,
 no test DSN), so a sandbox run reads as what it is — a partial run that
 proves the clone, not a failed product and not a passed gate. The overall
-verdict is PASS only when the suite and the demo actually passed here.
+verdict is PASS only when the approved commit, suite and demo actually passed
+here. UNKNOWN means a dependent stage could not run after an earlier stop.
 
 The clone target must not exist yet: reusing a directory would smuggle in
 whatever state made the last attempt look good. Commands run as argv lists
@@ -25,10 +26,12 @@ fresh-clone check executes the clone's code by definition.
 
 Usage (on the target host, from any directory):
     python3 e3_fresh_clone.py --repo https://github.com/Kaancodm/GeniusNew.git \
-        --ref main --dir ~/e3/GeniusNew --protocol ~/e3/PROTOCOL.md
+        --ref main --expect-commit <approved-full-SHA> \
+        --dir ~/e3/GeniusNew --protocol ~/e3/PROTOCOL.md
     GENIUSNEW_TEST_ADMIN_DSN=... (per docs/POSTGRES-B1.md) for the full suite
 
-Exit codes: 0 PASS, 1 FAIL, 2 unusable arguments, 3 BLOCKED.
+Exit codes: 0 PASS, 1 FAIL, 2 unusable arguments/protocol, 3 BLOCKED,
+4 UNKNOWN. The operator must obtain the approved SHA before this run.
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import ctypes.util
+import json
 import os
 import platform
 import re
@@ -49,10 +53,12 @@ from typing import Callable
 PASS = "PASS"
 FAIL = "FAIL"
 BLOCKED = "BLOCKED"
+UNKNOWN = "UNKNOWN"
 INFO = "INFO"
 
 _TAIL_LINES = 12
 _TIMEOUT_SECONDS = 3600
+_COMMIT_SHA = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 # landlock_create_ruleset(2) with LANDLOCK_CREATE_RULESET_VERSION returns the
 # supported ABI; the syscall number is 444 on the architectures the worker
 # filter knows. A probe that cannot answer is reported as 0, never guessed up.
@@ -74,6 +80,7 @@ def _run(command: list[str], *, cwd: Path | None = None,
     try:
         done = subprocess.run(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, text=True,
+                              encoding="utf-8", errors="replace",
                               timeout=_TIMEOUT_SECONDS, check=False)
         return Completed(done.returncode, done.stdout or "")
     except OSError as exc:
@@ -114,8 +121,14 @@ class Environment:
 @dataclass
 class Stage:
     name: str
-    status: str = BLOCKED
+    status: str = UNKNOWN
     evidence: list[str] = field(default_factory=list)
+
+
+def _mark_refusal(stage: Stage, status: str, reason: str) -> None:
+    """Keep a denied stage and its reason together for the protocol."""
+    stage.status = status
+    stage.evidence.append(reason)
 
 
 def _landlock_abi() -> int:
@@ -163,6 +176,8 @@ def verdict(stages: list[Stage]) -> str:
         return FAIL
     if BLOCKED in gated:
         return BLOCKED
+    if not gated or any(status != PASS for status in gated):
+        return UNKNOWN
     return PASS
 
 
@@ -178,7 +193,8 @@ def _stage_command(stage: Stage, Run: Run, command: list[str], *,
     return done
 
 
-def run_e3(*, repo: str, ref: str, target: Path, env_info: Environment,
+def run_e3(*, repo: str, ref: str, expected_sha: str | None = None,
+           target: Path, env_info: Environment,
            Run: Run = _run, python: str = sys.executable) -> tuple[list[Stage], str]:
     """Run every stage; return the stages and the resolved commit (or '')."""
     if target.exists():
@@ -187,6 +203,17 @@ def run_e3(*, repo: str, ref: str, target: Path, env_info: Environment,
     blocked = env_info.blockers()
     stages: list[Stage] = []
     sha = ""
+
+    candidate = Stage("candidate", PASS)
+    stages.append(candidate)
+    if expected_sha is None:
+        _mark_refusal(candidate, BLOCKED, "approved commit SHA is missing")
+    if expected_sha is not None and (not isinstance(expected_sha, str)
+                                     or not _COMMIT_SHA.fullmatch(expected_sha)):
+        _mark_refusal(candidate, FAIL,
+                      "approved commit must be a full lowercase 40/64-digit hex SHA")
+    if candidate.status == PASS:
+        candidate.evidence.append(f"approved commit {expected_sha}")
 
     stages.append(Stage("environment", PASS, [
         f"{env_info.sysname} {env_info.kernel} {env_info.machine}",
@@ -198,20 +225,25 @@ def run_e3(*, repo: str, ref: str, target: Path, env_info: Environment,
 
     clone = Stage("clone")
     stages.append(clone)
-    if "clone" in blocked:
+    if candidate.status != PASS:
+        clone.evidence.append("needs the approved candidate")
+    elif "clone" in blocked:
+        clone.status = BLOCKED
         clone.evidence.append(blocked["clone"])
     else:
         _stage_command(clone, Run, ["git", "clone", "--branch", ref,
                                     "--single-branch", repo, str(target)])
         if clone.status == PASS:
             done = Run(["git", "rev-parse", "HEAD"], cwd=target)
-            candidate = done.output.strip()
-            sha = (candidate if done.returncode == 0
-                   and re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", candidate)
+            resolved = done.output.strip()
+            sha = (resolved if done.returncode == 0
+                   and _COMMIT_SHA.fullmatch(resolved)
                    else "")
             clone.evidence.append(f"HEAD {sha}" if sha else "HEAD unreadable")
             if not sha:
-                clone.status = FAIL
+                _mark_refusal(clone, FAIL, "commit resolution failed or was invalid")
+            if sha and sha != expected_sha:
+                _mark_refusal(clone, FAIL, f"HEAD {sha} != approved {expected_sha}")
 
     install = Stage("install")
     stages.append(install)
@@ -219,8 +251,8 @@ def run_e3(*, repo: str, ref: str, target: Path, env_info: Environment,
     if clone.status != PASS:
         install.evidence.append("needs the clone stage")
     else:
-        made = _stage_command(install, Run, [python, "-m", "venv",
-                                             str(target / ".venv")])
+        _stage_command(install, Run, [python, "-m", "venv",
+                                      str(target / ".venv")])
         if install.status == PASS:
             _stage_command(install, Run, [str(venv_python), "-m", "pip", "install",
                                           "--require-hashes", "-r", "requirements.txt"],
@@ -243,10 +275,11 @@ def run_e3(*, repo: str, ref: str, target: Path, env_info: Environment,
 
     tests = Stage("tests")
     stages.append(tests)
-    if "tests" in blocked:
-        tests.evidence.append(blocked["tests"] + " (docs/POSTGRES-B1.md)")
-    elif install.status != PASS:
+    if install.status != PASS:
         tests.evidence.append("needs the install stage")
+    elif "tests" in blocked:
+        tests.status = BLOCKED
+        tests.evidence.append(blocked["tests"] + " (docs/POSTGRES-B1.md)")
     else:
         _stage_command(tests, Run,
                        [str(venv_python), "-W", "error::ResourceWarning",
@@ -255,10 +288,11 @@ def run_e3(*, repo: str, ref: str, target: Path, env_info: Environment,
 
     demo = Stage("demo")
     stages.append(demo)
-    if "demo" in blocked:
-        demo.evidence.append(blocked["demo"])
-    elif install.status != PASS:
+    if install.status != PASS:
         demo.evidence.append("needs the install stage")
+    elif "demo" in blocked:
+        demo.status = BLOCKED
+        demo.evidence.append(blocked["demo"])
     else:
         env = dict(os.environ)
         env["PATH"] = f"{target / '.venv' / 'bin'}{os.pathsep}{env.get('PATH', '')}"
@@ -275,32 +309,46 @@ def run_e3(*, repo: str, ref: str, target: Path, env_info: Environment,
     return stages, sha
 
 
-def render_protocol(*, repo: str, ref: str, sha: str, when: str,
+def _markdown_field(value: object) -> str:
+    """Keep one untrusted value inside a Markdown line or table cell."""
+    quoted = json.dumps(str(value), ensure_ascii=True)[1:-1]
+    return "".join(f"&#{ord(char)};" if char in "&<>`*_[]|\\#" else char
+                   for char in quoted)
+
+
+def render_protocol(*, repo: str, ref: str, expected_sha: str | None,
+                    sha: str, when: str,
                     env_info: Environment, stages: list[Stage]) -> str:
     """The dated E3 protocol: what ran, what it printed, what it proved."""
     lines = [
-        f"# E3 fresh-clone protocol ({when})",
+        f"# E3 fresh-clone protocol ({_markdown_field(when)})",
         "",
-        f"- Repository: `{repo}`",
-        f"- Ref: `{ref}`",
-        f"- Resolved commit: `{sha or 'NOT RESOLVED'}`",
-        f"- Host: {env_info.sysname} {env_info.kernel} {env_info.machine}, "
-        f"Python {env_info.python}, Landlock ABI {env_info.landlock_abi or 'unknown'}, "
-        f"libpq {env_info.libpq or 'missing'}",
+        f"- Repository: {_markdown_field(repo)}",
+        f"- Ref: {_markdown_field(ref)}",
+        f"- Approved candidate: {_markdown_field(expected_sha or 'NOT PROVIDED')}",
+        f"- Resolved commit: {_markdown_field(sha or 'NOT RESOLVED')}",
+        f"- Host: {_markdown_field(env_info.sysname)} "
+        f"{_markdown_field(env_info.kernel)} {_markdown_field(env_info.machine)}, "
+        f"Python {_markdown_field(env_info.python)}, "
+        f"Landlock ABI {_markdown_field(env_info.landlock_abi or 'unknown')}, "
+        f"libpq {_markdown_field(env_info.libpq or 'missing')}",
         f"- Verdict: **{verdict(stages)}**",
         "",
         "| Stage | Result |",
         "| --- | --- |",
     ]
-    lines.extend(f"| {stage.name} | {stage.status} |" for stage in stages)
+    lines.extend(f"| {_markdown_field(stage.name)} | {_markdown_field(stage.status)} |"
+                 for stage in stages)
     for stage in stages:
-        lines += ["", f"## {stage.name} — {stage.status}", "", "```"]
-        lines.extend(stage.evidence or ["(no output)"])
-        lines.append("```")
+        lines += ["", f"## {_markdown_field(stage.name)} — {_markdown_field(stage.status)}", ""]
+        lines.extend("    " + json.dumps(str(item), ensure_ascii=True)
+                     for item in (stage.evidence or ["(no output)"]))
     lines += [
         "",
         "A PASS verdict covers clone → pinned install → full suite → demo at the",
-        "commit above. The running-service half of gate E3 (own OS users, systemd",
+        "commit above. The expected SHA is supplied by the operator; approval",
+        "outside this runner must be checked against its decision record.",
+        "The running-service half of gate E3 (own OS users, systemd",
         "units, database roles) is the operator stage per `docs/POSTGRES-B1.md`",
         "and the C5 guide and is not claimed by this protocol.",
         "",
@@ -314,6 +362,7 @@ def main(argv: list[str] | None = None, *, Run: Run = _run,
         description="E3 evidence runner: fresh clone, literal steps, protocol.")
     parser.add_argument("--repo", required=True, help="clone URL or local path")
     parser.add_argument("--ref", default="main", help="branch or tag to clone")
+    parser.add_argument("--expect-commit", help="approved full 40/64-digit commit SHA")
     parser.add_argument("--dir", required=True, type=Path,
                         help="clone target; must not exist yet")
     parser.add_argument("--protocol", type=Path,
@@ -321,7 +370,8 @@ def main(argv: list[str] | None = None, *, Run: Run = _run,
     args = parser.parse_args(argv)
     info = env_info or probe_environment()
     try:
-        stages, sha = run_e3(repo=args.repo, ref=args.ref, target=args.dir,
+        stages, sha = run_e3(repo=args.repo, ref=args.ref,
+                             expected_sha=args.expect_commit, target=args.dir,
                              env_info=info, Run=Run)
     except ValueError as exc:
         print(f"e3_fresh_clone: {exc}", file=sys.stderr)
@@ -329,7 +379,8 @@ def main(argv: list[str] | None = None, *, Run: Run = _run,
     if when is None:
         import datetime
         when = datetime.date.today().isoformat()
-    text = render_protocol(repo=args.repo, ref=args.ref, sha=sha, when=when,
+    text = render_protocol(repo=args.repo, ref=args.ref,
+                           expected_sha=args.expect_commit, sha=sha, when=when,
                            env_info=info, stages=stages)
     if args.protocol:
         try:
@@ -342,7 +393,7 @@ def main(argv: list[str] | None = None, *, Run: Run = _run,
         print(f"{stage.name}: {stage.status}")
     result = verdict(stages)
     print(f"E3 fresh-clone verdict: {result} (commit {sha or 'unresolved'})")
-    return {PASS: 0, FAIL: 1, BLOCKED: 3}[result]
+    return {PASS: 0, FAIL: 1, BLOCKED: 3, UNKNOWN: 4}[result]
 
 
 if __name__ == "__main__":
