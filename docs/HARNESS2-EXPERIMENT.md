@@ -12,7 +12,10 @@ HEAD und der offiziellen `origin`-URL. Die Demo liest die Paketdateien aus dem
 Git-Baum und den rohen Blob-Objekten dieses Commits. `git archive` wird nicht
 verwendet, da lokale Git-Attribute dessen Ausgabe verändern können. Änderungen,
 lokale Filter und unversionierte Dateien im Checkout gelangen so nicht in die
-Ausführung. Fehlende Objekte werden nicht über einen Netzabruf ergänzt.
+Ausführung. `git fsck --full --strict` prüft die erreichbaren Commit-, Baum- und
+Blob-Objekte; zusätzlich berechnet der Runner den kanonischen Git-Hash jedes
+gelesenen Paket-Blobs selbst und vergleicht ihn mit dessen Objekt-ID. Beschädigte
+oder fehlende Objekte werden abgelehnt und nicht über einen Netzabruf ergänzt.
 
 ## Lokale Prüfung
 
@@ -41,11 +44,25 @@ und Editor-Aufrufe.
 `demo` startet nur unter `bubblewrap` mit getrennten Benutzer-, Prozess- und
 Netz-Namensräumen. Sichtbar sind ein leeres, schreibgeschütztes Wurzelverzeichnis,
 die System-Python-Laufzeit unter `/usr` (nur lesend), das gepinnte Paket (nur
-lesend) und ein temporäres Ausgabeverzeichnis (schreibbar). Host-Home, `/etc`,
+lesend) und ein privater `/output`-tmpfs mit 16 MiB Grenze. Host-Home, `/etc`,
 `/proc` und `/dev` werden nicht eingebunden; Modell- oder Cloud-Variablen werden
-nicht geerbt. Fehlt `bubblewrap`, kann der Host keine Namensräume anlegen oder
-liegt der Python-Interpreter außerhalb der eingebundenen Laufzeit, verweigert
-das Werkzeug die Demo. `inspect` bleibt als reine Metadatenprüfung möglich.
+nicht geerbt. Der Gast kann nur den geprüften Kurzbericht über eine begrenzte
+Standardausgabe an den Host zurückgeben; Standardausgabe und Fehlerprotokoll
+liegen jeweils bei höchstens 128 KiB. Zusätzlich gelten Grenzen für virtuellen
+Speicher (256 MiB je Prozess), Prozesszahl (16 im Gast), CPU-Zeit (60 s),
+offene Dateien (64) und Dateigröße (128 KiB). Der gesamte Lauf hat eine
+Wartezeitgrenze von 120 s. Der Gast läuft als UID/GID 65534. Die Speichergrenze
+ist keine gruppenweite cgroup-Quote; auf diesem Host ist keine delegierte cgroup
+verfügbar. Der manuelle Versuch verwendet nur die festgelegten, vorher geprüften
+Upstream-Bytes. Fehlt `bubblewrap`, kann der Host keine
+Namensräume anlegen oder liegt der Python-Interpreter außerhalb der eingebundenen
+Laufzeit, verweigert das Werkzeug die Demo. `inspect` bleibt als reine
+Metadatenprüfung möglich. Der Ergebnisbericht wird nur als begrenzte reguläre
+Datei und ohne Verfolgung von Symlinks gelesen; eine FIFO wird ohne blockierendes
+Öffnen abgelehnt.
+
+`bubblewrap` ist eine zusätzliche Systemvoraussetzung für die optionale Demo;
+über ihre Einführung in die Projektumgebung entscheidet Kaan vor einem Merge.
 
 Benchmark-Setup, Modellzugänge, autonome Codeänderungen und Übernahme eines
 vorgeschlagenen Harnesses in GeniusNew sind nicht Teil dieses Experiments.

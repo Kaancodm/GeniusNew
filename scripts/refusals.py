@@ -77,12 +77,14 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/__main__.py", "geniusnew/database.py",
            "geniusnew/audit_store.py", "tools/control_deck/actions.py",
            "tools/ipad_llm.py", "tools/ai_pilot/pilot.py",
+           "tools/harness2_experiment.py",
            "ops/server/genius-server", "scripts/demo_restore.py")
 
 # Guarded shell scripts and the one test module that runs each of them.
 GUARDED_SHELL = {"ops/server/genius-server": "test_server_tool.py"}
 GUARDED_TOOL_TESTS = {"tools/ipad_llm.py": "test_ipad_llm.py",
-                      "tools/ai_pilot/pilot.py": "test_ai_pilot.py"}
+                      "tools/ai_pilot/pilot.py": "test_ai_pilot.py",
+                      "tools/harness2_experiment.py": "test_harness2_experiment.py"}
 
 # Mutants run the tests that exercise each boundary. The unmutated baseline
 # still runs all tests; every selected test file must pass for a mutation to
@@ -143,7 +145,7 @@ _SHELL_DIE = re.compile(r'(?<![\w-])die(\s+")')
 # the same day the module joins GUARDED.
 _REFUSAL_CALLS = {"_fail", "_deny"}
 _REFUSAL_RAISES = {"ContractError", "Rejected", "GatewayRejected", "AgentStartRefused",
-                   "WorkerBoundaryError", "_OccupiedCgroup"}
+                   "WorkerBoundaryError", "_OccupiedCgroup", "ExperimentError"}
 _REFUSAL_RETURNS = {"_refusal"}
 
 

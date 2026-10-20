@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+import io
+import os
+import resource
 import subprocess
+import sys
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from tools import harness2_experiment
 
@@ -65,14 +70,13 @@ class Harness2ExperimentTest(unittest.TestCase):
 
     def test_runs_committed_demo_even_if_checkout_files_change(self):
         (self.source / "harness2/cli/demo.py").write_text("raise RuntimeError('dirty checkout ran')\n")
-        def fake_runner(rootfs: Path, package_root: Path, output_root: Path) -> None:
+        def fake_runner(rootfs: Path, package_root: Path, output_root: Path) -> dict[str, int]:
             self.assertEqual((rootfs / "lib").readlink(), Path("usr/lib"))
             self.assertEqual((package_root / "harness2/cli/demo.py").read_text(), _FAKE_DEMO)
-            report = output_root / "demo/demo.json"
-            report.parent.mkdir(parents=True)
-            report.write_text(json.dumps({
+            self.assertEqual(list(output_root.iterdir()), [])
+            return {
                 "done": 2, "failed": 0, "execution_count": 4, "editor_calls": 3,
-            }))
+            }
 
         with patch.object(harness2_experiment, "_run_sandboxed_demo", side_effect=fake_runner):
             result = harness2_experiment.run_demo(self.source)
@@ -100,17 +104,25 @@ class Harness2ExperimentTest(unittest.TestCase):
         with self.assertRaisesRegex(harness2_experiment.ExperimentError, "checkout root"):
             harness2_experiment.verify_source(self.source / "harness2")
 
+    def test_git_output_is_rejected_at_the_read_limit(self):
+        with self.assertRaisesRegex(harness2_experiment.ExperimentError, "limit"):
+            harness2_experiment._git_bytes(self.source, "rev-parse", "HEAD", max_bytes=1)
+
     def test_sandbox_command_is_closed_to_host_and_network(self):
         command = harness2_experiment._sandbox_command(
-            Path("/tmp/rootfs"), Path("/tmp/package"), Path("/tmp/output"),
+            Path("/tmp/rootfs"), Path("/tmp/package"),
             Path("/usr/bin/python3.13"), "/usr/bin/bwrap",
         )
         self.assertIn("--unshare-all", command)
         self.assertIn("--unshare-user", command)
         self.assertIn("--disable-userns", command)
+        self.assertEqual(command[command.index("--uid"):command.index("--uid") + 4], [
+            "--uid", "65534", "--gid", "65534",
+        ])
         self.assertIn("--die-with-parent", command)
         self.assertIn("--clearenv", command)
         self.assertNotIn("--share-net", command)
+        self.assertNotIn("--bind", command)
         self.assertNotIn("/home/kaan", command)
         mounts = [command[index:index + 3] for index, item in enumerate(command)
                   if item in ("--ro-bind", "--bind")]
@@ -118,10 +130,35 @@ class Harness2ExperimentTest(unittest.TestCase):
             ["--ro-bind", "/tmp/rootfs", "/"],
             ["--ro-bind", "/usr", "/usr"],
             ["--ro-bind", "/tmp/package", "/source"],
-            ["--bind", "/tmp/output", "/output"],
+            ["--ro-bind", str(Path(harness2_experiment.__file__).resolve()), "/runner.py"],
+        ])
+        self.assertEqual(command[command.index("--size"):command.index("--size") + 4], [
+            "--size", str(harness2_experiment._OUTPUT_TMPFS_BYTES), "--tmpfs", "/output",
         ])
         self.assertNotIn("/proc", command)
         self.assertNotIn("/dev", command)
+
+    def test_guest_resource_limits_are_inherited_by_sandbox_process(self):
+        probe = (
+            "import json, resource\n"
+            "names = ('RLIMIT_FSIZE', 'RLIMIT_AS', 'RLIMIT_NOFILE', 'RLIMIT_CPU', 'RLIMIT_CORE')\n"
+            "print(json.dumps({name: resource.getrlimit(getattr(resource, name))[0] "
+            "for name in names}))\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            preexec_fn=harness2_experiment._limit_guest_resources,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+        limits = json.loads(result.stdout)
+        self.assertLessEqual(limits["RLIMIT_FSIZE"], harness2_experiment._MAX_LOG_BYTES)
+        self.assertLessEqual(limits["RLIMIT_AS"], harness2_experiment._MAX_ADDRESS_SPACE_BYTES)
+        self.assertLessEqual(limits["RLIMIT_NOFILE"], 64)
+        self.assertLessEqual(limits["RLIMIT_CPU"], 60)
+        self.assertEqual(limits["RLIMIT_CORE"], 0)
 
     def test_missing_sandbox_is_rejected(self):
         with patch.object(harness2_experiment.shutil, "which", return_value=None):
@@ -129,6 +166,60 @@ class Harness2ExperimentTest(unittest.TestCase):
                 harness2_experiment._run_sandboxed_demo(
                     Path("/tmp/rootfs"), Path("/tmp/package"), Path("/tmp/output")
                 )
+
+    def test_unsupported_python_and_outside_interpreter_are_rejected_before_spawn(self):
+        output = Path(self.temporary.name) / "output"
+        output.mkdir()
+        with (patch.object(harness2_experiment.shutil, "which", return_value="/usr/bin/bwrap"),
+              patch.object(harness2_experiment.subprocess, "Popen",
+                           side_effect=AssertionError("sandbox launched"))):
+            with patch.object(harness2_experiment.sys, "version_info", (3, 11)):
+                with self.assertRaisesRegex(harness2_experiment.ExperimentError, "3.12 or 3.13"):
+                    harness2_experiment._run_sandboxed_demo(
+                        Path("/tmp/rootfs"), Path("/tmp/package"), output
+                    )
+            outside = Path(self.temporary.name) / "python"
+            outside.write_bytes(b"fake")
+            with (patch.object(harness2_experiment.sys, "version_info", (3, 13)),
+                  patch.object(harness2_experiment.sys, "executable", str(outside))):
+                with self.assertRaisesRegex(harness2_experiment.ExperimentError, "outside"):
+                    harness2_experiment._run_sandboxed_demo(
+                        Path("/tmp/rootfs"), Path("/tmp/package"), output
+                    )
+
+    def test_sandbox_failure_is_rejected_even_with_success_shaped_stdout(self):
+        output = Path(self.temporary.name) / "output"
+        output.mkdir()
+        payload = json.dumps({
+            "done": 2, "failed": 0, "execution_count": 4, "editor_calls": 3,
+        }).encode()
+
+        def fake_popen(*arguments, stdout, stderr, **kwargs):
+            stdout.write(payload)
+            stderr.write(b"child failed")
+            process = Mock()
+            process.wait.return_value = 1
+            return process
+
+        with (patch.object(harness2_experiment.shutil, "which", return_value="/usr/bin/bwrap"),
+              patch.object(harness2_experiment.sys, "version_info", (3, 13)),
+              patch.object(harness2_experiment.sys, "executable", "/usr/bin/python3"),
+              patch.object(harness2_experiment.subprocess, "Popen", side_effect=fake_popen)):
+            with self.assertRaisesRegex(harness2_experiment.ExperimentError, "child failed"):
+                harness2_experiment._run_sandboxed_demo(
+                    Path("/tmp/rootfs"), Path("/tmp/package"), output
+                )
+
+    def test_guest_upstream_failure_does_not_emit_a_report(self):
+        report = {"done": 2, "failed": 0, "execution_count": 4, "editor_calls": 3}
+        with (patch.object(harness2_experiment.resource, "setrlimit") as setrlimit,
+              patch.object(Path, "open", return_value=io.BytesIO(b"child failed")),
+              patch.object(harness2_experiment.subprocess, "run",
+                           return_value=subprocess.CompletedProcess([], 1)),
+              patch.object(harness2_experiment, "_read_demo_report", return_value=report)):
+            with self.assertRaisesRegex(harness2_experiment.ExperimentError, "child failed"):
+                harness2_experiment._guest_demo()
+            setrlimit.assert_called_once_with(resource.RLIMIT_NPROC, (16, 16))
 
     def test_git_tree_rejects_a_symlink(self):
         (self.source / "harness2/cli/external.py").symlink_to("/tmp/outside.py")
@@ -148,6 +239,41 @@ class Harness2ExperimentTest(unittest.TestCase):
             with self.assertRaisesRegex(harness2_experiment.ExperimentError, "unexpected"):
                 harness2_experiment._extract_package(self.source, Path(self.temporary.name) / "copy")
 
+    def test_git_tree_rejects_missing_terminator(self):
+        original = harness2_experiment._git_bytes
+
+        def without_terminator(source, *arguments, **kwargs):
+            result = original(source, *arguments, **kwargs)
+            return result[:-1] if arguments[0] == "ls-tree" else result
+
+        with patch.object(harness2_experiment, "_git_bytes", side_effect=without_terminator):
+            with self.assertRaisesRegex(harness2_experiment.ExperimentError, "incomplete"):
+                harness2_experiment._extract_package(
+                    self.source, Path(self.temporary.name) / "truncated-copy"
+                )
+
+    def test_git_tree_rejects_too_many_files(self):
+        for number in range(harness2_experiment._MAX_FILES):
+            (self.source / "harness2" / f"extra-{number:03}.txt").write_text("x")
+        _git(self.source, "add", "harness2")
+        _git(self.source, "commit", "-qm", "Too many files")
+        with patch.object(harness2_experiment, "UPSTREAM_COMMIT", _git(self.source, "rev-parse", "HEAD")):
+            with self.assertRaisesRegex(harness2_experiment.ExperimentError, "too many files"):
+                harness2_experiment._extract_package(
+                    self.source, Path(self.temporary.name) / "many-copy"
+                )
+
+    def test_git_tree_rejects_too_many_total_bytes(self):
+        for number in range(5):
+            (self.source / "harness2" / f"large-{number}.bin").write_bytes(b"x" * 900_000)
+        _git(self.source, "add", "harness2")
+        _git(self.source, "commit", "-qm", "Too much package data")
+        with patch.object(harness2_experiment, "UPSTREAM_COMMIT", _git(self.source, "rev-parse", "HEAD")):
+            with self.assertRaisesRegex(harness2_experiment.ExperimentError, "package exceeds"):
+                harness2_experiment._extract_package(
+                    self.source, Path(self.temporary.name) / "large-copy"
+                )
+
     def test_local_attributes_cannot_filter_pinned_blobs(self):
         marker = Path(self.temporary.name) / "filter-ran"
         filter_script = Path(self.temporary.name) / "filter.py"
@@ -163,6 +289,23 @@ class Harness2ExperimentTest(unittest.TestCase):
         harness2_experiment._extract_package(self.source, copy)
         self.assertEqual((copy / "harness2/cli/demo.py").read_text(), _FAKE_DEMO)
         self.assertFalse(marker.exists())
+
+    def test_tampered_loose_blob_is_rejected_even_if_git_returns_its_bytes(self):
+        oid = _git(self.source, "rev-parse", "HEAD:harness2/cli/demo.py")
+        object_path = self.source / ".git/objects" / oid[:2] / oid[2:]
+        header, content = zlib.decompress(object_path.read_bytes()).split(b"\0", 1)
+        tampered = content.replace(b"'done': 2", b"'done': 9")
+        self.assertNotEqual(tampered, content)
+        self.assertEqual(len(tampered), len(content))
+        object_path.chmod(0o600)
+        object_path.write_bytes(zlib.compress(header + b"\0" + tampered))
+        self.assertIn("'done': 9", _git(self.source, "cat-file", "blob", oid))
+        with self.assertRaisesRegex(harness2_experiment.ExperimentError, "blob hash"):
+            harness2_experiment._extract_package(
+                self.source, Path(self.temporary.name) / "tampered-copy"
+            )
+        with self.assertRaisesRegex(harness2_experiment.ExperimentError, "fsck"):
+            harness2_experiment.verify_source(self.source)
 
     def test_report_rejects_symlinks_and_invalid_counters(self):
         output = Path(self.temporary.name) / "output"
@@ -192,6 +335,51 @@ class Harness2ExperimentTest(unittest.TestCase):
         report.write_bytes(b"x" * (harness2_experiment._MAX_REPORT_BYTES + 1))
         with self.assertRaisesRegex(harness2_experiment.ExperimentError, "bounded"):
             harness2_experiment._read_demo_report(output)
+
+    def test_fifo_report_is_rejected_without_blocking(self):
+        output = Path(self.temporary.name) / "output"
+        demo = output / "demo"
+        demo.mkdir(parents=True)
+        os.mkfifo(demo / "demo.json")
+        probe = (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "from tools import harness2_experiment as h\n"
+            "try:\n"
+            "    h._read_demo_report(Path(sys.argv[1]))\n"
+            "except h.ExperimentError:\n"
+            "    print('rejected')\n"
+            "else:\n"
+            "    raise SystemExit('FIFO accepted')\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", probe, str(output)],
+            cwd=Path(__file__).resolve().parents[1],
+            env=harness2_experiment._git_environment(),
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "rejected")
+
+    def test_report_rejects_deep_json_without_recursion_crash(self):
+        with patch.object(harness2_experiment.json, "loads", side_effect=RecursionError):
+            with self.assertRaisesRegex(harness2_experiment.ExperimentError, "invalid JSON"):
+                harness2_experiment._parse_demo_report(b"[]")
+        with self.assertRaisesRegex(harness2_experiment.ExperimentError, "invalid JSON"):
+            harness2_experiment._parse_demo_report(b"\xff")
+
+    def test_report_rejects_large_valid_json_wrong_shape_and_incomplete_demo(self):
+        valid = {"done": 2, "failed": 0, "execution_count": 4, "editor_calls": 3}
+        padded = {**valid, "padding": "x" * harness2_experiment._MAX_REPORT_BYTES}
+        with self.assertRaisesRegex(harness2_experiment.ExperimentError, "exceeds"):
+            harness2_experiment._parse_demo_report(json.dumps(padded).encode())
+        with self.assertRaisesRegex(harness2_experiment.ExperimentError, "not an object"):
+            harness2_experiment._parse_demo_report(b"[]")
+        with self.assertRaisesRegex(harness2_experiment.ExperimentError, "did not complete"):
+            harness2_experiment._parse_demo_report(json.dumps({**valid, "done": 1}).encode())
 
 
 if __name__ == "__main__":

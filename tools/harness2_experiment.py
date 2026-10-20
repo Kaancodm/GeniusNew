@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+from functools import partial
+import hashlib
 import json
 import os
 import re
+import resource
 import shutil
 import signal
 import stat
@@ -22,11 +25,14 @@ _MAX_FILE_BYTES = 1024 * 1024
 _MAX_PACKAGE_BYTES = 4 * 1024 * 1024
 _MAX_TREE_BYTES = 64 * 1024
 _MAX_REPORT_BYTES = 64 * 1024
+_MAX_LOG_BYTES = 128 * 1024
+_OUTPUT_TMPFS_BYTES = 16 * 1024 * 1024
+_MAX_ADDRESS_SPACE_BYTES = 256 * 1024 * 1024
+_MAX_PROCESSES = 16
 _DEMO_CODE = (
-    "import sys; "
-    "sys.path.insert(0, sys.argv[1]); "
+    "import sys; sys.path.insert(0, '/source'); "
     "from harness2.cli.demo import main; "
-    "raise SystemExit(main(sys.argv[2:]))"
+    "raise SystemExit(main(['--output', '/output/demo', '--k', '1', '--mode', 'both']))"
 )
 
 
@@ -36,22 +42,44 @@ class ExperimentError(Exception):
 
 def _git_bytes(source: Path, *args: str, max_bytes: int = 16 * 1024) -> bytes:
     try:
-        result = subprocess.run(
-            ["git", "--no-replace-objects", "-C", str(source), *args],
-            capture_output=True,
-            timeout=15,
-            check=False,
-            stdin=subprocess.DEVNULL,
-            env=_git_environment(),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+            process = subprocess.Popen(
+                ["git", "--no-replace-objects", "-C", str(source), *args],
+                stdin=subprocess.DEVNULL,
+                stdout=stdout,
+                stderr=stderr,
+                env=_git_environment(),
+                start_new_session=True,
+                preexec_fn=partial(_limit_git_file_size, max(max_bytes, 16 * 1024)),
+            )
+            try:
+                returncode = process.wait(timeout=15)
+            except subprocess.TimeoutExpired as exc:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+                raise ExperimentError("git command timed out") from exc
+            stdout.seek(0)
+            data = stdout.read(max_bytes + 1)
+            stderr.seek(0)
+            error = stderr.read(16 * 1024)
+    except (OSError, subprocess.SubprocessError) as exc:
         raise ExperimentError(f"git unavailable: {exc}") from exc
-    if result.returncode:
-        detail = result.stderr.decode(errors="replace")[-500:].strip()
-        raise ExperimentError(f"git {' '.join(args)} failed: {detail}")
-    if len(result.stdout) > max_bytes:
+    if len(data) > max_bytes:
         raise ExperimentError("git object exceeds the experiment limit")
-    return result.stdout
+    if returncode:
+        detail = _safe_detail(error)
+        raise ExperimentError(f"git {' '.join(args)} failed: {detail}")
+    return data
+
+
+def _limit_git_file_size(max_bytes: int) -> None:
+    hard = resource.getrlimit(resource.RLIMIT_FSIZE)[1]
+    bound = min(max_bytes + 1, hard) if hard != resource.RLIM_INFINITY else max_bytes + 1
+    resource.setrlimit(resource.RLIMIT_FSIZE, (bound, bound))
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
 
 def _git(source: Path, *args: str) -> str:
@@ -75,20 +103,24 @@ def _git_environment() -> dict[str, str]:
     }
 
 
+def _safe_detail(raw: bytes, limit: int = 500) -> str:
+    return "".join(char if 32 <= ord(char) < 127 else "?"
+                   for char in raw[-limit:].decode(errors="replace")).strip()
+
+
 def verify_source(source: Path) -> Path:
     """Require the official remote and exact pinned checkout before reading objects."""
     try:
         source = source.expanduser().resolve(strict=True)
     except OSError as exc:
         raise ExperimentError(f"source unavailable: {exc}") from exc
-    if not source.is_dir():
-        raise ExperimentError("source must be a directory")
     if Path(_git(source, "rev-parse", "--show-toplevel")).resolve() != source:
         raise ExperimentError("source must be the checkout root")
     if _git(source, "remote", "get-url", "origin") != UPSTREAM_URL:
         raise ExperimentError("source origin is not the official Harness² repository")
     if _git(source, "rev-parse", "HEAD") != UPSTREAM_COMMIT:
         raise ExperimentError(f"source HEAD must be {UPSTREAM_COMMIT}")
+    _git(source, "fsck", "--full", "--strict", "--no-reflogs", UPSTREAM_COMMIT)
     return source
 
 
@@ -133,24 +165,30 @@ def _extract_package(source: Path, destination: Path) -> None:
             raise ExperimentError("pinned package exceeds the experiment limit")
         seen.add(path)
         content = _git_bytes(source, "cat-file", "blob", oid, max_bytes=size)
-        if len(content) != size:
-            raise ExperimentError("pinned blob size does not match its tree entry")
+        canonical = b"blob " + str(size).encode("ascii") + b"\0" + content
+        if hashlib.sha1(canonical).hexdigest() != oid:
+            raise ExperimentError("pinned blob hash does not match its object ID")
         target = destination.joinpath(*path.parts)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(content)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        except OSError as exc:
+            raise ExperimentError(f"cannot extract pinned package: {exc}") from exc
 
 
-def _sandbox_command(
-    rootfs: Path, package_root: Path, output_root: Path, python: Path, bwrap: str
-) -> list[str]:
-    """Expose only a read-only Python runtime, package, and disposable output."""
+def _sandbox_command(rootfs: Path, package_root: Path, python: Path, bwrap: str) -> list[str]:
+    """Bound guest writes to private tmpfs and the capped log descriptors."""
     return [
         bwrap, "--unshare-all", "--unshare-user", "--disable-userns",
+        "--uid", "65534", "--gid", "65534",
         "--die-with-parent", "--new-session", "--clearenv",
         "--ro-bind", str(rootfs), "/",
         "--ro-bind", "/usr", "/usr",
         "--ro-bind", str(package_root), "/source",
-        "--bind", str(output_root), "/output",
+        "--ro-bind", str(Path(__file__).resolve()), "/runner.py",
+        "--size", str(_OUTPUT_TMPFS_BYTES), "--tmpfs", "/output",
+        "--dir", "/output/home",
+        "--dir", "/output/tmp",
         "--chdir", "/output",
         "--setenv", "PATH", "/usr/bin:/bin",
         "--setenv", "HOME", "/output/home",
@@ -159,8 +197,7 @@ def _sandbox_command(
         "--setenv", "TMPDIR", "/output/tmp",
         "--setenv", "LANG", "C.UTF-8",
         "--setenv", "PYTHONDONTWRITEBYTECODE", "1",
-        "--", str(python), "-I", "-B", "-c", _DEMO_CODE, "/source",
-        "--output", "/output/demo", "--k", "1", "--mode", "both",
+        "--", str(python), "-I", "-B", "/runner.py", "--guest-demo",
     ]
 
 
@@ -169,9 +206,50 @@ def _prepare_rootfs(rootfs: Path) -> None:
         (rootfs / directory).mkdir(parents=True)
     (rootfs / "lib").symlink_to("usr/lib", target_is_directory=True)
     (rootfs / "lib64").symlink_to("usr/lib64", target_is_directory=True)
+    (rootfs / "runner.py").touch()
 
 
-def _run_sandboxed_demo(rootfs: Path, package_root: Path, output_root: Path) -> None:
+def _limit_guest_resources() -> None:
+    """Limit inherited descriptors and processes before executing bubblewrap."""
+    limits = (
+        (resource.RLIMIT_FSIZE, _MAX_LOG_BYTES),
+        (resource.RLIMIT_AS, _MAX_ADDRESS_SPACE_BYTES),
+        (resource.RLIMIT_NOFILE, 64),
+        (resource.RLIMIT_CPU, 60),
+        (resource.RLIMIT_CORE, 0),
+    )
+    for kind, target in limits:
+        hard = resource.getrlimit(kind)[1]
+        bound = min(target, hard) if hard != resource.RLIM_INFINITY else target
+        resource.setrlimit(kind, (bound, bound))
+
+
+def _guest_demo() -> int:
+    """Run only inside the bwrap guest and return a validated small report."""
+    resource.setrlimit(resource.RLIMIT_NPROC, (_MAX_PROCESSES, _MAX_PROCESSES))
+    with (Path("/output/upstream.log")).open("xb+") as log:
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", "-c", _DEMO_CODE],
+            input=b"",
+            stdout=log,
+            stderr=log,
+            timeout=90,
+            check=False,
+            close_fds=True,
+        )
+        if result.returncode:
+            log.seek(0)
+            raise ExperimentError(
+                f"upstream demo failed ({result.returncode}): {_safe_detail(log.read(1000), 1000)}"
+            )
+    report = _read_demo_report(Path("/output"))
+    print(json.dumps(report, sort_keys=True))
+    return 0
+
+
+def _run_sandboxed_demo(
+    rootfs: Path, package_root: Path, output_root: Path
+) -> dict[str, int]:
     bwrap = shutil.which("bwrap", path=os.defpath)
     if bwrap is None:
         raise ExperimentError("bubblewrap sandbox is unavailable")
@@ -180,7 +258,7 @@ def _run_sandboxed_demo(rootfs: Path, package_root: Path, output_root: Path) -> 
     python = Path(sys.executable).resolve()
     if not python.is_file() or not python.is_relative_to(Path("/usr")):
         raise ExperimentError("Python interpreter is outside the sandbox runtime")
-    command = _sandbox_command(rootfs, package_root, output_root, python, bwrap)
+    command = _sandbox_command(rootfs, package_root, python, bwrap)
     with (
         (output_root / "stdout.log").open("xb+") as stdout,
         (output_root / "stderr.log").open("xb+") as stderr,
@@ -193,8 +271,9 @@ def _run_sandboxed_demo(rootfs: Path, package_root: Path, output_root: Path) -> 
                 stderr=stderr,
                 env={"PATH": os.defpath},
                 start_new_session=True,
+                preexec_fn=_limit_guest_resources,
             )
-        except OSError as exc:
+        except (OSError, subprocess.SubprocessError) as exc:
             raise ExperimentError(f"cannot start sandbox: {exc}") from exc
         try:
             returncode = process.wait(timeout=120)
@@ -207,8 +286,10 @@ def _run_sandboxed_demo(rootfs: Path, package_root: Path, output_root: Path) -> 
             raise ExperimentError("sandboxed demo timed out") from exc
         if returncode:
             stderr.seek(0)
-            detail = stderr.read(1000).decode(errors="replace").strip()
+            detail = _safe_detail(stderr.read(1000), 1000)
             raise ExperimentError(f"sandboxed demo failed ({returncode}): {detail}")
+        stdout.seek(0)
+        return _parse_demo_report(stdout.read(_MAX_REPORT_BYTES + 1))
 
 
 def _read_demo_report(output_root: Path) -> dict[str, int]:
@@ -219,7 +300,7 @@ def _read_demo_report(output_root: Path) -> dict[str, int]:
             demo_fd = os.open("demo", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
                               dir_fd=root_fd)
             try:
-                report_fd = os.open("demo.json", os.O_RDONLY | os.O_NOFOLLOW,
+                report_fd = os.open("demo.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                                     dir_fd=demo_fd)
                 with os.fdopen(report_fd, "rb") as report_file:
                     info = os.fstat(report_file.fileno())
@@ -232,11 +313,15 @@ def _read_demo_report(output_root: Path) -> dict[str, int]:
             os.close(root_fd)
     except OSError as exc:
         raise ExperimentError(f"demo report unavailable: {exc}") from exc
+    return _parse_demo_report(data)
+
+
+def _parse_demo_report(data: bytes) -> dict[str, int]:
     if len(data) > _MAX_REPORT_BYTES:
         raise ExperimentError("demo report exceeds the experiment limit")
     try:
         report = json.loads(data)
-    except ValueError as exc:
+    except (ValueError, UnicodeError, RecursionError) as exc:
         raise ExperimentError(f"demo report is invalid JSON: {exc}") from exc
     if not isinstance(report, dict):
         raise ExperimentError("demo report is not an object")
@@ -259,13 +344,10 @@ def run_demo(source: Path) -> dict[str, int | str]:
         _extract_package(source, package_root)
         output = root / "output"
         output.mkdir()
-        (output / "home").mkdir()
-        (output / "tmp").mkdir()
         rootfs = root / "rootfs"
         _prepare_rootfs(rootfs)
-        _run_sandboxed_demo(rootfs, package_root, output)
-        return {"upstream_commit": UPSTREAM_COMMIT,
-                **_read_demo_report(output)}
+        report = _run_sandboxed_demo(rootfs, package_root, output)
+        return {"upstream_commit": UPSTREAM_COMMIT, **report}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -286,4 +368,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--guest-demo"]:
+        raise SystemExit(_guest_demo())
     raise SystemExit(main())
