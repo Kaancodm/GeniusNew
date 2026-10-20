@@ -169,6 +169,7 @@ Siehe:
 - `docs/GATEWAY-V01.md`
 - `docs/ROADMAP-V01.md`
 - `docs/ROADMAP-V02.md` — Gates bis technisch beta-ready (v0.2)
+- `docs/HARNESS2-EXPERIMENT.md` — gepinnte lokale Harness²-Demo ohne Modellzugang
 
 ## Betrieb als Dienst
 
