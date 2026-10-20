@@ -87,8 +87,24 @@ class TextDigestTest(unittest.TestCase):
         # No ranked keywords: the fallback must not consume the 6,000-char budget.
         text = ("der " * 1700).strip() + "."
         digest = render_digest(text)
+        core = digest.split("## Kern in Sätzen\n\n", 1)[1].split("\n\n", 1)[0]
+        self.assertLessEqual(len(core), 320)
+        self.assertLessEqual(len(digest), 6000)
         self.assertIn("## Kennzahlen", digest)
-        self.assertNotIn("Gekürzt", digest)
+        self.assertIn("- Wörter: 1.700\n", digest)
+        self.assertIn("- Sätze: 1\n", digest)
+        self.assertNotIn("[gekürzt]", digest)
+        self.assertTrue(core.endswith(" …"))
+        self.assertTrue(text.startswith(core[:-2]))
+
+    def test_stopword_only_fallback_at_or_below_limit_is_unchanged(self):
+        for text in ("Der und die.", ("der " * 80).strip() + "."):
+            with self.subTest(length=len(text)):
+                digest = render_digest(text)
+                core = digest.split("## Kern in Sätzen\n\n", 1)[1].split("\n\n", 1)[0]
+                self.assertEqual(core, text)
+                self.assertIn("## Kennzahlen", digest)
+                self.assertNotIn("[gekürzt]", digest)
 
     def test_the_tool_is_registered_for_the_server(self):
         self.assertIs(BUILTIN_WORKERS["digest"], TextDigest)
