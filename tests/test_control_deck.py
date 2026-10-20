@@ -8,6 +8,7 @@ import os
 import re
 import runpy
 import shlex
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -71,19 +72,25 @@ class ControlDeckTest(unittest.TestCase):
 
     @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
     @patch("tools.control_deck.checks.tool_status", return_value={"status": "green"})
-    def test_merged_code_keeps_missing_review_and_operational_evidence_open(self, _tools, _run):
+    def test_merged_code_keeps_review_conditions_and_operational_evidence_open(self, _tools, _run):
         """Keep review and operational holds open despite merged implementations."""
         snapshot = checks.snapshot(checks.DEFAULT_REPO)
         gates = {gate["id"]: gate for gate in snapshot["gates"]}
-        for gate in ("B4", "B5", "A2", "C2", "C3", "C5"):
+        for gate in ("B4", "B5", "A2", "C2", "C5"):
             self.assertEqual(gates[gate]["status"], "yellow")
             self.assertIn("HOLD", gates[gate]["detail"])
+        self.assertEqual(gates["C3"]["status"], "green")
         self.assertEqual(gates["E1"]["status"], "green")
         self.assertEqual(gates["C5"]["implementation_status"], "green")
         for gate in ("B4", "B5"):
-            self.assertIn("erforderlicher Claude-DB-Review am PR-Head nicht nachgewiesen", gates[gate]["detail"])
-            self.assertIn("Nachprüfung auf main 7f81e24 dokumentiert", gates[gate]["detail"])
-            self.assertNotIn("vorhanden", gates[gate]["detail"])
+            self.assertIn("Pro-Modell-Anerkennung offen", gates[gate]["detail"])
+            self.assertIn("durchgeführt", gates[gate]["detail"])
+            self.assertNotIn("Gemini-Sicherheitsreview zu B4/B5 noch offen", gates[gate]["detail"])
+            self.assertIn("E2-Gesamtreview noch offen", gates[gate]["detail"])
+            self.assertNotIn("Claude-DB-Review am PR-Head", gates[gate]["detail"])
+        self.assertIn("historische Testabdeckung FAIL", gates["B4"]["detail"])
+        self.assertIn("heutige B4-Restabdeckung im E2 zu klären", gates["B4"]["detail"])
+        self.assertIn("ohne Befund", gates["B5"]["detail"])
         state = snapshot["project"]
         self.assertGreater(state["merged_gates"],
                            sum(gate["status"] == "green" for gate in gates.values()))
@@ -94,22 +101,17 @@ class ControlDeckTest(unittest.TestCase):
 
     @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
     @patch("tools.control_deck.checks.tool_status", return_value={"status": "green"})
-    def test_merged_c3_stays_on_hold_until_its_head_review_is_evidenced(self, _tools, _run):
-        """Keep C3 on hold and link its PR while the required head review is missing."""
+    def test_merged_c3_uses_its_documented_head_review(self, _tools, _run):
+        """Do not reopen C3 after its head review was documented in decisions."""
         gates = checks.snapshot(checks.DEFAULT_REPO)["gates"]
         c3 = next(gate for gate in gates if gate["id"] == "C3")
         self.assertEqual(c3["implementation_status"], "green")
-        self.assertEqual(c3["status"], "yellow")
-        self.assertIn("PR #111", c3["detail"])
-        self.assertIn("HOLD", c3["detail"])
-        self.assertIn("Claude-DB-Review am PR-Head nicht nachgewiesen", c3["detail"])
-        self.assertNotIn("7f81e24", c3["detail"])
+        self.assertEqual(c3["status"], "green")
+        self.assertNotIn("HOLD", c3["detail"])
         tools = {name: {"status": "green"} for name in ("codex", "gh", "gemini")}
         project = checks.project_resume([c3], tools, checks.DEFAULT_REPO)
-        self.assertEqual(project["focus"], "C3 – Approver-HTTP-Route")
-        self.assertEqual(project["resume"][0]["type"], "url")
-        self.assertEqual(project["resume"][0]["value"],
-                         "https://github.com/Kaancodm/GeniusNew/pull/111")
+        self.assertEqual(project["focus"], "Implementierungen auf main nachgewiesen")
+        self.assertEqual(project["resume"], [])
 
 
     @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
@@ -122,6 +124,20 @@ class ControlDeckTest(unittest.TestCase):
         self.assertIn("nicht live abgefragt", project["ci"]["detail"])
         self.assertIn("Lokaler origin/main-Stand", project["evidence_note"])
         self.assertIn("keine Live-Abfrage", project["evidence_note"])
+
+
+    def test_unavailable_main_ref_never_becomes_commit_evidence(self):
+        """Discard failed Git output instead of publishing it as a commit hash."""
+        tools = {name: {"status": "green"} for name in ("codex", "gh", "gemini")}
+        for result in ((128, "fatal: PRIVATE-GIT-ERROR-CANARY"), (127, ""), (0, "")):
+            with self.subTest(result=result), patch.object(checks, "_run", return_value=result):
+                project = checks.project_resume([], tools, checks.DEFAULT_REPO)
+                self.assertEqual(project["main_head"], "")
+                self.assertFalse(project["release_ready"])
+                self.assertNotIn("PRIVATE-GIT-ERROR-CANARY", json.dumps(project))
+        with patch.object(checks, "_run", return_value=(0, "a" * 12)):
+            project = checks.project_resume([], tools, checks.DEFAULT_REPO)
+        self.assertEqual(project["main_head"], "a" * 12)
 
 
     def test_commands_follow_selected_checkout_including_spaces(self):
@@ -264,6 +280,23 @@ class ControlDeckTest(unittest.TestCase):
             actions.run_action("rm_everything")
 
     @patch("tools.control_deck.actions.subprocess.run")
+    def test_concurrent_action_is_refused_before_process_start(self, run):
+        with actions._ACTION_LOCK:
+            result = actions.run_action("tests")
+        self.assertFalse(result["ok"])
+        self.assertIn("läuft bereits", result["output"])
+        run.assert_not_called()
+
+    @patch("tools.control_deck.actions.subprocess.run")
+    def test_action_lock_is_released_after_process_error(self, run):
+        run.side_effect = [UnicodeDecodeError("utf8", b"x", 0, 1, "bad"),
+                           subprocess.CompletedProcess([], 0, "OK")]
+        with self.assertRaises(UnicodeDecodeError):
+            actions.run_action("git_status")
+        self.assertTrue(actions.run_action("git_status")["ok"])
+        self.assertEqual(run.call_count, 2)
+
+    @patch("tools.control_deck.actions.subprocess.run")
     def test_tests_action_uses_the_same_interpreter_as_terminal_commands(self, run):
         """Use the same checkout interpreter for HTTP test actions and copied commands."""
         run.return_value.returncode = 0
@@ -286,7 +319,7 @@ class ControlDeckTest(unittest.TestCase):
                                             "-s", "tests", "-q"])
                     self.assertEqual(shlex.split(checks.commands_for(repo)["tests"])[3:], argv)
                     self.assertEqual(run.call_args.kwargs["cwd"], repo)
-                    self.assertEqual(run.call_args.kwargs["timeout"], 30.0)
+                    self.assertEqual(run.call_args.kwargs["timeout"], 240.0)
                     self.assertNotIn("shell", run.call_args.kwargs)
 
     @patch("tools.control_deck.checks._run", return_value=(0, "abc123"))
@@ -610,7 +643,7 @@ class ControlDeckInterfaceTest(unittest.TestCase):
         cleared_ids = set(ast.literal_eval(cleared.group(1)))
         self.assertFalse(rendered - {"stamp", "focus"} - cleared_ids,
                          "Every status-derived field, including reports, must be invalidated")
-        self.assertLessEqual({"ptitle", "pbody"}, cleared_ids)
+        self.assertIn("if($('poutput').hidden&&$('pcopy').hidden){$('ptitle').textContent='';$('pbody').textContent=''", failure)
         for required in ("state=null", "$('runAll').dataset.actions=''",
                          "$('runAll').disabled=true", "$('prun').dataset.action=''",
                          "$('prun').hidden=true"):
@@ -629,7 +662,9 @@ class ControlDeckInterfaceTest(unittest.TestCase):
                     self.assertIn(required, handler)
                 error = handler.split("catch(e){", 1)[1].split("finally{", 1)[0]
                 self.assertIn("$('poutput').textContent", error)
-                self.assertIn("'FAIL\\n'", error)
+                self.assertIn("': FAIL\\n'" if button == "runAll" else "'FAIL\\n'", error)
+                if button == "runAll":
+                    self.assertIn("active||'Prüfkette'", error)
                 self.assertIn("e?.message", error)
                 cleanup = handler.split("finally{", 1)[1]
                 disabled = "!state" if button == "runAll" else "false"

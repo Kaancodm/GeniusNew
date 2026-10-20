@@ -35,8 +35,15 @@ BETA_GATES = [
     ("E2", "Security-Review final", None),
 ]
 
-# The required DB reviews have not been evidenced at the current head.
-PENDING_REVIEWS = {"B4": 94, "B5": 95, "C3": 111}
+# Historical Gemini reviews exist; model recognition and current E2 evidence remain open.
+# C3 has a documented Claude DB review at its merge head (docs/DECISIONS.md).
+PENDING_REVIEWS = {"B4": 94, "B5": 95}
+REVIEW_EVIDENCE = {
+    "B4": "Gemini-Review durchgeführt (historische Testabdeckung FAIL); "
+          "HOLD: heutige B4-Restabdeckung im E2 zu klären; Pro-Modell-Anerkennung offen",
+    "B5": "Gemini-Review ohne Befund durchgeführt (historischer Head); "
+          "HOLD: Pro-Modell-Anerkennung offen",
+}
 PENDING_OPERATIONS = {
     "C5": "Restore-Probe-Code gemergt; HOLD: produktiver Backup-/Restore-Betrieb nicht nachgewiesen",
     "A2": "Landlock implementiert; HOLD: eigener Worker-OS-Nutzer im Betrieb nicht nachgewiesen",
@@ -299,11 +306,12 @@ def project_resume(
             break
 
     merged = sum(1 for gate in gates if gate.get("implementation_status") == "green")
+    main_code, main_head = _run(
+        ["git", "rev-parse", "--short=12", "refs/remotes/origin/main"], cwd=repo)
     return {
         "focus": focus,
         "stopped_at": stopped,
-        "main_head": _run(["git", "rev-parse", "--short=12", "refs/remotes/origin/main"],
-                          cwd=repo)[1],
+        "main_head": main_head if main_code == 0 else "",
         "release_ready": False,
         "ci": {"status": "yellow", "detail": "nicht live abgefragt"},
         "evidence_note": ("Lokaler origin/main-Stand; keine Live-Abfrage von GitHub. "
@@ -343,9 +351,8 @@ def snapshot(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
             status = "yellow"
         if implementation_status == "green" and review_pr:
             detail = (f"PR #{review_pr} gemergt; "
-                      "HOLD: erforderlicher Claude-DB-Review am PR-Head nicht nachgewiesen")
-            if gate in {"B4", "B5"}:
-                detail += "; Nachprüfung auf main 7f81e24 dokumentiert, ersetzt dieses Gate nicht"
+                      f"{REVIEW_EVIDENCE[gate]}; "
+                      "separater DB-Review entfällt; E2-Gesamtreview noch offen")
         elif implementation_status == "green" and gate in PENDING_OPERATIONS:
             detail = PENDING_OPERATIONS[gate]
         else:
