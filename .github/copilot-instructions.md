@@ -7,7 +7,10 @@ Nicht überprüfbare Angaben als `UNKNOWN` kennzeichnen.
 
 ## Rolle von Copilot
 
-Vervollständigung im Editor und Review jedes PRs nach der Checkliste unten. Eigene
+Vervollständigung im Editor. **Seit 20.10.2026 (Kaan) ist Copilot kein Pflicht-Reviewer
+mehr:** Das Review jedes PRs macht Gemini (`.gemini/styleguide.md`, Format in
+`docs/COLLABORATION.md`). Ein freiwilliges Copilot-Review ist erlaubt, ersetzt aber kein
+Gemini-Review. Die Checkliste unten gilt für Editorarbeit und freiwillige Reviews. Eigene
 Umsetzung nur mit einem Auftrag (Issue-Formular „Begrenzte Aufgabe“), auf einem eigenen
 Branch und als Draft-PR. Umsetzer und Merger für Kerncode ist Codex; ChatGPT übernimmt
 neue Werkzeuge, Server, Infrastruktur und erstellt die Datenbank-Dokumentation
@@ -76,6 +79,7 @@ brauchen eine unabhängige Prüfung des aktuellen Heads.
 4. Werden eine Grenze aus `SECURITY.md` und ihr offen haltender Test gemeinsam angepasst?
 5. Gelangen Nutzdaten oder Secrets in Audit, Logs oder Fehlermeldungen?
 
-Befunde zu diesen fünf Punkten blockieren den Merge. Release, Deployment, Zugriffs- und
+Befunde zu diesen fünf Punkten blockieren den Merge, wenn Gemini sie bestätigt oder ein
+anderer Pflicht-Reviewer sie meldet. Release, Deployment, Zugriffs- und
 Schutzänderungen, Produktionsinfrastruktur, das Löschen von Daten oder Branches und das
 Rotieren von Zugangsdaten brauchen Kaans ausdrückliches OK.
