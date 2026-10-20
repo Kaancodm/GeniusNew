@@ -92,7 +92,7 @@ anpassen.
 | # | Gate | Nachweis | Stand |
 | --- | --- | --- | --- |
 | E1 | Demo erweitert um Persistenz-Angriffe (Replay nach Neustart, SQL-Manipulation, Anker-Vorlauf) | letzte Zeile `PASS` | erledigt: #112 (Codex), Merge `122a690` (05.10.2026), `scripts/demo_persistence.py`, `docs/E1-DEMO.md`, in der CI |
-| E2 | Unabhängiges Security-Review des vollständigen Heads (Claude und Copilot), `SECURITY.md` als „Bekannte Grenzen der Beta“ | Review-Kommentar am Head-SHA | offen |
+| E2 | Unabhängiges Security-Review des vollständigen Heads (Claude und Gemini; seit 20.10.2026 Gemini statt Copilot, `docs/DECISIONS.md`), `SECURITY.md` als „Bekannte Grenzen der Beta“ | Review-Kommentar am Head-SHA | offen; deckt laut Entscheidung vom 18.10.2026 auch das nicht separat nachgeholte `Claude DB Review` für B4, B5 und C3 ab |
 | E3 | Frischer Klon auf einem sauberen Linux-Host folgt der Betriebsanleitung wörtlich bis zum laufenden Dienst | Protokoll mit SHA | offen |
 
 ## Reihenfolge
