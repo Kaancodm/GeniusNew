@@ -2,6 +2,7 @@
 
 @AGENTS.md
 @docs/COLLABORATION.md
+@docs/EXECUTION-GATES.md
 
 Falls die Importzeilen oben nicht aufgelöst werden: Lies zuerst `AGENTS.md` und
 `docs/COLLABORATION.md`. Dort stehen die verbindlichen Regeln und Rollen.

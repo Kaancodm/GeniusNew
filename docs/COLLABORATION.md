@@ -2,7 +2,8 @@
 
 Ziel: So wenig Abstimmung wie möglich. Jede Sache hat **genau einen Verantwortlichen**:
 
-- **Code und Regeln:** der `main`-Zweig dieses Repositories. Codex setzt um und mergt.
+- **Code und Regeln:** der `main`-Zweig dieses Repositories. Codex setzt auf
+  Arbeitsbranches um; ein Merge nach `main` braucht Kaans GO.
 - **Wissen — Projektstand:** `docs/STATUS.md`, geführt von **Claude Code** (seit
   04.10.2026); NotebookLM gibt daraus Auskunft.
 - **Wissen — Regeln und Entscheidungen:** `docs/COLLABORATION.md` (dieses Dokument) und
@@ -17,6 +18,15 @@ Ziel: So wenig Abstimmung wie möglich. Jede Sache hat **genau einen Verantwortl
 - **Ordnung, Struktur und Konflikte zwischen den Plattformen:** **Claude Code**, mit
   Überschreibrecht gegenüber allen Werkzeugen.
 - **Entscheidungen:** Kaan. Kaan steht über allen, auch über Claude Code.
+
+**Seit 06.10.2026 (Kaan), Ausführungs-Gates:** Für alle Werkzeuge und Automationen gilt
+`docs/EXECUTION-GATES.md`: reversible Dev-/Test-/Tool-/Staging-/Automationsarbeit ist
+AUTO. Ein ausdrückliches GO ist vor `main`-Merge, Produktion/Release, öffentlichen
+Netzwerkänderungen, Secret-Änderungen, produktiven Daten/DB-Rechten und
+irreversiblen/destruktiven Aktionen nötig. Das ersetzt ältere automatische
+`main`-Merge-Rechte, insbesondere Codex' Selbst-Merge. Fachliche CI-/Review-/DB-Gates
+bleiben bestehen. Diese einmalige Governance-Aktualisierung ist von Kaan direkt
+beauftragt; danach gelten die Datei-Zuständigkeiten weiter.
 
 **Seit 27.09.2026 (Kaan):** `docs/COLLABORATION.md` und `docs/DECISIONS.md` ändert nur
 noch Claude Code; kein anderes Werkzeug, auch nicht ChatGPT im Auftrag. Für die
@@ -40,7 +50,7 @@ ein Review abgegeben hat. **Keine Stapel-PRs:** Jeder PR basiert auf `main`. Beg
 | **Kaan** | entscheidet Produktziele, Architektur und Ausnahmen (Portal/Kern-Betriebsort, DB-Technologie, neue Dependencies, `SECURITY.md`-Grenzen, Tags, Deployment-/Produktionsfreigaben); gibt ChatGPT den Auftrag für DB-/Infra-Entwürfe; entscheidet offene Architekturfragen und gibt den DB-Entwurf frei; mergt Claudes und ChatGPTs eigene PRs | `docs/DATABASE.md` selbst schreiben zu müssen — das übernimmt ChatGPT in seinem Auftrag |
 | **Gemini Pro** | **Prüfer:** ist **Pflicht-Zweitmeinung** bei den Ausnahmen und prüft Designs vorab bei Prozessgrenzen und Kryptografie, auf Anforderung auch andere PRs. Läuft über die **Antigravity-CLI**, die **Abacus-CLI** (im Terminal, per Termius auch vom iPhone) oder die Gemini CLI; das Ergebnis steht als PR-Kommentar im Format „Gemini-Review“ (unten), Maßstab `.gemini/styleguide.md`. Kontext: `GEMINI.md` | irgendeine Datei im Repository ändern (auch `docs/STATUS.md` nicht mehr), die Datenbank entwerfen oder freigeben |
 | **NotebookLM** | **Auskunft für alle:** beantwortet Fragen zu Stand, Entscheidungen, Grenzen und Datenbank-Schema (aus `docs/DATABASE.md`) aus seinen Quellen, jede Antwort mit Quellenangabe; Quellen strikt getrennt von ChatGPTs eigenem Recherche-Notebook | Entscheidungen treffen, Inhalte ohne Quelle |
-| **Codex** (ChatGPT Pro) | setzt **Kerncode** um, implementiert den von Kaan freigegebenen DB-Code, und **mergt selbst**: ein Thema pro PR, Branch `codex/<thema>`, mit einem **Wissensblock** in der PR-Beschreibung (siehe unten) | `docs/STATUS.md`, `docs/COLLABORATION.md`, `docs/DECISIONS.md` und `docs/DATABASE.md` ändern, einen DB-Code-PR ohne `Claude DB Review: APPROVED` mergen, Ausnahmen ohne Kaans OK mergen, Tags anlegen |
+| **Codex** (ChatGPT Pro) | setzt **Kerncode** um, implementiert den von Kaan freigegebenen DB-Code und mergt eigene PRs nach Kaans GO: ein Thema pro PR, Branch `codex/<thema>`, mit einem **Wissensblock** in der PR-Beschreibung (siehe unten) | `docs/STATUS.md`, `docs/COLLABORATION.md`, `docs/DECISIONS.md` und `docs/DATABASE.md` ändern, ohne Kaans GO oder ohne erforderliche Reviews mergen, Tags ohne Kaans OK anlegen |
 | **ChatGPT** (Chat) | **neue Werkzeuge, laufende Server-Pflege, Dashboards, Monitoring, externe Integrationen** (eigener Abschnitt unten), **inklusive technischer Architekturentwürfe im Infra-/DB-Bereich und der Erstellung/Pflege von `docs/DATABASE.md` im Auftrag von Kaan**; plant, formuliert Prompts, erklärt | Kerncode (`geniusnew/`, `tests/`, `scripts/refusals.py`, `scripts/demo.*`, `schemas/`), Core-Tests, `SECURITY.md` eigenständig ändern, `requirements.txt`, Governance-/Wissensdateien (siehe unten) ändern; Änderungen ohne Kaans Auftrag; den eigenen DB-Entwurf sicherheitstechnisch freigeben; selbst mergen |
 | **GitHub Copilot Pro** | Vervollständigung im Editor; Review jedes PRs nach der Checkliste in `.github/copilot-instructions.md` | eigene PRs ohne Auftrag |
 | **Microsoft 365 Copilot** | Berichte, E-Mails, Folien aus dem OneDrive-Ordner `GeniusNew` | Inhalte erfinden, die dort nicht stehen |
@@ -231,12 +241,13 @@ DB-Entwurf sicherheitstechnisch frei und mergt nie eigene PRs.
    (Ausnahmen, Design-Vorprüfung), oder wenn Kaan es anfordert: Der Umsetzer fragt es im
    PR an, Kaan (oder ChatGPT in seinem Auftrag) startet es über die Antigravity-CLI oder
    die Abacus-CLI und stellt das Ergebnis als PR-Kommentar ein.
-4. **Codex mergt eigene PRs selbst**, sobald die CI grün ist (`contracts`), der
+4. **Codex bereitet eigene PRs bis zur Merge-Reife vor**. Der Merge nach `main`
+   erfolgt erst nach Kaans ausdrücklichem GO, sobald die CI grün ist (`contracts`), der
    Wissensblock ausgefüllt ist und kein blockierender Review-Befund offen ist.
    Blockierend sind Gemini-Befunde der Stufe **Critical** oder **High** und
-   Copilot-Befunde zu den Punkten der Checkliste. Kaans ausdrückliches OK braucht es
-   nur für die Ausnahmen: eine neue Abhängigkeit, eine geänderte Grenze aus
-   `SECURITY.md` (offen gehaltener Test umgekehrt) und Tags. Bei diesen Ausnahmen muss
+   Copilot-Befunde zu den Punkten der Checkliste. Neue Abhängigkeiten, eine geänderte
+   Grenze aus `SECURITY.md` (offen gehaltener Test umgekehrt) und Tags brauchen
+   zusätzlich ihre fachliche Freigabe. Bei diesen Ausnahmen muss
    vorher ein Gemini-Sicherheits-Review im PR stehen. **DB-Code-PRs** brauchen
    zusätzlich `Claude DB Review: APPROVED` am exakten Head-SHA (siehe oben). **PRs von
    ChatGPT und Claude mergt Kaan**, keines der beiden mergt selbst. **Claude-PRs, die Code
