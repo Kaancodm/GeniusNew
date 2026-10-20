@@ -60,6 +60,9 @@ def read_api_key(*, key_file: Path | None, environ: dict[str, str]) -> bytes:
         key.decode("ascii")
     except UnicodeDecodeError:
         raise ValueError("API key must be ASCII (it travels in a header)") from None
+    if any(byte < 32 or byte == 127 for byte in key):
+        # HTTP header errors can echo the credential; refuse before transport.
+        raise ValueError("API key must not contain control characters")
     return key
 
 

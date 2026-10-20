@@ -2,12 +2,14 @@
 
 import io
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
+from unittest.mock import patch
 
 from tools.genius_client import _open, build_request, main, parse_outcome, read_api_key
 
@@ -107,6 +109,64 @@ class GeniusClientTest(unittest.TestCase):
             with self.subTest(url=url):
                 self.assertEqual(build_request(url, KEY, "text").full_url,
                                  url + "/jobs")
+
+    def test_invalid_key_controls_refuse_before_sending_without_echoing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            key_file = Path(tmp) / "key"
+            for control in ("\r", "\n", "\t", "\x00", "\x7f"):
+                bad_key = KEY.decode() + control + "suffix"
+                for source in ("environment", "file"):
+                    with self.subTest(control=repr(control), source=source):
+                        key_file.write_bytes(bad_key.encode("ascii"))
+                        argv = ["--file", self.text_file()]
+                        if source == "file":
+                            argv += ["--api-key-file", str(key_file)]
+                        sent, out, err = [], io.StringIO(), io.StringIO()
+                        with redirect_stdout(out), redirect_stderr(err):
+                            code = main(argv, opener=self.opener_returning(
+                                202, body(status="SUCCEEDED", output={"text": "ok"}),
+                                record=sent), environ={"GENIUSNEW_API_KEY": bad_key})
+                        self.assertEqual(code, 2)
+                        self.assertEqual(sent, [])
+                        self.assertNotIn(KEY.decode(), out.getvalue() + err.getvalue())
+                        self.assertNotIn("Traceback", err.getvalue())
+
+    def test_local_http_bypasses_environment_proxies(self):
+        target_headers, proxy_headers = [], []
+
+        def handler(received):
+            class Receiver(BaseHTTPRequestHandler):
+                def do_POST(self):
+                    received.append(self.headers.get("Authorization"))
+                    self.send_response(202)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+
+                def log_message(self, *args):
+                    pass
+            return Receiver
+
+        with ThreadingHTTPServer(("127.0.0.1", 0), handler(target_headers)) as target:
+            with ThreadingHTTPServer(("127.0.0.1", 0), handler(proxy_headers)) as proxy:
+                threads = [Thread(target=server.serve_forever, daemon=True)
+                           for server in (target, proxy)]
+                for thread in threads:
+                    thread.start()
+                try:
+                    request = build_request(
+                        f"http://127.0.0.1:{target.server_port}", KEY, "text")
+                    with patch.dict(os.environ, {
+                            "http_proxy": f"http://127.0.0.1:{proxy.server_port}",
+                            "no_proxy": ""}, clear=True):
+                        status, _ = _open(request, timeout=3)
+                    self.assertEqual(status, 202)
+                    self.assertEqual(target_headers, [f"Bearer {KEY.decode()}"])
+                    self.assertEqual(proxy_headers, [])
+                finally:
+                    target.shutdown()
+                    proxy.shutdown()
+                    for thread in threads:
+                        thread.join(timeout=3)
 
     def test_redirects_are_never_followed_with_an_api_key(self):
         received = []
