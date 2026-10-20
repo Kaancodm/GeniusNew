@@ -2,7 +2,8 @@
 
 **Stand: 20.10.2026, `main` `a7308289977d4017cfc1a521100db3e0d01ccc98`.** Gesamtpflege
 über #145 (Stand `dde20f2`): Gates, Messwerte, Risiken, Aufräumen der offenen PRs.
-Nachgetragen am 20.10.2026 aus den Wissensblöcken bzw. PR-Texten: #174, #154, #179, #180. Die Abschnitte zu D1
+Nachgetragen am 20.10.2026 aus den Wissensblöcken bzw. PR-Texten: #174, #154, #179, #180,
+dazu Kaans Entscheidungen vom 20.10.2026 (Pause, D3, #151, CI-Werkzeuge). Die Abschnitte zu D1
 (Entscheidungen vom 18.10.2026, #158) und zum lokalen KI-Pilot (19.10.2026, Issue #166)
 stammen aus früheren Pflege-PRs und sind hier nicht neu geprüft; der Portal-DB-Vertrag
 aus #176 (D2/D3, HOLD) ist nur als gemergt erfasst. Teil der
@@ -74,7 +75,9 @@ Audit-Kette festgehalten.
 **Noch offen:** C5 (Betriebsanleitung mit systemd, Rotation und Betriebsabnahme des
 Worker-Dienstes aus #140), E3 (frischer Klon auf einem echten Server), D1-Code, D2, D3
 und E2 (Security-Review am Head). **D1-Code bleibt auf HOLD** (Entscheidung vom
-18.10.2026); D2 und D3 sind nicht aktiv (#151 und #152 offen, #148 und #176 nur Doku). Die
+18.10.2026); D2 und D3 sind nicht aktiv (#151 und #152 offen, #148 und #176 nur Doku).
+#151 hat seit 20.10.2026 Kaans GO für die neue Abhängigkeit, ist aber mit `main`
+konfliktbehaftet. Die
 `ROADMAP-V02.md`-Spalte „Stand“ wurde mit #130 und #167 angeglichen; zwei Punkte fehlen
 dort noch. Die C3-Zelle nennt `Claude DB Review` UNKNOWN; belegt ist APPROVED am
 Merge-Head `cc95586ca27e6f9d76fd737967d87cdb2e8a44d5` (`docs/DECISIONS.md`, 04.10.2026).
@@ -129,11 +132,11 @@ Eine externe Bewertung von `7f81e24` hat Claude Code am Code nachgeprüft. Best�
   Verbindung zwischen Job-Ledger, Annahme-Ledger und Audit-Kette
   (`geniusnew/__main__.py`), gewollt für die B6-Atomarität. Der Durchsatz ist damit
   einspurig, ein Verbindungsabbruch braucht einen Neustart (`SECURITY.md`).
-- **Die CI testet nur Python 3.11** (`.github/workflows/verify.yml`). Laut Bewertung
-  läuft der Server unter 3.13 (hier nicht geprüft, UNKNOWN). Lokal lief die Suite unter
-  3.13 grün (Messwerte oben); die CI sichert das nicht ab.
-- **Kein Linter, keine Typprüfung, keine Coverage-Messung** in der CI. Jedes Werkzeug
-  dafür wäre eine neue Abhängigkeit und damit Kaans Entscheidung.
+- **Die CI testet nur Python 3.11** (`.github/workflows/verify.yml`). Entschieden am
+  20.10.2026: Matrix 3.11 und 3.13; umgesetzt ist das noch nicht.
+- **Kein Linter, keine Typprüfung, keine Coverage-Messung** in der CI. Entschieden am
+  20.10.2026: `ruff` (nur `E9`/`F`) und `pip-audit` ja, Typprüfung vorerst nein,
+  Coverage nein (`docs/DECISIONS.md`); umgesetzt ist das noch nicht.
 
 Nicht übernommen: DB-Tests ohne `GENIUSNEW_TEST_ADMIN_DSN` überspringen.
 `tests/postgres_support.py` wertet fehlende Infrastruktur bewusst als Fehler, und kein
@@ -181,11 +184,13 @@ Reihenfolge laut `docs/ROADMAP-V02.md`; Entscheidungen von Kaan sind dort unter 
 Entscheidungen“ gelistet (Portal in der Beta, Portal→Kern-Authentisierung, abgelaufene
 Jobs, Annahmen und Policy).
 
-1. Offene PRs, Konflikte und Merge-Gates bereinigen (Abschnitt „Aufräumen“ unten,
-   Auftrag vom 09.10.2026); danach Entwicklungspause bis zum neuen v0.2-Master-Prompt.
+1. Offene PRs, Konflikte und Merge-Gates bereinigen (Abschnitt „Aufräumen“ unten),
+   parallel zur Weiterentwicklung; die Pause entfällt (Entscheidung 20.10.2026).
 2. ~~`Claude DB Review` für B4 (#94) und B5 (#95) nachholen~~ — entschieden am 18.10.2026: nicht separat, E2 deckt es ab. Offen bleibt das Gemini-Sicherheitsreview zu B4/B5.
-3. Kaan entscheidet: Python-Version der CI (3.13 zusätzlich oder statt 3.11) und ob
-   Linter, Typprüfung, Coverage und `pip-audit` als Entwicklungswerkzeuge dazukommen.
+3. CI nach der Entscheidung vom 20.10.2026: Matrix 3.11/3.13 und `ruff`-Job mit
+   `requirements-dev.txt` (Codex, ein PR); `pip-audit`-Vorlage nach
+   `.github/workflows/audit.yml` verschieben (Kaan, braucht Workflow-Rechte).
+   #151: Konflikt auflösen, CI am neuen Head, dann Merge (Codex).
 4. Server einrichten (`ops/server/genius-server`, Kaan) und Landlock dort prüfen.
 5. C5: Betriebsanleitung mit systemd-Units, eigenen OS-Nutzern (Worker, Anker),
    Schlüsselrotation (Entwurf von ChatGPT in #117, Draft).
@@ -230,22 +235,9 @@ Kaans OK ohne Merge geschlossen:
 Außerdem ohne Merge geschlossen, nicht von Claude: #121 (CI-Runner), #143 und #146
 (automatische CodeRabbit-PRs). Am 19.10.2026 sind 27 PRs offen. Offene Fragen:
 
-- **Pause:** Die Entscheidung vom 09.10.2026 ordnet an: erst PRs, Konflikte und
-  Merge-Gates bereinigen, dann pausieren. Die Bereinigung ist bei 27 offenen PRs nicht
-  abgeschlossen; neue Features starten laut derselben Entscheidung nicht. Seitdem
-  wurden aber #140, #142, #148, #162, #163 und #176 gemergt, und #147, #149 bis #152 sowie
-  #171 bis #175 sind offen. Am 18.10.2026 hat Kaan das Portal (D1 bis D3) zur Beta
-  gezählt (`docs/DECISIONS.md`); ob damit die Pause für das Portal entfällt, ist
-  nicht eingetragen: UNKNOWN. Welche der offenen PRs als Aufräumarbeit gelten, entscheidet
-  Kaan.
-- **Entscheidung vom 18.10.2026 laut #148:** administrierte Core-Personenbindung für
-  v0.2 und eine neue Envelope-Version statt einer zweiten Signatur. Sie ist nur als
-  Chat-Angabe in der Beschreibung des gemergten Entwurfs belegt und deshalb nicht in
-  `docs/DECISIONS.md` eingetragen; Claude Code trägt sie ein, sobald Kaan sie bestätigt.
-- **Neue Abhängigkeit in #151:** `argon2-cffi` und `argon2-cffi-bindings` in
-  `requirements.txt`. Die Wahl von `argon2-cffi` ist am 26.09.2026 entschieden; der Merge
-  einer neuen Abhängigkeit braucht nach `docs/COLLABORATION.md` trotzdem Kaans OK und
-  vorher ein Gemini-Pro-Sicherheitsreview im PR.
+- **Erledigt am 20.10.2026** (`docs/DECISIONS.md`): Die Pause entfällt; die
+  D3-Entscheidung aus #148 ist bestätigt und eingetragen; #151 hat Kaans GO für die neue
+  Abhängigkeit (Merge nach Konfliktauflösung und grüner CI).
 - **Copilot-Review:** warten oder für die Dauer des Engpasses einen Ersatz festlegen.
   Laut Kommentar in #153 (6244844507) gilt für die Zusammenführung von #145 eine
   einmalige Copilot-Ausnahme von Kaan; sie ersetzt weder das Gate auf `main` noch die
