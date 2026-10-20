@@ -13,6 +13,7 @@ from geniusnew.approvals import ApprovalScope, ApprovalStore, _record_hash
 from geniusnew.audit_chain import AuditAnchor
 from geniusnew.audit_store import PostgresAuditChain
 from geniusnew.contracts import ContractError, canonical, issue, validate_pending
+from geniusnew.orchestrator import Reservation
 from geniusnew.verifier import ProcessLocalAcceptanceLedger
 from geniusnew.wiring import _Waiting, build
 from geniusnew.workers import DeterministicSummarizer
@@ -49,6 +50,111 @@ class DurablePendingTest(ApprovalFixture, unittest.TestCase):
     def rows(self):
         return self.connection.execute(
             "SELECT state, reserved_at FROM public.job_ledger").fetchall()
+
+    def consumed_reservation(self):
+        pending, approvals = self.stores()
+        self.add(pending)
+        scope = self.scope()
+        grant = approvals.grant(scope, now=101, ttl_seconds=60)
+        receipt = approvals.consume(grant.token, scope, now=102, subject="subject-demo")
+        reservation = Reservation(scope.job_id, "subject-demo", scope.handoff_sha256,
+                                  scope.handoff_expires_at, 102)
+        return database.PostgresJobLedger(self.connection), reservation, grant, receipt
+
+    def test_dispatch_available_binds_pending_subject_and_handoff(self):
+        ledger = database.PostgresJobLedger(self.connection)
+        scope = self.scope()
+        self.assertTrue(ledger.dispatch_available(
+            scope.job_id, subject="subject-demo", handoff_sha256=scope.handoff_sha256))
+        pending, approvals = self.stores()
+        self.add(pending)
+        self.assertTrue(ledger.dispatch_available(
+            scope.job_id, subject="subject-demo", handoff_sha256=scope.handoff_sha256))
+        for subject, digest in (("other-subject", scope.handoff_sha256),
+                                ("subject-demo", "0" * 64), ("subject-demo", None)):
+            with self.subTest(subject=subject, digest=digest):
+                self.assertFalse(ledger.dispatch_available(
+                    scope.job_id, subject=subject, handoff_sha256=digest))
+        grant = approvals.grant(scope, now=101, ttl_seconds=60)
+        approvals.consume(grant.token, scope, now=102, subject="subject-demo")
+        self.assertFalse(ledger.dispatch_available(
+            scope.job_id, subject="subject-demo", handoff_sha256=scope.handoff_sha256))
+
+    def test_reserve_admitted_binds_consumed_reservation_and_record(self):
+        ledger, reservation, grant, receipt = self.consumed_reservation()
+        self.assertTrue(ledger.reserve_admitted(
+            reservation, approval_record_hash=receipt.record_hash))
+        for changed in (replace(reservation, job_id="other-job"),
+                        replace(reservation, subject="other-subject"),
+                        replace(reservation, handoff_sha256="0" * 64),
+                        replace(reservation, expires_at=reservation.expires_at + 1),
+                        replace(reservation, reserved_at=reservation.reserved_at + 1)):
+            with self.subTest(reservation=changed):
+                self.assertFalse(ledger.reserve_admitted(
+                    changed, approval_record_hash=receipt.record_hash))
+        for record_hash in ("0" * 64, grant.record_hash):
+            with self.subTest(record_hash=record_hash):
+                self.assertFalse(ledger.reserve_admitted(
+                    reservation, approval_record_hash=record_hash))
+        self.assertEqual(self.rows(), [("RESERVED", 102)])
+        self.assertEqual(self.connection.execute(
+            "SELECT count(*) FROM approval_records").fetchone(), (2,))
+
+    def test_reserve_admitted_refuses_a_current_unconsumed_record(self):
+        pending, approvals = self.stores()
+        self.add(pending)
+        scope = self.scope()
+        grant = approvals.grant(scope, now=101, ttl_seconds=60)
+        # All reservation fields match; a GRANTED tip still is not a consumption.
+        self.connection.execute(
+            "UPDATE job_ledger SET state='RESERVED',reserved_at=101,updated_at=101 "
+            "WHERE job_id=%s", (scope.job_id,))
+        reservation = Reservation(scope.job_id, "subject-demo", scope.handoff_sha256,
+                                  scope.handoff_expires_at, 101)
+        ledger = database.PostgresJobLedger(self.connection)
+        self.assertFalse(ledger.reserve_admitted(
+            reservation, approval_record_hash=grant.record_hash))
+
+    def test_reserve_admitted_refuses_a_consumed_record_that_is_not_current(self):
+        ledger, reservation, grant, receipt = self.consumed_reservation()
+        # Only this disposable database is corrupted; runtime cannot rewind tips.
+        with self.db.connect() as owner:
+            owner.execute("ALTER TABLE approval_tokens DISABLE TRIGGER ALL")
+            try:
+                owner.execute("UPDATE approval_tokens SET current_record_hash=%s",
+                              (grant.record_hash,))
+            finally:
+                owner.execute("ALTER TABLE approval_tokens ENABLE TRIGGER ALL")
+        self.assertFalse(ledger.reserve_admitted(
+            reservation, approval_record_hash=receipt.record_hash))
+        self.assertEqual(self.rows(), [("RESERVED", 102)])
+
+    def test_reserve_admitted_checks_stored_scope_and_consumption_time(self):
+        ledger, reservation, _, receipt = self.consumed_reservation()
+        scope = self.scope()
+        cases = ((replace(scope, job_id="other-job"), 102),
+                 (replace(scope, handoff_sha256="0" * 64), 102),
+                 (replace(scope, handoff_expires_at=scope.handoff_expires_at + 1), 102),
+                 (scope, 103))
+        with self.db.connect() as owner:
+            for changed_scope, changed_at in cases:
+                with self.subTest(scope=changed_scope, changed_at=changed_at):
+                    # Owner tampering reaches the ledger's independent binding check.
+                    owner.execute(
+                        "UPDATE approval_records SET scope=%s,changed_at=%s "
+                        "WHERE record_hash=%s",
+                        (canonical(changed_scope.to_dict()), changed_at, receipt.record_hash))
+                    try:
+                        self.assertFalse(ledger.reserve_admitted(
+                            reservation, approval_record_hash=receipt.record_hash))
+                    finally:
+                        owner.execute(
+                            "UPDATE approval_records SET scope=%s,changed_at=102 "
+                            "WHERE record_hash=%s",
+                            (canonical(scope.to_dict()), receipt.record_hash))
+        self.assertTrue(ledger.reserve_admitted(
+            reservation, approval_record_hash=receipt.record_hash))
+        self.assertEqual(self.rows(), [("RESERVED", 102)])
 
     def test_restart_preserves_exact_pending_wire_and_consumed_token(self):
         pending, approvals = self.stores()
