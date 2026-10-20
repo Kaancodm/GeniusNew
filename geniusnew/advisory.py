@@ -121,13 +121,17 @@ class AdvisoryBridge:
         if not self._lock.acquire(blocking=False):
             _fail("another advisory request holds this bridge")
         try:
+            failed = False
             try:
                 answer = self._engine.run(kind, text)
-            except Exception:
+            except Exception:  # noqa: BLE001 - every engine failure is a refusal
                 # The engine stands outside this boundary's trust: whatever it
                 # raises — including a refusal of its own — becomes this one
                 # refusal. Forwarding its message would let it speak for the
-                # Core, and its traceback could carry untrusted content.
+                # Core. Refuse outside the handler so the engine exception
+                # cannot follow the refusal through __context__.
+                failed = True
+            if failed:
                 _fail("the advisory engine failed")
             return _result(kind, answer)
         finally:

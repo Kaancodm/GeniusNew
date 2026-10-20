@@ -9,6 +9,7 @@ why there is one test per refusal rather than one test per method.
 
 import sys
 import threading
+import traceback
 import unittest
 from dataclasses import fields
 from unittest import mock
@@ -156,9 +157,13 @@ class BridgeTest(unittest.TestCase):
     def test_an_engine_exception_becomes_one_refusal_without_its_message(self):
         secret_answer = 'ENGINE-INTERNAL-CANARY-MUST-NOT-BE-DISCLOSED'
         bridge, _ = self.bridge(raises=RuntimeError(secret_answer))
-        message = self.refuse(bridge)
-        self.assertIn('engine failed', message)
-        self.assertNotIn('CANARY', message)
+        with self.assertRaises(ContractError) as raised:
+            bridge.request('summary', 'A harmless note.')
+        exc = raised.exception
+        self.assertEqual(str(exc), 'the advisory engine failed')
+        self.assertIsNone(exc.__context__)
+        self.assertIsNone(exc.__cause__)
+        self.assertNotIn(secret_answer, ''.join(traceback.format_exception(exc)))
 
     def test_a_non_string_answer_is_refused(self):
         bridge, _ = self.bridge(answer={'text': ANSWER})

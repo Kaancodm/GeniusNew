@@ -48,6 +48,12 @@ Voraussetzungen auf dem Server:
   Modelle, Grenzwerte und der Protokollvertrag stehen in
   `tools/ai_pilot/README.md`; der Pilot ist unverändert übernommen.
 
+`127.0.0.1:11434` hat keine Authentisierung. Ist der Port frei, kann ein anderer
+lokaler Nutzer ihn belegen und Antworten mit einer behaupteten Modell-ID liefern.
+Modellausgabe und Modell-ID bleiben deshalb untrusted; die ID beweist weder die
+Herkunft noch die Integrität einer Antwort. `enabled = true` bleibt im Betrieb
+gesperrt, bis die getrennte Prozessgrenze freigegeben und umgesetzt ist.
+
 Ohne Tabelle startet der Dienst mit einer **ausgeschalteten** Brücke
 (`Service.advisory`); niemand muss auf ihr Fehlen prüfen.
 
