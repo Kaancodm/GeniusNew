@@ -157,7 +157,7 @@ async function loadStatus(){
  state=null;$('stamp').textContent='Status nicht verfügbar';$('focus').textContent='Status nicht verfügbar: '+String(e?.message||e||'Unbekannter Fehler');
   for(const id of ['projectMeta','evidence','resume','priorities','research','system','tools','gates','commands','reportMeta','dailyReport','weeklyReport'])$(id).textContent='';
   $('runAll').dataset.actions='';$('runAll').disabled=true;document.querySelectorAll('[data-quick-check]').forEach(b=>b.disabled=true);$('prun').dataset.action='';$('prun').hidden=true;
-  if($('poutput').hidden){$('ptitle').textContent='';$('pbody').textContent='';$('panel').classList.remove('open')}
+  if($('poutput').hidden&&$('pcopy').hidden){$('ptitle').textContent='';$('pbody').textContent='';$('panel').classList.remove('open')}
  }
 }
 /** Refresh status and mail concurrently, resolving after both refreshes finish. */

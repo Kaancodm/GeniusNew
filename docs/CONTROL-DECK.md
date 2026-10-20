@@ -35,7 +35,9 @@ Projektprioritäten sind kein ausführbarer Auftrag. Das Deck zeigt den laufende
 Checkout und den lokal gespeicherten `origin/main` getrennt. Bei abweichenden
 Commits oder lokalen Änderungen warnt es vor einem zu prüfenden Stand. Auf einer HTTP-Seite
 ohne sicheren Browser-Kontext öffnet ein Kopierknopf den auswählbaren TERM-Befehl
-zur manuellen Übernahme, etwa auf dem iPhone. Agenten werden damit nicht gestartet.
+zur manuellen Übernahme, etwa auf dem iPhone. Dieser Dialog bleibt auch bei einem
+fehlgeschlagenen Statusrefresh offen; veraltete Detailansichten werden weiterhin
+geschlossen. Agenten werden damit nicht gestartet.
 
 Einzelprüfungen und „Prüfkette starten“ sperren ihren jeweiligen Button
 während des Laufs. HTTP-, Netzwerk- und Antwortfehler erscheinen mit `FAIL` und Grund

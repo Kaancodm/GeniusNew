@@ -643,7 +643,7 @@ class ControlDeckInterfaceTest(unittest.TestCase):
         cleared_ids = set(ast.literal_eval(cleared.group(1)))
         self.assertFalse(rendered - {"stamp", "focus"} - cleared_ids,
                          "Every status-derived field, including reports, must be invalidated")
-        self.assertIn("if($('poutput').hidden){$('ptitle').textContent='';$('pbody').textContent=''", failure)
+        self.assertIn("if($('poutput').hidden&&$('pcopy').hidden){$('ptitle').textContent='';$('pbody').textContent=''", failure)
         for required in ("state=null", "$('runAll').dataset.actions=''",
                          "$('runAll').disabled=true", "$('prun').dataset.action=''",
                          "$('prun').hidden=true"):
