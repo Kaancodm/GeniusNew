@@ -8,14 +8,16 @@ Agenten herum und kein zusätzlicher Agent für die Laya-Auswahlliste.
 Der Stand für dieses Experiment ist auf Commit
 `1cfe254e8d25b15f37048c3730134686abe60335` festgelegt. Das Werkzeug unter
 `tools/harness2_experiment.py` verlangt einen lokalen Checkout mit genau diesem
-HEAD und der offiziellen `origin`-URL. Die Demo liest die Paketdateien aus dem
-Git-Baum und den rohen Blob-Objekten dieses Commits. `git archive` wird nicht
+HEAD und der offiziellen `origin`-URL. Die Demo liest den rohen Commit, seine
+Baumobjekte und Paket-Blobs. `git archive` wird nicht
 verwendet, da lokale Git-Attribute dessen Ausgabe verändern können. Änderungen,
 lokale Filter und unversionierte Dateien im Checkout gelangen so nicht in die
-Ausführung. `git fsck --full --strict` prüft die erreichbaren Commit-, Baum- und
-Blob-Objekte; zusätzlich berechnet der Runner den kanonischen Git-Hash jedes
-gelesenen Paket-Blobs selbst und vergleicht ihn mit dessen Objekt-ID. Beschädigte
-oder fehlende Objekte werden abgelehnt und nicht über einen Netzabruf ergänzt.
+Ausführung. Der Runner berechnet den kanonischen Git-Hash für den gepinnten
+Commit, seinen Root-Baum, alle Paket-Unterbäume und jedes ausgeführte Blob selbst
+und vergleicht ihn mit der referenzierten Objekt-ID. Er liest nur diese begrenzte
+Objektkette; fremde, unerreichbare Objekte im lokalen Checkout werden nicht
+gescannt. Beschädigte oder fehlende Objekte werden abgelehnt und nicht über einen
+Netzabruf ergänzt.
 
 ## Lokale Prüfung
 
@@ -66,8 +68,9 @@ Datei und ohne Verfolgung von Symlinks gelesen; eine FIFO wird ohne blockierende
 
 Benchmark-Setup, Modellzugänge, autonome Codeänderungen und Übernahme eines
 vorgeschlagenen Harnesses in GeniusNew sind nicht Teil dieses Experiments.
-Insbesondere werden `AGENTS.md`, Sicherheitsgrenzen, Tests und Review-Gates
-durch Harness² nicht verändert. Die CI prüft die Runner-Logik mit Python 3.11;
+`AGENTS.md`, bestehende Sicherheitsgrenzen, Tests und Review-Gates werden dabei
+nicht gelockert. Für den optionalen Runner wurden eigene Tests und ein
+Refusal-Guard ergänzt. Die CI prüft die Runner-Logik mit Python 3.11;
 sie führt die Harness²-Demo ohne passende Laufzeit und Sandbox nicht aus.
 
 Für Modell-Benchmarks nennt der Upstream zusätzliche Laufzeiten,

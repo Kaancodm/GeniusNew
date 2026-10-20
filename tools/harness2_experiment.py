@@ -24,6 +24,7 @@ _MAX_FILES = 128
 _MAX_FILE_BYTES = 1024 * 1024
 _MAX_PACKAGE_BYTES = 4 * 1024 * 1024
 _MAX_TREE_BYTES = 64 * 1024
+_MAX_TREES = 128
 _MAX_REPORT_BYTES = 64 * 1024
 _MAX_LOG_BYTES = 128 * 1024
 _OUTPUT_TMPFS_BYTES = 16 * 1024 * 1024
@@ -76,10 +77,18 @@ def _git_bytes(source: Path, *args: str, max_bytes: int = 16 * 1024) -> bytes:
 
 
 def _limit_git_file_size(max_bytes: int) -> None:
-    hard = resource.getrlimit(resource.RLIMIT_FSIZE)[1]
-    bound = min(max_bytes + 1, hard) if hard != resource.RLIM_INFINITY else max_bytes + 1
-    resource.setrlimit(resource.RLIMIT_FSIZE, (bound, bound))
-    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    limits = (
+        (resource.RLIMIT_FSIZE, max_bytes + 1),
+        (resource.RLIMIT_AS, _MAX_ADDRESS_SPACE_BYTES),
+        (resource.RLIMIT_NOFILE, 64),
+        (resource.RLIMIT_CPU, 5),
+        (resource.RLIMIT_CORE, 0),
+    )
+    for kind, target in limits:
+        soft, hard = resource.getrlimit(kind)
+        bound = min(value for value in (target, soft, hard)
+                    if value != resource.RLIM_INFINITY)
+        resource.setrlimit(kind, (bound, bound))
 
 
 def _git(source: Path, *args: str) -> str:
@@ -120,60 +129,88 @@ def verify_source(source: Path) -> Path:
         raise ExperimentError("source origin is not the official Harness² repository")
     if _git(source, "rev-parse", "HEAD") != UPSTREAM_COMMIT:
         raise ExperimentError(f"source HEAD must be {UPSTREAM_COMMIT}")
-    _git(source, "fsck", "--full", "--strict", "--no-reflogs", UPSTREAM_COMMIT)
+    _extract_package(source, None)
     return source
 
 
-def _extract_package(source: Path, destination: Path) -> None:
-    """Copy raw blobs from the pinned tree; Git archive would apply local attributes."""
-    listing = _git_bytes(
-        source, "ls-tree", "-rlz", UPSTREAM_COMMIT, "harness2", max_bytes=_MAX_TREE_BYTES
-    )
-    if not listing or not listing.endswith(b"\0"):
-        raise ExperimentError("pinned package tree is missing or incomplete")
-    records = listing[:-1].split(b"\0")
-    if len(records) > _MAX_FILES:
-        raise ExperimentError("pinned package has too many files")
-    total = 0
-    seen: set[PurePosixPath] = set()
-    for record in records:
+def _read_object(source: Path, kind: str, oid: str, max_bytes: int) -> bytes:
+    content = _git_bytes(source, "cat-file", kind, oid, max_bytes=max_bytes)
+    canonical = kind.encode("ascii") + b" " + str(len(content)).encode("ascii") + b"\0" + content
+    if hashlib.sha1(canonical).hexdigest() != oid:
+        raise ExperimentError(f"pinned {kind} hash does not match its object ID")
+    return content
+
+
+def _tree_entries(content: bytes) -> list[tuple[bytes, str, str]]:
+    """Decode raw Git tree records rather than Git's filtered worktree view."""
+    entries = []
+    seen: set[str] = set()
+    offset = 0
+    while offset < len(content):
+        space = content.find(b" ", offset)
+        end = content.find(b"\0", space + 1) if space >= 0 else -1
+        if space <= offset or end <= space + 1 or end + 21 > len(content):
+            raise ExperimentError("invalid pinned tree entry")
+        mode = content[offset:space]
+        raw_name = content[space + 1:end]
+        oid = content[end + 1:end + 21].hex()
+        offset = end + 21
         try:
-            metadata, raw_name = record.split(b"\t", 1)
-            mode, kind, raw_oid, raw_size = metadata.split()
             name = raw_name.decode("utf-8")
-            path = PurePosixPath(name)
-            size = int(raw_size)
-            oid = raw_oid.decode("ascii")
-        except (UnicodeDecodeError, ValueError) as exc:
+        except UnicodeDecodeError as exc:
             raise ExperimentError("invalid pinned tree entry") from exc
-        if (
-            mode not in (b"100644", b"100755")
-            or kind != b"blob"
-            or not re.fullmatch(r"[0-9a-f]{40}", oid)
-            or size < 0
-            or size > _MAX_FILE_BYTES
-            or path.is_absolute()
-            or ".." in path.parts
-            or len(path.parts) < 2
-            or path.parts[0] != "harness2"
-            or path.as_posix() != name
-            or path in seen
-        ):
-            raise ExperimentError("unexpected pinned tree entry")
-        total += size
-        if total > _MAX_PACKAGE_BYTES:
-            raise ExperimentError("pinned package exceeds the experiment limit")
-        seen.add(path)
-        content = _git_bytes(source, "cat-file", "blob", oid, max_bytes=size)
-        canonical = b"blob " + str(size).encode("ascii") + b"\0" + content
-        if hashlib.sha1(canonical).hexdigest() != oid:
-            raise ExperimentError("pinned blob hash does not match its object ID")
-        target = destination.joinpath(*path.parts)
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(content)
-        except OSError as exc:
-            raise ExperimentError(f"cannot extract pinned package: {exc}") from exc
+        if not name or name in (".", "..") or "/" in name or name in seen:
+            raise ExperimentError("invalid pinned tree entry")
+        seen.add(name)
+        entries.append((mode, name, oid))
+    return entries
+
+
+def _extract_package(source: Path, destination: Path | None) -> None:
+    """Verify the exact commit/tree chain and copy only hashed package blobs."""
+    commit = _read_object(source, "commit", UPSTREAM_COMMIT, 16 * 1024)
+    first_line = commit.split(b"\n", 1)[0]
+    if not re.fullmatch(rb"tree [0-9a-f]{40}", first_line):
+        raise ExperimentError("pinned commit has no valid root tree")
+    root = _read_object(source, "tree", first_line[5:].decode("ascii"), _MAX_TREE_BYTES)
+    package = [(mode, oid) for mode, name, oid in _tree_entries(root) if name == "harness2"]
+    if len(package) != 1 or package[0][0] != b"40000":
+        raise ExperimentError("pinned package tree is missing")
+    stack = [(PurePosixPath("harness2"), package[0][1])]
+    tree_bytes = len(root)
+    tree_count = 0
+    file_count = 0
+    total = 0
+    while stack:
+        directory, tree_oid = stack.pop()
+        tree_count += 1
+        if tree_count > _MAX_TREES:
+            raise ExperimentError("pinned package has too many trees")
+        tree = _read_object(source, "tree", tree_oid, _MAX_TREE_BYTES - tree_bytes)
+        tree_bytes += len(tree)
+        for mode, name, oid in _tree_entries(tree):
+            path = directory / name
+            if mode == b"40000":
+                stack.append((path, oid))
+                continue
+            if mode not in (b"100644", b"100755"):
+                raise ExperimentError("unexpected pinned tree entry")
+            file_count += 1
+            if file_count > _MAX_FILES:
+                raise ExperimentError("pinned package has too many files")
+            content = _read_object(source, "blob", oid, _MAX_FILE_BYTES)
+            total += len(content)
+            if total > _MAX_PACKAGE_BYTES:
+                raise ExperimentError("pinned package exceeds the experiment limit")
+            if destination is not None:
+                target = destination.joinpath(*path.parts)
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(content)
+                except OSError as exc:
+                    raise ExperimentError(f"cannot extract pinned package: {exc}") from exc
+    if not file_count:
+        raise ExperimentError("pinned package tree is empty")
 
 
 def _sandbox_command(rootfs: Path, package_root: Path, python: Path, bwrap: str) -> list[str]:
@@ -219,14 +256,18 @@ def _limit_guest_resources() -> None:
         (resource.RLIMIT_CORE, 0),
     )
     for kind, target in limits:
-        hard = resource.getrlimit(kind)[1]
-        bound = min(target, hard) if hard != resource.RLIM_INFINITY else target
+        soft, hard = resource.getrlimit(kind)
+        bound = min(value for value in (target, soft, hard)
+                    if value != resource.RLIM_INFINITY)
         resource.setrlimit(kind, (bound, bound))
 
 
 def _guest_demo() -> int:
     """Run only inside the bwrap guest and return a validated small report."""
-    resource.setrlimit(resource.RLIMIT_NPROC, (_MAX_PROCESSES, _MAX_PROCESSES))
+    soft, hard = resource.getrlimit(resource.RLIMIT_NPROC)
+    bound = min(value for value in (_MAX_PROCESSES, soft, hard)
+                if value != resource.RLIM_INFINITY)
+    resource.setrlimit(resource.RLIMIT_NPROC, (bound, bound))
     with (Path("/output/upstream.log")).open("xb+") as log:
         result = subprocess.run(
             [sys.executable, "-I", "-B", "-c", _DEMO_CODE],

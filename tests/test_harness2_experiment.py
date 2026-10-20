@@ -68,6 +68,15 @@ class Harness2ExperimentTest(unittest.TestCase):
         pinned.start()
         self.addCleanup(pinned.stop)
 
+    def _corrupt_loose_object(self, oid: str, old: bytes, new: bytes) -> None:
+        object_path = self.source / ".git/objects" / oid[:2] / oid[2:]
+        header, content = zlib.decompress(object_path.read_bytes()).split(b"\0", 1)
+        tampered = content.replace(old, new, 1)
+        self.assertNotEqual(tampered, content)
+        self.assertEqual(len(tampered), len(content))
+        object_path.chmod(0o600)
+        object_path.write_bytes(zlib.compress(header + b"\0" + tampered))
+
     def test_runs_committed_demo_even_if_checkout_files_change(self):
         (self.source / "harness2/cli/demo.py").write_text("raise RuntimeError('dirty checkout ran')\n")
         def fake_runner(rootfs: Path, package_root: Path, output_root: Path) -> dict[str, int]:
@@ -108,6 +117,18 @@ class Harness2ExperimentTest(unittest.TestCase):
         with self.assertRaisesRegex(harness2_experiment.ExperimentError, "limit"):
             harness2_experiment._git_bytes(self.source, "rev-parse", "HEAD", max_bytes=1)
 
+    def test_git_failure_is_rejected_even_with_success_shaped_stdout(self):
+        def fake_popen(*arguments, stdout, stderr, **kwargs):
+            stdout.write(b"success-shaped output")
+            stderr.write(b"failure")
+            process = Mock()
+            process.wait.return_value = 1
+            return process
+
+        with patch.object(harness2_experiment.subprocess, "Popen", side_effect=fake_popen):
+            with self.assertRaisesRegex(harness2_experiment.ExperimentError, "failed"):
+                harness2_experiment._git_bytes(self.source, "rev-parse", "HEAD")
+
     def test_sandbox_command_is_closed_to_host_and_network(self):
         command = harness2_experiment._sandbox_command(
             Path("/tmp/rootfs"), Path("/tmp/package"),
@@ -145,9 +166,14 @@ class Harness2ExperimentTest(unittest.TestCase):
             "print(json.dumps({name: resource.getrlimit(getattr(resource, name))[0] "
             "for name in names}))\n"
         )
+        def apply_stricter_caller_limit():
+            _, hard = resource.getrlimit(resource.RLIMIT_AS)
+            resource.setrlimit(resource.RLIMIT_AS, (128 * 1024 * 1024, hard))
+            harness2_experiment._limit_guest_resources()
+
         result = subprocess.run(
             [sys.executable, "-c", probe],
-            preexec_fn=harness2_experiment._limit_guest_resources,
+            preexec_fn=apply_stricter_caller_limit,
             capture_output=True,
             text=True,
             timeout=5,
@@ -155,9 +181,37 @@ class Harness2ExperimentTest(unittest.TestCase):
         )
         limits = json.loads(result.stdout)
         self.assertLessEqual(limits["RLIMIT_FSIZE"], harness2_experiment._MAX_LOG_BYTES)
-        self.assertLessEqual(limits["RLIMIT_AS"], harness2_experiment._MAX_ADDRESS_SPACE_BYTES)
+        self.assertLessEqual(limits["RLIMIT_AS"], 128 * 1024 * 1024)
         self.assertLessEqual(limits["RLIMIT_NOFILE"], 64)
         self.assertLessEqual(limits["RLIMIT_CPU"], 60)
+        self.assertEqual(limits["RLIMIT_CORE"], 0)
+
+    def test_git_subprocess_limits_keep_stricter_caller_limit(self):
+        probe = (
+            "import json, resource\n"
+            "names = ('RLIMIT_FSIZE', 'RLIMIT_AS', 'RLIMIT_NOFILE', 'RLIMIT_CPU', 'RLIMIT_CORE')\n"
+            "print(json.dumps({name: resource.getrlimit(getattr(resource, name))[0] "
+            "for name in names}))\n"
+        )
+
+        def apply_stricter_caller_limit():
+            _, hard = resource.getrlimit(resource.RLIMIT_AS)
+            resource.setrlimit(resource.RLIMIT_AS, (128 * 1024 * 1024, hard))
+            harness2_experiment._limit_git_file_size(100)
+
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            preexec_fn=apply_stricter_caller_limit,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+        limits = json.loads(result.stdout)
+        self.assertLessEqual(limits["RLIMIT_FSIZE"], 101)
+        self.assertLessEqual(limits["RLIMIT_AS"], 128 * 1024 * 1024)
+        self.assertLessEqual(limits["RLIMIT_NOFILE"], 64)
+        self.assertLessEqual(limits["RLIMIT_CPU"], 5)
         self.assertEqual(limits["RLIMIT_CORE"], 0)
 
     def test_missing_sandbox_is_rejected(self):
@@ -212,14 +266,15 @@ class Harness2ExperimentTest(unittest.TestCase):
 
     def test_guest_upstream_failure_does_not_emit_a_report(self):
         report = {"done": 2, "failed": 0, "execution_count": 4, "editor_calls": 3}
-        with (patch.object(harness2_experiment.resource, "setrlimit") as setrlimit,
+        with (patch.object(harness2_experiment.resource, "getrlimit", return_value=(8, 64)),
+              patch.object(harness2_experiment.resource, "setrlimit") as setrlimit,
               patch.object(Path, "open", return_value=io.BytesIO(b"child failed")),
               patch.object(harness2_experiment.subprocess, "run",
                            return_value=subprocess.CompletedProcess([], 1)),
               patch.object(harness2_experiment, "_read_demo_report", return_value=report)):
             with self.assertRaisesRegex(harness2_experiment.ExperimentError, "child failed"):
                 harness2_experiment._guest_demo()
-            setrlimit.assert_called_once_with(resource.RLIMIT_NPROC, (16, 16))
+            setrlimit.assert_called_once_with(resource.RLIMIT_NPROC, (8, 8))
 
     def test_git_tree_rejects_a_symlink(self):
         (self.source / "harness2/cli/external.py").symlink_to("/tmp/outside.py")
@@ -236,21 +291,86 @@ class Harness2ExperimentTest(unittest.TestCase):
         _git(self.source, "add", "harness2/large.bin")
         _git(self.source, "commit", "-qm", "Oversized source")
         with patch.object(harness2_experiment, "UPSTREAM_COMMIT", _git(self.source, "rev-parse", "HEAD")):
-            with self.assertRaisesRegex(harness2_experiment.ExperimentError, "unexpected"):
+            with self.assertRaisesRegex(harness2_experiment.ExperimentError, "limit"):
                 harness2_experiment._extract_package(self.source, Path(self.temporary.name) / "copy")
 
     def test_git_tree_rejects_missing_terminator(self):
-        original = harness2_experiment._git_bytes
+        original = harness2_experiment._read_object
+        root_oid = _git(self.source, "rev-parse", "HEAD^{tree}")
 
-        def without_terminator(source, *arguments, **kwargs):
-            result = original(source, *arguments, **kwargs)
-            return result[:-1] if arguments[0] == "ls-tree" else result
+        def without_final_oid_byte(source, kind, oid, max_bytes):
+            result = original(source, kind, oid, max_bytes)
+            return result[:-1] if kind == "tree" and oid == root_oid else result
 
-        with patch.object(harness2_experiment, "_git_bytes", side_effect=without_terminator):
-            with self.assertRaisesRegex(harness2_experiment.ExperimentError, "incomplete"):
+        with patch.object(harness2_experiment, "_read_object", side_effect=without_final_oid_byte):
+            with self.assertRaisesRegex(harness2_experiment.ExperimentError, "invalid pinned tree"):
                 harness2_experiment._extract_package(
                     self.source, Path(self.temporary.name) / "truncated-copy"
                 )
+
+    def test_raw_tree_parser_rejects_path_traversal(self):
+        raw = b"100644 ..\0" + bytes.fromhex("a" * 40)
+        with self.assertRaisesRegex(harness2_experiment.ExperimentError, "invalid pinned tree"):
+            harness2_experiment._tree_entries(raw)
+
+    def test_commit_requires_an_explicit_tree_header(self):
+        root_oid = _git(self.source, "rev-parse", "HEAD^{tree}")
+        original = harness2_experiment._read_object
+
+        def wrong_header(source, kind, oid, max_bytes):
+            if kind == "commit":
+                return b"nope " + root_oid.encode() + b"\n"
+            return original(source, kind, oid, max_bytes)
+
+        with patch.object(harness2_experiment, "_read_object", side_effect=wrong_header):
+            with self.assertRaisesRegex(harness2_experiment.ExperimentError, "root tree"):
+                harness2_experiment._extract_package(self.source, None)
+
+    def test_missing_package_tree_is_rejected(self):
+        _git(self.source, "rm", "-qr", "harness2")
+        _git(self.source, "commit", "-qm", "No package")
+        with patch.object(harness2_experiment, "UPSTREAM_COMMIT", _git(self.source, "rev-parse", "HEAD")):
+            with self.assertRaisesRegex(harness2_experiment.ExperimentError, "missing"):
+                harness2_experiment._extract_package(self.source, None)
+
+    def test_excessively_deep_package_tree_is_rejected(self):
+        commit_oid = "a" * 40
+        root_oid = "b" * 40
+        blob_oid = "c" * 40
+        tree_oids = [f"{number + 1:040x}" for number in range(harness2_experiment._MAX_TREES + 1)]
+        objects = {
+            ("commit", commit_oid): b"tree " + root_oid.encode() + b"\n",
+            ("tree", root_oid): b"40000 harness2\0" + bytes.fromhex(tree_oids[0]),
+            ("blob", blob_oid): b"x",
+        }
+        for index, oid in enumerate(tree_oids):
+            if index + 1 < len(tree_oids):
+                objects[("tree", oid)] = b"40000 sub\0" + bytes.fromhex(tree_oids[index + 1])
+            else:
+                objects[("tree", oid)] = b"100644 final.py\0" + bytes.fromhex(blob_oid)
+
+        def fake_object(source, kind, oid, max_bytes):
+            return objects[(kind, oid)]
+
+        with (patch.object(harness2_experiment, "UPSTREAM_COMMIT", commit_oid),
+              patch.object(harness2_experiment, "_read_object", side_effect=fake_object)):
+            with self.assertRaisesRegex(harness2_experiment.ExperimentError, "too many trees"):
+                harness2_experiment._extract_package(self.source, None)
+
+    def test_empty_package_tree_is_rejected(self):
+        commit_oid = "a" * 40
+        root_oid = "b" * 40
+        package_oid = "c" * 40
+        objects = {
+            ("commit", commit_oid): b"tree " + root_oid.encode() + b"\n",
+            ("tree", root_oid): b"40000 harness2\0" + bytes.fromhex(package_oid),
+            ("tree", package_oid): b"",
+        }
+        with (patch.object(harness2_experiment, "UPSTREAM_COMMIT", commit_oid),
+              patch.object(harness2_experiment, "_read_object",
+                           side_effect=lambda source, kind, oid, max_bytes: objects[(kind, oid)])):
+            with self.assertRaisesRegex(harness2_experiment.ExperimentError, "empty"):
+                harness2_experiment._extract_package(self.source, None)
 
     def test_git_tree_rejects_too_many_files(self):
         for number in range(harness2_experiment._MAX_FILES):
@@ -292,20 +412,32 @@ class Harness2ExperimentTest(unittest.TestCase):
 
     def test_tampered_loose_blob_is_rejected_even_if_git_returns_its_bytes(self):
         oid = _git(self.source, "rev-parse", "HEAD:harness2/cli/demo.py")
-        object_path = self.source / ".git/objects" / oid[:2] / oid[2:]
-        header, content = zlib.decompress(object_path.read_bytes()).split(b"\0", 1)
-        tampered = content.replace(b"'done': 2", b"'done': 9")
-        self.assertNotEqual(tampered, content)
-        self.assertEqual(len(tampered), len(content))
-        object_path.chmod(0o600)
-        object_path.write_bytes(zlib.compress(header + b"\0" + tampered))
+        self._corrupt_loose_object(oid, b"'done': 2", b"'done': 9")
         self.assertIn("'done': 9", _git(self.source, "cat-file", "blob", oid))
         with self.assertRaisesRegex(harness2_experiment.ExperimentError, "blob hash"):
             harness2_experiment._extract_package(
                 self.source, Path(self.temporary.name) / "tampered-copy"
             )
-        with self.assertRaisesRegex(harness2_experiment.ExperimentError, "fsck"):
+        with self.assertRaisesRegex(harness2_experiment.ExperimentError, "blob hash"):
             harness2_experiment.verify_source(self.source)
+
+    def test_tampered_commit_and_tree_are_rejected_by_own_hashes(self):
+        self._corrupt_loose_object(self.commit, b"Fixture", b"Fixsure")
+        with self.assertRaisesRegex(harness2_experiment.ExperimentError, "commit hash"):
+            harness2_experiment.verify_source(self.source)
+
+    def test_tampered_root_tree_is_rejected_by_own_hash(self):
+        root_oid = _git(self.source, "rev-parse", "HEAD^{tree}")
+        self._corrupt_loose_object(root_oid, b"harness2", b"harness3")
+        with self.assertRaisesRegex(harness2_experiment.ExperimentError, "tree hash"):
+            harness2_experiment.verify_source(self.source)
+
+    def test_unrelated_corrupt_object_does_not_trigger_a_repository_wide_scan(self):
+        unrelated = self.source / "unrelated.txt"
+        unrelated.write_bytes(b"unrelated")
+        oid = _git(self.source, "hash-object", "-w", str(unrelated))
+        self._corrupt_loose_object(oid, b"unrelated", b"different")
+        self.assertEqual(harness2_experiment.verify_source(self.source), self.source)
 
     def test_report_rejects_symlinks_and_invalid_counters(self):
         output = Path(self.temporary.name) / "output"
