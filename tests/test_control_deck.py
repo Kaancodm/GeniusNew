@@ -216,6 +216,7 @@ class ControlDeckTest(unittest.TestCase):
         state = checks.tool_status("gemini")
         self.assertEqual(state["status"], "green")
         self.assertIn("Antigravity", state["detail"])
+        self.assertIn("quota unverified", state["detail"])
         run.assert_called_once_with(
             ["/x/agy", "models"], cwd=checks.Path.home(), timeout=8.0
         )
@@ -692,18 +693,40 @@ class AgentControlTest(unittest.TestCase):
     def test_live_terminal_is_reported(self, run):
         self.assertEqual(checks.agent_session("hermes")["status"], "green")
 
+    @patch("tools.control_deck.checks._which", return_value="/usr/bin/agy")
     @patch("tools.control_deck.checks.agent_session", return_value={"status": "yellow", "detail": "stopped"})
     @patch("tools.control_deck.checks.tool_status", return_value={"status": "green", "detail": "installed"})
-    def test_abacus_replaces_grok_build_without_a_server_start(self, tool, session):
+    def test_agent_hub_marks_reported_pauses_without_launchers(self, tool, session, which):
         cards = checks.agent_hub()["agents"]
-        self.assertEqual([c["id"] for c in cards], ["grok", "grok_bot", "abacus", "hermes"])
-        abacus = cards[2]
-        self.assertEqual(abacus["url"], "https://apps.abacus.ai/chatllm/")
-        self.assertNotIn("command", abacus)
-        self.assertNotIn("action", abacus)
-        self.assertIn("Browser", abacus["detail"])
-        self.assertNotIn("command", cards[1])
-        self.assertIn("kein unterstützter", cards[1]["detail"])
+        self.assertEqual([c["id"] for c in cards],
+                         ["codex", "claude", "gemini", "antigravity", "copilot", "kiro",
+                          "grok", "grok_bot", "abacus", "hermes"])
+        by_id = {card["id"]: card for card in cards}
+        self.assertIn("100 %", by_id["codex"]["status_label"])
+        self.assertEqual(by_id["codex"]["status"], "yellow")
+        self.assertEqual(by_id["gemini"]["status"], "yellow")
+        self.assertNotIn("command", by_id["gemini"])
+        self.assertEqual(by_id["antigravity"]["command"],
+                         f"cd {checks.DEFAULT_REPO} && /usr/bin/agy")
+        for name in ("copilot", "kiro", "abacus"):
+            with self.subTest(name=name):
+                card = by_id[name]
+                self.assertEqual(card["status"], "red")
+                self.assertIn("03.11.2026", card["detail"])
+                for key in ("command", "url", "models", "action"):
+                    self.assertNotIn(key, card)
+        self.assertNotIn("command", by_id["grok_bot"])
+        self.assertIn("kein unterstützter", by_id["grok_bot"]["detail"])
+
+    @patch("tools.control_deck.checks._which", return_value=None)
+    @patch("tools.control_deck.checks.agent_session", return_value={"status": "yellow", "detail": "stopped"})
+    @patch("tools.control_deck.checks.tool_status", return_value={"status": "green", "detail": "installed"})
+    def test_agent_hub_does_not_offer_antigravity_when_missing(self, tool, session, which):
+        antigravity = next(card for card in checks.agent_hub()["agents"]
+                           if card["id"] == "antigravity")
+        self.assertEqual(antigravity["status"], "yellow")
+        self.assertIsNone(antigravity["command"])
+        tool.assert_called_once_with("hermes")
 
     def test_clipboard_success_is_only_reported_after_success(self):
         """Confirm a copied resume command only after the clipboard helper succeeds."""
