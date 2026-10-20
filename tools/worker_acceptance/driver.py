@@ -65,10 +65,14 @@ def fd_pid(descriptor: int) -> int:
 
 
 def read_status(pid: int) -> dict:
-    source = Path(f"/proc/{pid}/status").read_text(encoding="ascii")
-    return {name: list(map(int, re.findall(r"\d+", value)))
-            for name, value in (line.split(":", 1) for line in source.splitlines())
-            if name in ("Uid", "Gid")}
+    source = Path(f"/proc/{pid}/status").read_bytes()
+    result = {}
+    for line in source.splitlines():
+        name, _, value = line.partition(b":")
+        if name in (b"Uid", b"Gid"):
+            # A task name may contain non-ASCII bytes; only identity fields matter.
+            result[name.decode("ascii")] = list(map(int, re.findall(rb"\d+", value)))
+    return result
 
 
 @dataclass

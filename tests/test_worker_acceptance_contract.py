@@ -249,6 +249,15 @@ class DriverSafetyTest(unittest.TestCase):
         with patch.object(driver.subprocess, "run", return_value=result), self.assertRaises(common.Refused):
             driver.read_properties("geniusnew-worker@one.service")
 
+    def test_process_name_bytes_do_not_obscure_kernel_identity(self):
+        status = (b"Name:\t\xffworker\nUid:\t20002\t20002\t20002\t20002\n"
+                  b"Gid:\t20002\t20002\t20002\t20002\n")
+        with patch.object(Path, "read_bytes", return_value=status), \
+                patch.object(Path, "read_text", side_effect=UnicodeDecodeError(
+                    "ascii", status, 6, 7, "ordinal not in range")):
+            self.assertEqual(driver.read_status(123),
+                             {"Uid": [20002] * 4, "Gid": [20002] * 4})
+
     def test_pidfd_open_failure_reaps_owned_child_and_restores_signal_mask(self):
         child = driver.Child("baseline")
         process = Mock(pid=123, stdin=Mock(), stdout=Mock())
