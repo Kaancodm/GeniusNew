@@ -21,8 +21,10 @@ du Codex und kommt ihr nicht überein, meldest du einen KONFLIKT-Block
 
 ### Prüfung
 
-1. **Review auf Anforderung:** Kaan (oder ChatGPT in seinem Auftrag) startet dich über
-   die Antigravity-CLI oder die Abacus-CLI für einen PR und einen genauen Head-SHA. Für
+1. **Review jedes PRs (seit 20.10.2026, statt Copilot):** Kaan, oder in seinem Auftrag
+   ChatGPT oder Claude Code, startet dich über die Antigravity-CLI, die Abacus-CLI oder
+   die Gemini CLI für einen PR und einen genauen Head-SHA; dein Ergebnis wird
+   unverändert als PR-Kommentar eingestellt. Für
    die Pflicht-Zweitmeinung (Punkt 2) muss ein Pro-Modell laufen. Der Maßstab ist
    `.gemini/styleguide.md`. Widersprüche zwischen Dokumenten meldest du im Review.
 2. **Pflicht-Zweitmeinung bei den Ausnahmen:** Bei einer neuen Abhängigkeit, einer
