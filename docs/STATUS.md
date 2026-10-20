@@ -1,9 +1,10 @@
 # GeniusNew — Projektstand
 
-**Stand: 20.10.2026, `main` `a7308289977d4017cfc1a521100db3e0d01ccc98`.** Gesamtpflege
+**Stand: 20.10.2026, `main` `0e6e0dbf5aefa4169c47ae73f8b39ff0cd94f235`.** Gesamtpflege
 über #145 (Stand `dde20f2`): Gates, Messwerte, Risiken, Aufräumen der offenen PRs.
 Nachgetragen am 20.10.2026 aus den Wissensblöcken bzw. PR-Texten: #174, #154, #179, #180,
-dazu Kaans Entscheidungen vom 20.10.2026 (Pause, D3, #151, CI-Werkzeuge). Die Abschnitte zu D1
+#188, dazu Kaans Entscheidungen vom 20.10.2026 (Pause, D3, #151, CI-Werkzeuge,
+Gemini statt Copilot) und die Reviews aus Kaans Sammelauftrag vom selben Tag. Die Abschnitte zu D1
 (Entscheidungen vom 18.10.2026, #158) und zum lokalen KI-Pilot (19.10.2026, Issue #166)
 stammen aus früheren Pflege-PRs und sind hier nicht neu geprüft; der Portal-DB-Vertrag
 aus #176 (D2/D3, HOLD) ist nur als gemergt erfasst. Teil der
@@ -13,12 +14,17 @@ geschlossen gedacht: als Quelle für NotebookLM, Microsoft 365 Copilot oder jede
 Assistenten, der das Repository nicht selbst lesen kann. Verbindlich bleiben der Code,
 `SECURITY.md` und `docs/ROADMAP-V02.md`. Bei Widerspruch gilt das Repository.
 
-**Sichtbarkeit und Quellenweg (07.10.2026):** Das Repository ist aktuell **privat**
-(GitHub-Stand; keine Aussage zur Dauer, Kaan klärt die Regeln); Raw-Links auf `main` liefern HTTP 404. NotebookLM bekommt Quellen
-nur über von Kaan hochgeladene, geprüfte Dateien aus einem exakten Commit
-(`docs/COLLABORATION.md`, „NotebookLM-Quellenpaket“). **Blocker:** Es gibt noch kein
-dokumentiertes, hochgeladenes Quellenpaket; eine NotebookLM-Importprüfung wurde nicht
-durchgeführt (UNKNOWN).
+**Sichtbarkeit und Quellenweg (geprüft 20.10.2026):** GitHub meldet für
+`Kaancodm/GeniusNew` **public**, passend zu `README.md` und `SECURITY.md`; ein Raw-Link
+auf `docs/STATUS.md` liefert ohne Anmeldung HTTP 200. Die Aussage „privat, HTTP 404“ vom
+07.10.2026 ist überholt; wann sich das geändert hat, ist UNKNOWN (zuerst festgestellt
+von ChatGPT in #190). Die Sichtbarkeit wurde nicht geändert. Öffentlich ist der
+GeniusNew-Kern; private Nachbarprojekte und Betriebsdetails (Hostnamen, Netzinventar,
+Zugangsdaten) gehören nicht in dieses Repository. NotebookLM bekommt Quellen weiter nur
+über von Kaan hochgeladene, geprüfte Dateien aus einem exakten Commit
+(`docs/COLLABORATION.md`, „NotebookLM-Quellenpaket“); HTTP 200 belegt keinen Import.
+**Offen:** Es gibt noch kein dokumentiertes, hochgeladenes Quellenpaket; eine
+NotebookLM-Importprüfung wurde nicht durchgeführt (UNKNOWN).
 
 ## In einem Satz
 
@@ -71,6 +77,7 @@ Audit-Kette festgehalten.
 | KI-Advisory im Kern | `geniusnew/advisory.py`: standardmäßig aus (`[ai_advisory] enabled = true`), keine Autorität, kein HTTP-Weg; Antwort ist untrusted Text plus SHA-256. Pilot unter `tools/ai_pilot/` (aus #172). Neue Zeile in `SECURITY.md`. Merge auf Kaans Anweisung (`docs/DECISIONS.md` 19.10.2026); Gemini-Pro-Zweitmeinung und unabhängiges Security-Review offen | #179 |
 | Client | `tools/genius_client.py`: HTTP nur zu literalem Loopback, keine Redirects, Proxy-Umgehung für Loopback, Steuerzeichen im API-Key verweigert | #180 |
 | Werkzeuge | Server-Einrichtung `ops/server/genius-server`, Deck, Reviewkanäle Abacus und Kiro; manueller iPad-Modellclient über Tailscale (`tools/ipad_llm.py`, Live-Test am Gerät UNKNOWN); Refusal-Guard für drei langsame Module fokussiert; Project Deck | #110, #114, #116, #142, #153, #156 |
+| Werkzeuge (20.10.) | Agentenauswahl (Laya-Shadow) und Control Deck nach Kaans Verfügbarkeitsmeldung: Codex, Gemini, Antigravity getrennt; Copilot, Kiro, Abacus pausiert bis zur Wiedervorlage am 03.11.2026, ohne Starter. Antigravity ist ein Client, kein zusätzliches Gemini-Kontingent. 1399 Tests, Demo 15/15 laut PR | #188 |
 
 **Noch offen:** C5 (Betriebsanleitung mit systemd, Rotation und Betriebsabnahme des
 Worker-Dienstes aus #140), E3 (frischer Klon auf einem echten Server), D1-Code, D2, D3
@@ -155,8 +162,8 @@ des Helfermodells (`docs/DECISIONS.md`, 18. und 19.10.2026).
 
 **Gerät Server, belegt am 19.10.2026** (Ausgaben aus Kaans Terminal, nur lesend):
 
-- Ollama 0.40.1 läuft als User-Dienst `genius-local-ai.service` unter dem Nutzer `kaan`
-  und lauscht nur auf `127.0.0.1:11434`.
+- Ollama 0.40.1 läuft als User-Dienst `genius-local-ai.service` und lauscht nur auf
+  `127.0.0.1:11434`.
 - Cgroup des Prozesses: `memory.max` 6442450944 (6 GiB), `memory.high` 5368709120
   (5 GiB). `systemctl show genius-local-ai` ohne `--user` zeigt `infinity` und ist
   dafür der falsche Weg.
@@ -166,8 +173,8 @@ des Helfermodells (`docs/DECISIONS.md`, 18. und 19.10.2026).
 - Mini-Inferenz mit `qwen3.5:4b-q4_K_M`: Antwort `OK`, 13 s. Qwen 4B allein erreicht
   `memory.high`; im Test stieg der `high`-Zähler um 1571. Beide Modelle gleichzeitig
   sind nicht gemessen (UNKNOWN), im Wechselbetrieb gab es kein OOM.
-- Tailscale läuft; Peers nach Gerätetyp: iOS online ×2, Windows online ×1, Android
-  offline ×1, Linux offline ×1.
+- Tailscale läuft. (Das Peer-Inventar stand hier bis 20.10.2026; es ist aus diesem
+  öffentlichen Dokument entfernt, weil privates Netzinventar nicht hierher gehört.)
 
 **Gerät Laptop, von Kaan gemeldet am 19.10.2026** (Zusammenfassung ohne Rohausgabe, die
 letzte Zeile kam abgeschnitten an): Ollama 0.40.6, Port 11434, Bindung `127.0.0.1`,
@@ -203,24 +210,74 @@ Jobs, Annahmen und Policy).
 8. Quellenpaket für NotebookLM nach Verfahren (`docs/COLLABORATION.md`).
 9. D1: Der Entwurf ist nach den Entscheidungen vom 18.10.2026 überarbeitet (#163
    gemergt). Offen: `docs/DATABASE.md` §4.9 anpassen (ChatGPT im Auftrag von Kaan, #161
-   als Draft; #165 ohne Merge geschlossen); Uhr-Grenze als eigener `SECURITY.md`-PR,
-   Zahlen fürs Lastbudget zur Freigabe, erneuter Review am neuen Head (Gate 6); erst
-   dann D1-Code (Codex), danach D2 und D3.
-10. E2: Security-Review des vollständigen Heads (Claude und Copilot).
-11. KI-Pilot P1 (nur Server): Umsetzung unter `tools/` mit den sechs Negativtests und
-    Eval-Suite (Codex, eigenes Issue); Tailscale-ACL, `tailscale serve` und
-    ai.local-Prüfliste (ChatGPT, eigenes Issue); Laptop- und iPad-Prüfung auf den
-    Geräten (Kaan). Security-Review am exakten Head (Claude) plus Gemini-Zweitmeinung
-    wegen der neuen Netzgrenze.
-12. Nach #179 (Reviews am 20.10.2026: Claude 2 Medium/2 Low, Gemini M1 **High**, M2 Medium;
-    #174: Claude 2 Low): (a) M1 sofort beheben, Engine-Exception ohne `__context__` (Codex,
-    eigener PR); (b) Pilot in eigenen Prozess unter eigener UID, erst Gemini-Design-
-    Vorprüfung, dann Code (Codex, Entscheidung 20.10.2026). `enabled = true` bleibt im
+   als Draft, mit `main` konfliktbehaftet; #165 ohne Merge geschlossen); Uhr-Grenze als
+   eigener `SECURITY.md`-PR, Zahlen fürs Lastbudget zur Freigabe, Gate 10. **Gate 6 am
+   20.10.2026 bestanden** (Claude, an `main` `0e6e0db`, Kommentar in Issue #159: kein
+   Critical/High, 1 Medium zur Audit-Kapazität, 2 Low). Erst danach D1-Code (Codex),
+   dann D3. D2-Bausteine (#151, #152) sind unabhängig davon mergefähig nach
+   Konfliktauflösung.
+10. E2: Security-Review des vollständigen Heads (Claude und Gemini; seit 20.10.2026
+    Gemini statt Copilot).
+11. KI-Pilot: P1 ist mit #179 auf `main` (identisch mit #172, das damit überholt ist).
+    Tailscale-Entwurf #171 (ChatGPT) muss B3 = TLS (Kaan, 19.10.2026) übernehmen; ACL,
+    `tailscale serve`, Zertifikat und Firewall brauchen je Kaans GO. Laptop- und
+    iPad-Prüfung auf den Geräten (Kaan).
+12. Nach #179: (a) M1 ist in #187 behoben; Claude und Gemini fanden am Head zwei weitere
+    Stellen derselben Klasse (UnicodeError-Kontext, `BaseException`), Gemini stuft sie
+    High ein → Codex behebt in #187. (b) Prozessgrenze: Entwurf #186 hat am 20.10.2026
+    den Gemini-Design-PASS (alle Bereiche PASS, 1 Medium zur HOLD-Regel, deckungsgleich
+    mit Claudes Review). Vor dem Code-PR: Kaans OK zur ersetzten `SECURITY.md`-Zeile und
+    zur Frage, ob Gemini 4 Argon (High) als Pro-Modell gilt. `enabled = true` bleibt im
     Betrieb STOP.
-13. Roadmap: C3-Zelle auf den Beleg aus `docs/DECISIONS.md` korrigieren und #140 in den
-    Zellen A2 und C5 nachtragen (eigener Docs-PR).
+13. Roadmap: C3, A2, C5 und E2 korrigiert in #177 (Draft, Kaan mergt).
 
-## Aufräumen der offenen PRs (Stand 19.10.2026)
+## Reviews und Gate-Stand vom 20.10.2026 (Sammelauftrag)
+
+Ausgeführt von Claude Code. Claude-Reviews mit lokaler Reproduktion; Gemini-Reviews über
+die Antigravity-CLI (`gemini-4-argon-high`, nur lesend, Ausgabe unverändert im PR). Jede
+Zeile gilt nur für den genannten Head.
+
+| PR | Head | Claude | Gemini | Nächster Schritt |
+| --- | --- | --- | --- | --- |
+| #187 Advisory-Exception | `66cd1c2` | 2 Low (UnicodeError-Kontext trägt die Modellantwort in `__context__.object`; `BaseException` der Engine) | dieselben 2 als **High** | Codex behebt in #187 |
+| #181 Dependency-Checker | `8848429` | 1 Medium (Versions-Token und Antwort nicht an den Pin gebunden, reproduziert: Exit 0 für fremden Release), 1 Low | 4 **High** (davon 2 deckungsgleich; neu: ungetestete Ablehnung Zeile 121–122, ungeprüfte `id`/`summary`-Typen) | ChatGPT behebt in #181 |
+| #182 E3-Runner | `0976fbf` | 1 Medium (keine Bindung an den freigegebenen Kandidaten-SHA), 1 Low | Bindung **High**, Markdown-Ausbruch Medium, 1 Low | ChatGPT behebt in #182 |
+| #183 Text-Digest | `44312c8` | keine (Suche bis 15 517 von 16 384 Byte ohne Ablehnung) | 1 Medium (Kern-Sätze nach Zeichen) | nicht blockierend |
+| #184 Audit-Delta | `baf9b83` | keine | keine | Kaan mergt (ChatGPT-PR) |
+| #186 Advisory-Prozess (Entwurf) | `81cee08` | 1 Medium (HOLD nach jedem REFUSE), 2 Low | Design-PASS, dasselbe Medium | Kaans OK (`SECURITY.md`-Zeile), dann Code-PR |
+| #189 Harness² | `758ad49` | M1-Rest Medium (manipuliertes Loose Object wird ausgeführt, reproduziert), FIFO-Hänger und fehlende rlimits Low | dieselben 3 als **High**, 1 Medium | ChatGPT behebt in #189 |
+| #150 Worker-Abnahme-Werkzeug | `0a837c7` | keine (Signal-/`/proc`-Pfad) | keine | Codex darf mergen; Liveabnahme braucht Kaans GO (Ablauf im PR) |
+| #191 Gemini statt Copilot | `daa0566` | eigener PR | keine | Kaan mergt |
+| D1-Entwurf (Gate 6) | `main` `0e6e0db` | kein Critical/High; 1 Medium (Audit-Kapazität als Aktivierungsgate), 2 Low | — | Kommentar in Issue #159 |
+
+Weitere Ergebnisse: #117 (C5) — die Core-Unit erzeugt mit `ProtectSystem`/`ProtectHome`/
+`PrivateTmp` eine eigene Mount-Namespace, die der Worker-Hostnachweis aus #140
+(`_HOST_NAMESPACES`) ablehnt; Lösung braucht Kaans Entscheidung (Empfehlung im PR:
+Unit ohne Mount-Namespace-Optionen, Ausgleich über seccomp-basierte Optionen und
+Dateirechte). #151 und #152: einziger Konflikt ist `scripts/refusals.py`; begrenzter
+Auftrag an Codex steht in beiden PRs. #147: Copilot-Review am älteren Head gilt weiter
+(Codec und Tests seitdem byte-gleich), Merge aber HOLD wie D1-Code.
+
+**Gates bis v0.2 (Stand 20.10.2026):**
+
+| Gate | Stand | Quelle |
+| --- | --- | --- |
+| A1 | PASS | #57 |
+| A2 | Code PASS (#76, #140); Betriebsabnahme HOLD; synthetische VM-Probe PASS (#173, nur synthetisch, Security-Review dort CHANGES REQUIRED) | #140, #150, #173 |
+| B0–B3, B6 | PASS | `docs/ROADMAP-V02.md` |
+| B4, B5 | gemergt; `Claude DB Review` durch E2 abgedeckt (Entscheidung 18.10.2026); Gemini-Sicherheitsreview offen | #94, #95 |
+| B7 | gemergt; unabhängiges Review UNKNOWN | #106 |
+| C1, C2, C4 | PASS | #61, #62, #71 |
+| C3 | PASS | #111 |
+| C5 | BLOCKED: Core-Unit gegen Worker-Hostnachweis (Kaans Entscheidung), Schlüsselrotation, Weg nach Restore | #117 |
+| D1 | HOLD (Entwurf Gate 6 PASS; Gates 2, 4, 5, 10 und DB-Vertrag #161 offen) | Issue #159 |
+| D2 | offen (#151 GO, #152 reviewt; beide Konflikt) | #151, #152 |
+| D3 | HOLD (Entwürfe #148, #176) | `docs/DECISIONS.md` 20.10.2026 |
+| E1 | PASS | #112 |
+| E2 | offen | — |
+| E3 | offen; Runner #182 braucht Kandidatenbindung; kein Lauf auf frischem Host | #182 |
+
+## Aufräumen der offenen PRs (Stand 20.10.2026)
 
 Auftrag von Kaan vom 09.10.2026 (`docs/DECISIONS.md`). Am 17.10.2026 hat Claude Code mit
 Kaans OK ohne Merge geschlossen:
@@ -233,15 +290,31 @@ Kaans OK ohne Merge geschlossen:
 | #118 | `8ab7fca` | Überholt durch #129 und #130; die C3-Entscheidung steht jetzt in `docs/DECISIONS.md` |
 
 Außerdem ohne Merge geschlossen, nicht von Claude: #121 (CI-Runner), #143 und #146
-(automatische CodeRabbit-PRs). Am 19.10.2026 sind 27 PRs offen. Offene Fragen:
+(automatische CodeRabbit-PRs). Am 20.10.2026 sind 36 PRs offen. Zuordnung der übrigen
+(Claude Code, 20.10.2026; geschlossen wird nur mit Kaans OK):
+
+| PR | Zuordnung |
+| --- | --- |
+| #172 | überholt: alle Dateien sind über #179 byte-gleich auf `main`; ohne Merge schließen |
+| #175 | Entscheidungszeile in #185 übernommen; ohne Merge schließen |
+| #190 | Inhalt in #185 (`STATUS.md`) und #191 (`COLLABORATION.md`) übernommen; ohne Merge schließen |
+| #144, #173 | synthetische OS-Probe (eigener Code bzw. Workflow); keine Betriebsabnahme. #173: Security-Review CHANGES REQUIRED an `030b5c7` noch offen (ChatGPT). #144 konfliktbehaftet, braucht unabhängiges Review; Wert nach der Liveabnahme aus #150 neu bewerten |
+| #155 | noch erforderlich (echte Angriffstests); Codex-Review ohne Befund, Gemini-Review angefordert |
+| #161 | noch erforderlich (DB-Vertrag D1, Issue #160); Konflikt mit `main` in `docs/DATABASE.md`, ChatGPT |
+| #171 | noch erforderlich; B3 = TLS nachtragen (ChatGPT) |
+| #136 | noch erforderlich (inkrementelles Audit, Kapazitätsrisiko); Konflikt, Gemini-Design-Vorprüfung, Claude-Review, Kaans Freigabe offen |
+| #125 | blockiert: LLM-Worker ist laut Roadmap nicht in v0.2; ändert `SECURITY.md` |
+| #99, #131, #133, #138, #149, #157, #115 | Zusatzwerkzeuge und Forschung; später. #115 und #149 teils durch #188 überholt; #133 und #149 mit roter CI |
+| #128, #139, #141 | Regel-/Strukturentwürfe; warten auf Kaans schriftliche Entscheidung (unten) |
+
+Offene Fragen:
 
 - **Erledigt am 20.10.2026** (`docs/DECISIONS.md`): Die Pause entfällt; die
   D3-Entscheidung aus #148 ist bestätigt und eingetragen; #151 hat Kaans GO für die neue
   Abhängigkeit (Merge nach Konfliktauflösung und grüner CI).
-- **Copilot-Review:** warten oder für die Dauer des Engpasses einen Ersatz festlegen.
-  Laut Kommentar in #153 (6244844507) gilt für die Zusammenführung von #145 eine
-  einmalige Copilot-Ausnahme von Kaan; sie ersetzt weder das Gate auf `main` noch die
-  CI.
+- **Erledigt am 20.10.2026** (`docs/DECISIONS.md`): Gemini übernimmt projektweit die
+  Copilot-Reviewrolle, auch für offene PRs; Regeltexte in #191. Frühere Einzelausnahmen
+  (#145 laut #153, Kommentar 6244844507; #188) sind damit allgemein abgelöst.
 - **Regelfassung:** #139 und #141 berufen sich auf zwei verschiedene, nicht
   eingetragene Kaan-Entscheidungen (08.10. und 06.10.2026) und kollidieren miteinander in
   `AGENTS.md`, `docs/COLLABORATION.md` und `.github/copilot-instructions.md`; #139
@@ -257,19 +330,19 @@ Kerncode um und mergt.** **Seit 04.10.2026 pflegt Claude Code `docs/STATUS.md`**
 (dieses Dokument); Gemini prüft über die Antigravity- oder Abacus-CLI (`docs/COLLABORATION.md`). **Kaan entscheidet
 Ziele und offene Fragen zur Datenbank; ChatGPT erstellt `docs/DATABASE.md` in seinem
 Auftrag.** **ChatGPT** übernimmt außerdem neue Werkzeuge, Server-Pflege und
-Infrastruktur. Copilot prüft zusätzlich. Microsoft 365
+Infrastruktur. **Seit 20.10.2026 reviewt Gemini jeden PR** (statt Copilot). Microsoft 365
 Copilot liest aus OneDrive. **Claude Code besitzt `docs/COLLABORATION.md` und
 `docs/DECISIONS.md`**, sorgt für Ordnung und Struktur, löst Konflikte zwischen den
 Plattformen mit Überschreibrecht und hilft, wenn Codex feststeckt.
 
 | Werkzeug | Rolle | Liest |
 | --- | --- | --- |
-| Gemini Pro | Review über die Antigravity- oder Abacus-CLI: Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung, sonst auf Anforderung | `GEMINI.md`, `.gemini/styleguide.md` |
+| Gemini Pro | Review jedes PRs (seit 20.10.2026, statt Copilot) über Antigravity-, Abacus- oder Gemini-CLI; Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung | `GEMINI.md`, `.gemini/styleguide.md` |
 | NotebookLM | **Wissensdatenbank**: Auskunft für alle, mit Quelle | dieses Dokument, `docs/DECISIONS.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`, `AGENTS.md` |
 | ChatGPT Pro / Codex | **Kerncode-Umsetzung**, ein Thema pro PR (`codex/<thema>`), mit Wissensblock | `AGENTS.md`, `docs/COLLABORATION.md` |
 | ChatGPT (Chat) | **Neue Werkzeuge, Server-Pflege, Infrastruktur, Integrationen** (`chatgpt/<thema>`), NotebookLM + eigenes Notebook; Kaan mergt | `AGENTS.md`, `docs/COLLABORATION.md` |
-| GitHub Copilot Pro | Editor und Review jedes PRs | `.github/copilot-instructions.md` |
-| Kiro-CLI | Unabhängige Zweitprüfung für Claudes eigenen Code, nur lesend | `docs/COLLABORATION.md` |
+| GitHub Copilot Pro | Editor; seit 20.10.2026 kein Pflicht-Reviewer mehr (laut Kaan bis 03.11.2026 nicht nutzbar) | `.github/copilot-instructions.md` |
+| Kiro-CLI | Unabhängige Zweitprüfung für Claudes eigenen Code, nur lesend; laut Kaan bis 03.11.2026 pausiert (Abacus ebenso) | `docs/COLLABORATION.md` |
 | Microsoft 365 Copilot | Berichte, E-Mails, Folien | OneDrive-Ordner `GeniusNew` |
 | Claude Code | **Besitzt `docs/COLLABORATION.md`/`docs/DECISIONS.md`, Ordnung, Konfliktlöser mit Überschreibrecht**, Sicherheits-Review von Kaans DB-Entwurf und Codex' DB-Code, Hilfe bei Hilferuf | `AGENTS.md`, `docs/COLLABORATION.md` |
 
