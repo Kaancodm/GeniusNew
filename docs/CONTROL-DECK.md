@@ -13,6 +13,12 @@ Vom Repository-Root:
 python3 -m tools.control_deck --host 127.0.0.1 --port 8787
 ```
 
+Ohne explizite Konfiguration verwendet das Deck den Checkout, aus dem sein eigenes
+Modul geladen wurde; ein bestimmter Benutzerpfad oder das aktuelle Arbeitsverzeichnis
+ist dafür nicht erforderlich. `GENIUSNEW_REPO` überschreibt diesen Standard beim
+Start, `--repo` hat Vorrang vor beiden. Ein ausdrücklich gewählter fehlender Checkout
+bleibt als `repo missing` sichtbar; es gibt keinen stillen Wechsel auf den Standard.
+
 Das Dashboard zeigt Git, Tailscale, Desktop Commander, Docker, tmux, Agent-Logins und
 die 21 Beta-Gates. Oben stehen Projektstand/Wiedereinstieg, die drei nächsten Schritte
 sowie Research- und Ideenbewertungen. Ein read-only Mail Center zeigt einen kompakten
@@ -20,12 +26,49 @@ Alarmstatus für Verkauf, Sponsoring, Allgemein und System. TERM-Befehle werden 
 die Zwischenablage kopiert. Wiedereinstiegspunkte öffnen PRs, kopieren Login-Befehle
 oder starten eine allowlistete Prüfung.
 
+Einzelprüfungen und „Ausführbare Checks starten“ sperren ihren jeweiligen Button
+während des Laufs. HTTP-, Netzwerk- und Antwortfehler erscheinen mit `FAIL` und Grund
+im Panel. Danach wird der Button wieder freigegeben und der Status neu geladen.
+
+Für Gemini wird bei vorhandenem Antigravity weiterhin `agy models` abgefragt.
+Ohne `agy` prüft das Deck ausschließlich, ob die Gemini-CLI im Suchpfad vorhanden
+ist. Es startet sie nicht und zeigt Gelb mit „CLI installiert · Anmeldung ungeprüft“.
+Fehlt auch `gemini`, bleibt der Status Rot (`missing`). Wiederholte Statusabfragen
+starten keinen Gemini-Modellauftrag und belegen weder Anmeldung noch Kontingent.
+
+## Projektstand und Wiedereinstieg
+
+Die Statuskorrekturen aus PR #115 sind übernommen: Nachweise verwenden den lokalen
+Verweis `refs/remotes/origin/main`; HTTP-Refresh führt weder Git-Fetch noch eine
+GitHub-CI-Abfrage aus. CI bleibt „nicht live abgefragt“. Gemergter Code zählt als
+Implementierung, fehlende Reviews (B4/B5) und Betriebsnachweise (A2/C2) bleiben HOLD.
+C5 zählt seinen gemergten Probe-Code, bleibt ohne Betriebsnachweis HOLD; E3 kommt vor den Portal-Schritten D1–D3.
+Das Deck erteilt keine Beta-/Release-Freigabe.
+
+Ohne Antigravity kopiert der Gemini-Wiedereinstieg `gemini` statt `agy`. Die gelbe
+Anzeige bedeutet ungeprüfte Anmeldung; sie ist kein fehlgeschlagener Modelltest.
+Research-Karten und ihr Detailpanel zeigen die gespeicherte Quelle als Text.
+
+TERM-Kommandos zeigen auf den Checkout aus `--repo`, nicht auf ein zweites,
+möglicherweise veraltetes `~/GeniusNew`. Vorhandene lokale venv-Pythonpfade werden
+verwendet. Statusabfragen führen diese TERM-Kommandos nicht aus.
+
+Auch die HTTP-Aktion `tests` verwendet `repo/.venv/bin/python3`, wenn dieser Pfad
+vorhanden ist, sonst `python3`. Sie teilt diese Auswahl mit den TERM-Befehlen und
+behält die feste Argumentliste und Aktions-Allowlist bei.
+
 ## Mail Center
 
 Das Control Deck liest ausschließlich einen normalisierten lokalen Mail-Snapshot. Der
 Standardpfad ist `~/.local/state/genius-control-deck/mail.json`; alternativ kann
 `GENIUSNEW_MAIL_SNAPSHOT` auf einen anderen lokalen Pfad zeigen. Der Snapshot ist
 Runtime-State und darf nicht in Git committed werden.
+
+Mail- und Projektstatus werden unabhängig geladen. Ein fehlgeschlagener Mail-Abruf
+oder eine ungültige JSON-Antwort zeigt „Mail-Snapshot nicht synchronisiert“, während
+der Projektstatus weiter gerendert wird. Fehler beim Statusabruf werden sichtbar
+im Projektkopf angezeigt. Alle vier Mail-Kategorien zeigen Betreff und Absender
+als maskierten Text im bestehenden Kartenlayout.
 
 Der Provider-Bridge — zunächst Superhuman — bleibt außerhalb des Control-Deck-Prozesses
 und schreibt nur die minimal nötigen Metadaten: Thread-ID, Kategorie, Betreff, Absender,
@@ -67,7 +110,25 @@ Löschen, Archivieren oder Markieren von E-Mails.
 Das Dashboard ist Beobachter. Ein rotes Gate darf nicht per UI auf grün gesetzt werden.
 Der Status muss aus Repository, Diensten und tatsächlichen Nachweisen folgen.
 
-## Grok, Abacus.AI und Hermes
+## KI-Auswahl und Verfügbarkeit
+
+Stand der manuellen Meldung von Kaan: 20.10.2026. Codex über ChatGPT Pro hat
+laut Meldung 100 % Kontingent. Für Claude Pro wurde ein Reset etwa 40 Minuten
+nach der Meldung erwartet; sein aktuelles Kontingent ist nicht erneut geprüft.
+GitHub Copilot, Kiro und Abacus.AI sind für zwei Wochen nicht verwendbar. Die
+Wiedervorlage ist der 03.11.2026; sie aktiviert sie nicht automatisch. Ihre
+Karten enthalten in dieser Zeit keine Start- oder Kopierbefehle.
+
+Gemini Pro hat laut Kaan noch ein Pro-Konto. Google Antigravity erscheint als
+eigener Agentenclient in der Auswahl. Das Deck prüft für ihn weiterhin nur
+`agy models`; eine erfolgreiche Modellliste bestätigt den Zugang, nicht
+Restkontingent. Am 20.10.2026 beantwortete `gemini-4-argon-low` einen kurzen
+Auftrag im Plan-Modus. Dieser Einzeltest misst kein Restkontingent. Ist Antigravity
+erreichbar, bleibt es als Werkzeug verfügbar. Es ist kein Nachweis für ein
+zusätzliches Gemini-Kontingent. Die Pause der anderen Werkzeuge ändert keine
+Review-Pflichten aus `docs/COLLABORATION.md`.
+
+### Weitere Agentenzugänge
 
 Der Agentenbereich liefert über `/api/agents` feste Webzugänge sowie lokale Installations-
 und Terminalstatusdaten. Es entstehen keine Modellaufträge durch Seitenaufrufe.
@@ -77,9 +138,11 @@ unterschiedliche Zustände; eine offene Terminal-Sitzung beweist keinen Modellzu
 - Grok: direkter Web-Zugang; der Browser prüft die Anmeldung.
 - Grok Bot: externer Zugang, ohne unterstützten direkten Steuerungsadapter.
   Weder ein installierter Skill noch eine frühere SSH-Einrichtung beweisen Live-Zugriff.
-- Abacus.AI: vorläufiger Ersatz für Grok Build. Das Control Deck öffnet ausschließlich
-  ChatLLM im Browser; es gibt keinen lokalen Abacus-Start, keinen Repo-Zugriff und keine
-  Secret-Weitergabe aus dem Control Deck.
+- Abacus.AI: Textreview-Profile wurden am 05.10.2026 geprüft. Dieser alte
+  Testnachweis belegt keine aktuelle Nutzbarkeit. Während der gemeldeten Pause
+  zeigt die Karte weder Browser-Link noch TERM-Kopierknöpfe. Automatische
+  Repo-Arbeit bleibt ungeprüft. Das Deck liest keine Credentials und reicht
+  keine Secrets weiter.
 - Grok Build bleibt pausiert, bis sein unterstützter Zugriffs- und Sandbox-Umfang neu
   geprüft und als eigenes Gate freigegeben ist.
 - Hermes-Status liest nur Programmpfad und tmux-Zustand; der Paket-Launcher wird

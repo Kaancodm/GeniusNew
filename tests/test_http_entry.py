@@ -300,9 +300,26 @@ class HttpEntranceTest(Fixture, unittest.TestCase):
             with self.subTest(entry=type(entry)):
                 with self.assertRaisesRegex(ContractError, 'HttpEntry'):
                     make_handler(entry)
+        # The message is matched in full, not just 'host': without this first
+        # check the values below are still refused further down ('literal IP
+        # address', 'loopback'), and a loose pattern would not notice the
+        # check going missing — the refusals guard proved exactly that.
         for host in ('', None, 42, b'127.0.0.1'):
             with self.subTest(host=repr(host)):
-                with self.assertRaisesRegex(ContractError, 'host'):
+                with self.assertRaisesRegex(ContractError, 'non-empty string'):
+                    serve(self.entry, host=host)
+        # A name is not an address: what it resolves to is the resolver's
+        # answer on the day, and 'localhost' has meant non-loopback before.
+        for host in ('localhost', 'example.org', '127.1', '0177.0.0.1'):
+            with self.subTest(host=repr(host)):
+                with self.assertRaisesRegex(ContractError, 'literal IP address'):
+                    serve(self.entry, host=host)
+        # No TLS lives behind this entrance, so a routable bind is refused
+        # here too, not only by the service configuration.
+        for host in ('0.0.0.0', '::', '203.0.113.7', '192.168.1.10',
+                     '::ffff:127.0.0.1'):
+            with self.subTest(host=repr(host)):
+                with self.assertRaisesRegex(ContractError, 'loopback'):
                     serve(self.entry, host=host)
         for port in (-1, 65536, None, '8080', 80.0):
             with self.subTest(port=repr(port)):
