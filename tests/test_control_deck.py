@@ -122,6 +122,20 @@ class ControlDeckTest(unittest.TestCase):
         self.assertIn("keine Live-Abfrage", project["evidence_note"])
 
 
+    def test_unavailable_main_ref_never_becomes_commit_evidence(self):
+        """Discard failed Git output instead of publishing it as a commit hash."""
+        tools = {name: {"status": "green"} for name in ("codex", "gh", "gemini")}
+        for result in ((128, "fatal: PRIVATE-GIT-ERROR-CANARY"), (127, ""), (0, "")):
+            with self.subTest(result=result), patch.object(checks, "_run", return_value=result):
+                project = checks.project_resume([], tools, checks.DEFAULT_REPO)
+                self.assertEqual(project["main_head"], "")
+                self.assertFalse(project["release_ready"])
+                self.assertNotIn("PRIVATE-GIT-ERROR-CANARY", json.dumps(project))
+        with patch.object(checks, "_run", return_value=(0, "a" * 12)):
+            project = checks.project_resume([], tools, checks.DEFAULT_REPO)
+        self.assertEqual(project["main_head"], "a" * 12)
+
+
     def test_commands_follow_selected_checkout_including_spaces(self):
         """Quote the selected checkout and its virtualenv in copied commands."""
         import shlex

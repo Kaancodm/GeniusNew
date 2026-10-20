@@ -300,11 +300,12 @@ def project_resume(
             break
 
     merged = sum(1 for gate in gates if gate.get("implementation_status") == "green")
+    main_code, main_head = _run(
+        ["git", "rev-parse", "--short=12", "refs/remotes/origin/main"], cwd=repo)
     return {
         "focus": focus,
         "stopped_at": stopped,
-        "main_head": _run(["git", "rev-parse", "--short=12", "refs/remotes/origin/main"],
-                          cwd=repo)[1],
+        "main_head": main_head if main_code == 0 else "",
         "release_ready": False,
         "ci": {"status": "yellow", "detail": "nicht live abgefragt"},
         "evidence_note": ("Lokaler origin/main-Stand; keine Live-Abfrage von GitHub. "
