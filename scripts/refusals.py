@@ -73,14 +73,16 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/orchestrator.py", "geniusnew/verifier.py",
            "geniusnew/http_entry.py", "geniusnew/wiring.py",
            "geniusnew/anchor_process.py", "geniusnew/config.py",
+           "geniusnew/advisory.py",
            "geniusnew/__main__.py", "geniusnew/database.py",
            "geniusnew/audit_store.py", "tools/control_deck/actions.py",
-           "tools/ipad_llm.py",
-           "ops/server/genius-server")
+           "tools/ipad_llm.py", "tools/ai_pilot/pilot.py",
+           "ops/server/genius-server", "scripts/demo_restore.py")
 
 # Guarded shell scripts and the one test module that runs each of them.
 GUARDED_SHELL = {"ops/server/genius-server": "test_server_tool.py"}
-GUARDED_TOOL_TESTS = {"tools/ipad_llm.py": "test_ipad_llm.py"}
+GUARDED_TOOL_TESTS = {"tools/ipad_llm.py": "test_ipad_llm.py",
+                      "tools/ai_pilot/pilot.py": "test_ai_pilot.py"}
 
 # Mutants run the tests that exercise each boundary. The unmutated baseline
 # still runs all tests; every selected test file must pass for a mutation to
@@ -99,10 +101,13 @@ GUARDED_PYTHON = {
         "test_persistent_audit_wiring.py", "test_b7_crash_recovery.py",
         "test_orchestrator.py",
     ),
+    "scripts/demo_restore.py": ("test_demo_restore_selection.py",),
+    "geniusnew/advisory.py": ("test_advisory.py",),
     "geniusnew/worker_service.py": ("test_worker_service.py",),
     "geniusnew/isolation.py": ("test_isolation.py",),
     "geniusnew/workers.py": ("test_workers.py", "test_isolation.py", "test_ttl.py"),
     "geniusnew/wiring.py": (
+        "test_advisory.py",
         "test_approver_roles.py", "test_c3_durable_approvers.py",
         "test_end_to_end.py", "test_approval_recovery_validation.py",
         "test_anchored_wiring.py", "test_persistent_audit_wiring.py",

@@ -80,6 +80,7 @@ exists to prevent.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import re
 import secrets
@@ -613,12 +614,25 @@ def serve(entry: HttpEntry, *, host: str = "127.0.0.1", port: int = 0,
           max_connections: int = _MAX_CONNECTIONS):
     """A threading server bound to `entry`, not started. The caller runs it.
 
-    Binds to loopback by default: an entrance that listens on every interface
-    the moment someone imports it is a decision, and it should be taken out
-    loud.
+    Loopback only, refused here and not only by the service configuration:
+    this entrance has no TLS, so binding it to a routable address would put
+    API keys on the wire in the clear. A caller embedding the entry without
+    the config path gets the same refusal as one going through it, and a
+    public address is a reverse proxy's decision, taken out loud there.
     """
     if type(host) is not str or not host:
         _fail("host must be a non-empty string")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError as exc:
+        raise ContractError("host must be a literal IP address") from exc
+    # An IPv4-mapped IPv6 address is refused whichever Python answers:
+    # newer interpreters delegate `is_loopback` to the embedded IPv4
+    # address, older ones do not, and what gets bound is the address as
+    # written, not the one embedded in it.
+    if not address.is_loopback or getattr(address, "ipv4_mapped", None) is not None:
+        _fail("host must be a loopback address; "
+              "put a TLS reverse proxy in front instead")
     if type(port) is not int or not 0 <= port <= 65535:
         _fail("port must be between 0 and 65535")
     slots = _bounded(max_connections, "max_connections", _CEILING_CONNECTIONS)

@@ -110,7 +110,25 @@ Löschen, Archivieren oder Markieren von E-Mails.
 Das Dashboard ist Beobachter. Ein rotes Gate darf nicht per UI auf grün gesetzt werden.
 Der Status muss aus Repository, Diensten und tatsächlichen Nachweisen folgen.
 
-## Grok, Abacus.AI und Hermes
+## KI-Auswahl und Verfügbarkeit
+
+Stand der manuellen Meldung von Kaan: 20.10.2026. Codex über ChatGPT Pro hat
+laut Meldung 100 % Kontingent. Für Claude Pro wurde ein Reset etwa 40 Minuten
+nach der Meldung erwartet; sein aktuelles Kontingent ist nicht erneut geprüft.
+GitHub Copilot, Kiro und Abacus.AI sind für zwei Wochen nicht verwendbar. Die
+Wiedervorlage ist der 03.11.2026; sie aktiviert sie nicht automatisch. Ihre
+Karten enthalten in dieser Zeit keine Start- oder Kopierbefehle.
+
+Gemini Pro hat laut Kaan noch ein Pro-Konto. Google Antigravity erscheint als
+eigener Agentenclient in der Auswahl. Das Deck prüft für ihn weiterhin nur
+`agy models`; eine erfolgreiche Modellliste bestätigt den Zugang, nicht
+Restkontingent. Am 20.10.2026 beantwortete `gemini-4-argon-low` einen kurzen
+Auftrag im Plan-Modus. Dieser Einzeltest misst kein Restkontingent. Ist Antigravity
+erreichbar, bleibt es als Werkzeug verfügbar. Es ist kein Nachweis für ein
+zusätzliches Gemini-Kontingent. Die Pause der anderen Werkzeuge ändert keine
+Review-Pflichten aus `docs/COLLABORATION.md`.
+
+### Weitere Agentenzugänge
 
 Der Agentenbereich liefert über `/api/agents` feste Webzugänge sowie lokale Installations-
 und Terminalstatusdaten. Es entstehen keine Modellaufträge durch Seitenaufrufe.
@@ -120,14 +138,11 @@ unterschiedliche Zustände; eine offene Terminal-Sitzung beweist keinen Modellzu
 - Grok: direkter Web-Zugang; der Browser prüft die Anmeldung.
 - Grok Bot: externer Zugang, ohne unterstützten direkten Steuerungsadapter.
   Weder ein installierter Skill noch eine frühere SSH-Einrichtung beweisen Live-Zugriff.
-- Abacus.AI: Browser-Link und zwei TERM-Kopierknöpfe für die geprüften Textreview-
-  Profile Gemini 3.8 Flash und Sonnet 5.5. Die Anzeige kennzeichnet den historischen
-  Testnachweis vom 05.10.2026 und das aktuell ungeprüfte Kontingent getrennt.
-  Beide Starter öffnen die jeweilige getestete Sitzung im Plan-Modus mit gesperrten
-  Werkzeugen; erst ein eingegebener Auftrag verbraucht Modellkontingent.
-  Die Modellkennungen wurden am CLI-Lauf belegt, nicht aus der Antwort abgeleitet.
-  Die API startet Abacus nicht. Automatische Repo-Arbeit bleibt ungeprüft.
-  Das Deck liest keine Credentials und reicht keine Secrets weiter.
+- Abacus.AI: Textreview-Profile wurden am 05.10.2026 geprüft. Dieser alte
+  Testnachweis belegt keine aktuelle Nutzbarkeit. Während der gemeldeten Pause
+  zeigt die Karte weder Browser-Link noch TERM-Kopierknöpfe. Automatische
+  Repo-Arbeit bleibt ungeprüft. Das Deck liest keine Credentials und reicht
+  keine Secrets weiter.
 - Grok Build bleibt pausiert, bis sein unterstützter Zugriffs- und Sandbox-Umfang neu
   geprüft und als eigenes Gate freigegeben ist.
 - Hermes-Status liest nur Programmpfad und tmux-Zustand; der Paket-Launcher wird
