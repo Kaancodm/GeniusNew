@@ -20,7 +20,9 @@ Das Manifest enthält `source_commit`, `expected_sources` (alle 23 `geniusnew/*.
 
 ## Ausdrücklich aktivierter Livepfad
 
-Ein unabhängig geprüftes Paket muss unveränderlich unter einem rootkontrollierten Stagingverzeichnis liegen. Archivstruktur: `manifest.json`, `tools/worker_acceptance/{driver,common,core}.py` und ein vorab erzeugtes rootkontrolliertes Verzeichnis `reports`. Der Berichtsordner ist ausschließlich `<Staging>/reports`; bestehende Berichte werden nicht überschrieben.
+Ein unabhängig geprüftes Paket muss unveränderlich unter einem rootkontrollierten Stagingverzeichnis liegen. Die Paketstruktur ist exakt `<Staging>/manifest.json`, `<Staging>/tools/worker_acceptance/{driver.py,common.py,core.py}` und das vorab erzeugte rootkontrollierte Verzeichnis `<Staging>/reports`. Bestehende Berichte werden nicht überschrieben.
+
+Die geprüften Installationsdateien gehören nicht zum Staging-Paket. `expected_sources` verwendet Manifestpfade `geniusnew/<modul>.py`; diese werden unter `/opt/geniusnew/.venv/lib/python3.13/site-packages/geniusnew/<modul>.py` aufgelöst. `expected_units` bezeichnet `/etc/systemd/system/geniusnew-worker.socket` und `/etc/systemd/system/geniusnew-worker@.service`. Die vier Migrationen liegen unter `/opt/geniusnew/.venv/lib/python3.13/site-packages/geniusnew/migrations/`: `0001_core_foundation.sql`, `0002_pending_jobs.sql`, `0003_approval_store.sql` und `0004_audit_chain.sql`.
 
 Der Root-Aufruf benötigt gleichzeitig `--run --acknowledge-worker-test --manifest <Staging>/manifest.json --report-dir <Staging>/reports` und isoliertes Python mit deaktivierter Bytecode-Ausgabe. Freigabe und Paketprüfung sind Aufgaben des Bedieners. Dieses Dokument ist keine Live-Ausführungsfreigabe.
 

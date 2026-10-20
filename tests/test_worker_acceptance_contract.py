@@ -544,7 +544,8 @@ class DriverGuardRegressionTest(unittest.TestCase):
                 (driver, "digest", Mock(return_value="d" * 64)),
                 (os, "uname", Mock(return_value=SimpleNamespace(nodename=hostname, release="6.12.1", machine="x86_64"))),
                 (Path, "read_text", Mock(return_value="b" * 32)), (os, "open", Mock(return_value=901)),
-                (os, "fdopen", Mock(return_value=io.BytesIO()))):
+                (os, "fdopen", Mock(return_value=io.BytesIO())),
+                (os.path, "lexists", Mock(return_value=False))):
             mocks[name] = stack.enter_context(patch.object(owner, name, replacement))
         suite = Mock()
         suite.observations = []
