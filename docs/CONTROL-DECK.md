@@ -22,11 +22,22 @@ bleibt als `repo missing` sichtbar; es gibt keinen stillen Wechsel auf den Stand
 Das Dashboard zeigt Git, Tailscale, Desktop Commander, Docker, tmux, Agent-Logins und
 die 21 Beta-Gates. Oben stehen Projektstand/Wiedereinstieg, die drei nächsten Schritte
 sowie Research- und Ideenbewertungen. Ein read-only Mail Center zeigt einen kompakten
-Alarmstatus für Verkauf, Sponsoring, Allgemein und System. TERM-Befehle werden nur in
-die Zwischenablage kopiert. Wiedereinstiegspunkte öffnen PRs, kopieren Login-Befehle
-oder starten eine allowlistete Prüfung.
+Alarmstatus für Verkauf, Sponsoring, Allgemein und System. TERM-Befehle werden
+kopiert oder zur manuellen Übernahme angezeigt. Wiedereinstiegspunkte öffnen PRs,
+kopieren Login-Befehle oder starten eine allowlistete Prüfung.
 
-Einzelprüfungen und „Ausführbare Checks starten“ sperren ihren jeweiligen Button
+Die Startseite bietet Git-, Test- und Demo-Prüfungen einzeln sowie als Prüfkette an.
+Die Prüfkette stoppt beim ersten Fehler; das Ergebnis bleibt bis zum Schließen sichtbar.
+Der Server lässt nur eine Prüfung gleichzeitig zu; weitere Aufrufe zeigen einen Fehler
+an, statt eine zweite vollständige Testsuite parallel zu starten.
+Diese festen Checks laufen im Checkout, der als „Deck“ angezeigt wird; die drei
+Projektprioritäten sind kein ausführbarer Auftrag. Das Deck zeigt den laufenden
+Checkout und den lokal gespeicherten `origin/main` getrennt. Bei abweichenden
+Commits oder lokalen Änderungen warnt es vor einem zu prüfenden Stand. Auf einer HTTP-Seite
+ohne sicheren Browser-Kontext öffnet ein Kopierknopf den auswählbaren TERM-Befehl
+zur manuellen Übernahme, etwa auf dem iPhone. Agenten werden damit nicht gestartet.
+
+Einzelprüfungen und „Prüfkette starten“ sperren ihren jeweiligen Button
 während des Laufs. HTTP-, Netzwerk- und Antwortfehler erscheinen mit `FAIL` und Grund
 im Panel. Danach wird der Button wieder freigegeben und der Status neu geladen.
 
@@ -41,7 +52,11 @@ starten keinen Gemini-Modellauftrag und belegen weder Anmeldung noch Kontingent.
 Die Statuskorrekturen aus PR #115 sind übernommen: Nachweise verwenden den lokalen
 Verweis `refs/remotes/origin/main`; HTTP-Refresh führt weder Git-Fetch noch eine
 GitHub-CI-Abfrage aus. CI bleibt „nicht live abgefragt“. Gemergter Code zählt als
-Implementierung, fehlende Reviews (B4/B5) und Betriebsnachweise (A2/C2) bleiben HOLD.
+Implementierung, offene Gemini-Sicherheitsreviews (B4/B5) und Betriebsnachweise
+(A2/C2) bleiben HOLD. Der gesonderte Claude-DB-Review für B4/B5 entfällt nach
+der Entscheidung vom 18.10.2026; das E2-Gesamtreview ist noch offen (`docs/DECISIONS.md`). C3 hat
+einen dokumentierten Claude-DB-Review am Merge-Head und wird bei gemergtem Code
+nicht mehr als fehlender Review angezeigt.
 C5 zählt seinen gemergten Probe-Code, bleibt ohne Betriebsnachweis HOLD; E3 kommt vor den Portal-Schritten D1–D3.
 Das Deck erteilt keine Beta-/Release-Freigabe.
 
@@ -55,7 +70,8 @@ verwendet. Statusabfragen führen diese TERM-Kommandos nicht aus.
 
 Auch die HTTP-Aktion `tests` verwendet `repo/.venv/bin/python3`, wenn dieser Pfad
 vorhanden ist, sonst `python3`. Sie teilt diese Auswahl mit den TERM-Befehlen und
-behält die feste Argumentliste und Aktions-Allowlist bei.
+behält die feste Argumentliste und Aktions-Allowlist bei. Das Zeitlimit beträgt
+vier Minuten, damit die vollständige Suite im Deck-Checkout beendet werden kann.
 
 ## Mail Center
 
