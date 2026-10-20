@@ -68,7 +68,7 @@ Audit-Kette festgehalten.
 | C3 | Rolle „Freigebende“ mit eigener HTTP-Route | #111 |
 | C4 | Rate-Limit, Job- und Verbindungsgrenze, nginx-Vorlage | #71 |
 | C5 (Teil) | Restore gegen den unabhängigen Anker durchgespielt | #119 |
-| D1 (nur Doku) | Portal→Kern-Vertrag, Replay- und Identitäts-Gates; Code fehlt. Security-Review am `3d26d74` (H1, M1–M4); Gates 1–5, 7 und 8 sowie der Annahmepfad von Gate 9 von Kaan am 18.10.2026 entschieden (`docs/DECISIONS.md`); Entwurf danach überarbeitet (#163, gemergt 18.10.2026); der erneute Review am neuen Head (Gate 6) ist UNKNOWN; D1 bleibt HOLD | #120, #158, #163 |
+| D1 (nur Doku) | Portal→Kern-Vertrag, Replay- und Identitäts-Gates; Code fehlt. Security-Review am `3d26d74` (H1, M1–M4); Gates 1–5, 7 und 8 sowie der Annahmepfad von Gate 9 von Kaan am 18.10.2026 entschieden (`docs/DECISIONS.md`); Entwurf danach überarbeitet (#163, gemergt 18.10.2026); der erneute Review (Gate 6) ist am 20.10.2026 an `main` `0e6e0db` bestanden (Issue #159); D1 bleibt HOLD | #120, #158, #163 |
 | D1 (Kern) | HTTP-Eingang lehnt doppelte Header vor Body und Mapping ab | #162 |
 | D3 (nur Doku) | Entwurf der administrierten Personenbindung mit neuer Envelope-Version; Portal-DB-Wiring D2/D3 mit sicheren Identitätsgrenzen. Beide HOLD, kein Code aktiv | #148, #176 |
 | E1 | Demo mit Persistenz-Angriffen | #112 |
