@@ -224,6 +224,9 @@ def check(pins: list[tuple[str, str]], *, fetch: Fetch = _fetch) -> tuple[int, l
             return 2, lines + [f"{name}=={version}: UNKNOWN ({type(exc).__name__})"]
         total += len(found)
         for identifier, summary in found:
+            # Advisory text must remain visible data, never terminal control sequences.
+            identifier = json.dumps(identifier, ensure_ascii=True)[1:-1]
+            summary = json.dumps(summary, ensure_ascii=True)[1:-1]
             lines.append(f"{name}=={version}: {identifier} {summary}".rstrip())
         if not found:
             lines.append(f"{name}=={version}: no known advisories")

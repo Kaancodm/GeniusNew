@@ -368,6 +368,43 @@ class CheckDependenciesTest(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertIn("GHSA-demo", lines[0])
 
+    def test_advisory_id_and_summary_are_terminal_safe_in_cli_output(self):
+        """Render third-party controls as visible text without changing the failure exit."""
+        payloads = (
+            ("\x1b[2J", r"\u001b[2J"),
+            ("\x1b]0;spoof\x07", r"\u001b]0;spoof\u0007"),
+            ("\x9b31m", r"\u009b31m"),
+            ("\u202ePASS\u2069", r"\u202ePASS\u2069"),
+            ("\x00\b\x7f", r"\u0000\b\u007f"),
+            ("\ud800", r"\ud800"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "requirements.txt"
+            path.write_text("sample==1.0\n", encoding="utf-8")
+            for field in ("id", "summary"):
+                for control, escaped in payloads:
+                    with self.subTest(field=field, control=repr(control)):
+                        entry = {"id": "ADV-1", "summary": "advisory"}
+                        entry[field] = "CANARY-" + control
+                        out, err = io.StringIO(), io.StringIO()
+                        with redirect_stdout(out), redirect_stderr(err):
+                            result = main([str(path)], fetch=lambda _: record(entry))
+                        self.assertEqual(result, 1)
+                        self.assertEqual(err.getvalue(), "")
+                        line = out.getvalue().splitlines()[0]
+                        self.assertIn("CANARY-" + escaped, line)
+                        self.assertNotIn(control, out.getvalue())
+                        self.assertTrue(all(32 <= ord(char) <= 126 for char in line))
+                        self.assertNotIn("No known vulnerabilities", out.getvalue())
+
+    def test_terminal_escaping_preserves_summary_truncation(self):
+        """Escape the retained final character and never expose the omitted suffix."""
+        code, lines = check([("sample", "1.0")], fetch=lambda _: record(
+            {"id": "ADV-1", "summary": "x" * 199 + "\x1b" + "TRUNCATED-CANARY"}))
+        self.assertEqual(code, 1)
+        self.assertTrue(lines[0].endswith("x" * 199 + r"\u001b"))
+        self.assertNotIn("TRUNCATED-CANARY", "\n".join(lines))
+        self.assertNotIn("\x1b", "\n".join(lines))
     def test_summaries_are_truncated(self):
         found = advisories(record({"id": "X", "summary": "y" * 5000}),
                            "sample", "1.0")
