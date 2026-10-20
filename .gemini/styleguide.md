@@ -2,7 +2,9 @@
 
 GeniusNew ist ein Zero-Trust-Agentensystem in Python. Regeln: `AGENTS.md`, Rollen:
 `docs/COLLABORATION.md`. Reviews bitte **auf Deutsch**, im Format
-„Gemini-Review“ aus `docs/COLLABORATION.md`.
+„Gemini-Review“ aus `docs/COLLABORATION.md`. Seit 20.10.2026 (Kaan) ist dieses Review
+das Standard-Review **jedes** PRs und ersetzt das frühere Copilot-Review; die Punkte 1–5
+unten decken dessen Checkliste ab.
 
 ## Schweregrad
 
@@ -27,7 +29,7 @@ GeniusNew ist ein Zero-Trust-Agentensystem in Python. Regeln: `AGENTS.md`, Rolle
 6. **Tests:** Wird ein Test übersprungen, deaktiviert oder abgeschwächt? *Critical*
 7. **Abhängigkeiten:** Ist eine neue Abhängigkeit hinzugekommen, und ist sie in
    `requirements.txt` hash-gepinnt? Ohne Kaans OK gilt das als *High*.
-8. **Wissensblock:** Enthält die Beschreibung eines Codex-PRs den ausgefüllten Block
+8. **Wissensblock:** Enthält die Beschreibung eines Codex-, ChatGPT- oder Claude-PRs den ausgefüllten Block
    „## Für die Wissensdatenbank“? Fehlt er: *High*. Ändert ein Codex-PR
    `docs/STATUS.md`? Diese Datei gehört Claude Code: *Medium*. Ändert er
    `docs/COLLABORATION.md`, `docs/DECISIONS.md` oder `docs/DATABASE.md`? Diese Dateien

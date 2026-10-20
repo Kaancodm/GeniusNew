@@ -8,6 +8,7 @@ Nothing here can select a production database or the active host anchor.
 from __future__ import annotations
 
 from contextlib import ExitStack
+import json
 import os
 from pathlib import Path
 import re
@@ -16,7 +17,6 @@ import subprocess
 import sys
 import tempfile
 
-from psycopg.conninfo import conninfo_to_dict
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -29,11 +29,6 @@ from geniusnew.contracts import ContractError  # noqa: E402
 from postgres_support import PostgresDatabase  # noqa: E402
 
 _CONTAINER_ID = re.compile(r"\A[0-9a-f]{64}\Z")
-_ADMIN_DSN = {
-    "host": "127.0.0.1", "port": "5432",
-    "dbname": "geniusnew_test_admin", "user": "postgres",
-}
-
 
 def require(condition: bool, message: str) -> None:
     if not condition:
@@ -44,9 +39,29 @@ def ci_container() -> str:
     container = os.environ.get("GENIUSNEW_TEST_POSTGRES_CONTAINER", "")
     dsn = os.environ.get("GENIUSNEW_TEST_ADMIN_DSN", "")
     if (os.environ.get("GITHUB_ACTIONS") != "true"
-            or not _CONTAINER_ID.fullmatch(container)
-            or conninfo_to_dict(dsn) != _ADMIN_DSN):
+            or not _CONTAINER_ID.fullmatch(container)):
         raise ContractError("restore drill requires the disposable CI PostgreSQL service")
+    # Only the canonical DSN emitted by verify.yml is supported here.
+    # Parsing into a dict would silently discard duplicate connection keys.
+    match = re.fullmatch(
+        r"host=127[.]0[.]0[.]1 port=([1-9][0-9]{0,4}) "
+        r"dbname=geniusnew_test_admin user=postgres",
+        dsn,
+    )
+    if match is None or int(match.group(1)) > 65535:
+        raise ContractError("restore drill requires the disposable CI PostgreSQL service")
+    port = match.group(1)
+    # The dynamic DSN must resolve to this exact disposable service container.
+    try:
+        inspected = subprocess.run(
+            ["docker", "inspect", "--format", "{{json .NetworkSettings.Ports}}", container],
+            capture_output=True, text=True, check=True, timeout=10)
+        bindings = json.loads(inspected.stdout)
+    except (OSError, subprocess.SubprocessError, UnicodeError, ValueError):
+        raise ContractError("restore drill cannot verify the CI container binding") from None
+    if (not isinstance(bindings, dict)
+            or bindings.get("5432/tcp") != [{"HostIp": "127.0.0.1", "HostPort": port}]):
+        raise ContractError("restore drill DSN does not match the loopback CI container")
     return container
 
 

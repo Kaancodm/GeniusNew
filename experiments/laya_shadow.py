@@ -18,10 +18,9 @@ from urllib.parse import urlsplit
 
 
 _AGENT_CRITERIA = {
-    "kiro": "automated implementation, repository work, and routine code changes",
-    "copilot": "GitHub-aware coding assistance, review, and focused implementation",
-    "gemini": "knowledge synthesis, documentation, and contradiction review",
-    "abacus": "cross-model analysis, agent experimentation, and fallback evaluation",
+    "codex": "ChatGPT Pro implementation; full quota reported on 2026-10-20",
+    "gemini": "Gemini Pro review; one account reported, quota must be checked",
+    "antigravity": "Google Antigravity CLI agent; model listing confirmed, task quota unverified",
 }
 _ALLOWED_AGENTS = tuple(_AGENT_CRITERIA)
 _MAX_TEXT = 4096
