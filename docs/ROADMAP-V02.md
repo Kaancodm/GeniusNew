@@ -87,6 +87,20 @@ anpassen.
 | D2 | Portal-Identität: Argon2id, Sessions nur als Digest, Rotation beim Login, CSRF, `HttpOnly`/`Secure`/`SameSite` | Tests für jede Eigenschaft | **Teilbausteine gemergt, Gate offen:** #151 Argon2id und #152 Token/Digest/CSRF/Cookie. Keine aktive Login-Route/Session-DB. Login-Budgets, Dummy-Hash/Mindestlänge, Rotation/Ablauf/Widerruf, Origin-/CSRF-Runtime, eigener CSRF-Key, Cookie-/Restore-Profil fehlen. [Abgleich 21.10.2026](PORTAL-GATE-STATUS-20261021.md) |
 | D3 | Portal-Ansichten: Auftrag stellen, Verlauf, Freigaben, API-Schlüssel; fremde Aufträge → 404 | End-to-End-Test Portal→Kern | **HOLD:** Personenbindungs- und DB-Wiring-Entwürfe #148/#176 integriert; Core-Registry, versionierte Nutzer-/Funktionsverträge und Runtime/E2E fehlen. D1-Dienstidentität genügt nicht für Personenrechte. [Abgleich 21.10.2026](PORTAL-GATE-STATUS-20261021.md) |
 
+**D2-Abgleich vom 21.10.2026:** geprüft an `main`
+`9385f5bd9dc43f277af8f3b0265c7b4d45cfbc71`. [#151](https://github.com/Kaancodm/GeniusNew/pull/151)
+ist als `1f1c5d9096ee4a47f3bc7880e8a8e463f67c2250` gemergt,
+[#152](https://github.com/Kaancodm/GeniusNew/pull/152) als
+`9385f5bd9dc43f277af8f3b0265c7b4d45cfbc71`. Der Code liegt in
+[`portal_passwords.py`](../geniusnew/portal_passwords.py) und
+[`portal_session_tokens.py`](../geniusnew/portal_session_tokens.py).
+Digest- und Cookie-Helfer belegen noch keine persistente Session-Verwaltung.
+Vor aktivem Login bleiben Passwort-Mindestlänge, Dummy-Hash, Login-Budgets,
+Session-Ablauf und -Sperrung, Rotation, Origin-Prüfung, eigener CSRF-Key sowie
+das endgültige Cookie-/Loginprofil verbindlich (Auflagen in #151/#152).
+D1-Code und D3-End-to-End-Nachweis bleiben offen; **D1–D3 gehören weiterhin zur
+technischen Beta**. Diese Integration ist kein D2- oder v0.2-Abnahme-PASS.
+
 ### E — Nachweis
 
 | # | Gate | Nachweis | Stand |
