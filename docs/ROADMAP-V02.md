@@ -83,9 +83,9 @@ anpassen.
 
 | # | Gate | Nachweis | Stand |
 | --- | --- | --- | --- |
-| D1 | Portal→Kern-Vertrag: Server-zu-Server-Authentisierung (signierte Requests mit Ablauf und Replay-Schutz); Browser-Felder `subject`, `tier`, `user_id`, `tools`, `job_id` werden abgelehnt | Refusal-Tests auf Kernseite | Vertrag als Doku gemergt: #120 (Codex), Merge `fc62f57` (07.10.2026), `docs/PORTAL-CORE-D1-DRAFT.md`. **Code und Refusal-Tests offen** |
-| D2 | Portal-Identität: Argon2id, Sessions nur als Digest, Rotation beim Login, CSRF, `HttpOnly`/`Secure`/`SameSite` | Tests für jede Eigenschaft | offen |
-| D3 | Portal-Ansichten: Auftrag stellen, Verlauf, Freigaben, API-Schlüssel; fremde Aufträge → 404 | End-to-End-Test Portal→Kern | offen |
+| D1 | Portal→Kern-Vertrag: Server-zu-Server-Authentisierung (signierte Requests mit Ablauf und Replay-Schutz); Browser-Felder `subject`, `tier`, `user_id`, `tools`, `job_id` werden abgelehnt | Refusal-Tests auf Kernseite | Vertrag als Doku gemergt: #120 (Codex), Merge `fc62f57` (07.10.2026), `docs/PORTAL-CORE-D1-DRAFT.md`. **Runtime-Code und D1-Refusal-Tests offen, HOLD**; #162 liefert nur rohe Header-Duplikatablehnung, #147 (Codec) und #161 (DB-Entwurf) sind offen. [Abgleich 21.10.2026](PORTAL-GATE-STATUS-20261021.md) |
+| D2 | Portal-Identität: Argon2id, Sessions nur als Digest, Rotation beim Login, CSRF, `HttpOnly`/`Secure`/`SameSite` | Tests für jede Eigenschaft | **Teilbausteine gemergt, Gate offen:** #151 Argon2id und #152 Token/Digest/CSRF/Cookie. Keine aktive Login-Route/Session-DB. Login-Budgets, Dummy-Hash/Mindestlänge, Rotation/Ablauf/Widerruf, Origin-/CSRF-Runtime, eigener CSRF-Key, Cookie-/Restore-Profil fehlen. [Abgleich 21.10.2026](PORTAL-GATE-STATUS-20261021.md) |
+| D3 | Portal-Ansichten: Auftrag stellen, Verlauf, Freigaben, API-Schlüssel; fremde Aufträge → 404 | End-to-End-Test Portal→Kern | **HOLD:** Personenbindungs- und DB-Wiring-Entwürfe #148/#176 integriert; Core-Registry, versionierte Nutzer-/Funktionsverträge und Runtime/E2E fehlen. D1-Dienstidentität genügt nicht für Personenrechte. [Abgleich 21.10.2026](PORTAL-GATE-STATUS-20261021.md) |
 
 ### E — Nachweis
 
@@ -119,8 +119,9 @@ Implementierer.
 
 1. ~~A2 vor der Beta schließen oder als Grenze in die Beta nehmen~~ — entschieden am
    29.09.2026: A2 vor der Beta, Umsetzung Claude (#76).
-2. Portal→Kern-Authentisierung: signierte Requests (Vorschlag, ohne neue Abhängigkeit
-   über Ed25519) oder mTLS.
+2. **Entschieden und als HOLD-Vertrag dokumentiert:** signierte Ed25519-Requests
+   nach `docs/PORTAL-CORE-D1-DRAFT.md`; TLS mit geprüftem Namen bleibt Pflicht.
+   Runtime-, DB-, Budget- und Ingress-Gates bleiben offen; siehe Portal-Abgleich.
 3. Zielplattform des Servers: laut Server-Evidenz in #57 Debian 13, Kernel 6.12, x86_64
    (reicht für Landlock ABI 4). Offen: ob Landlock dort aktiv ist (Einzeiler in
    `docs/ISOLATION-A2.md`).
