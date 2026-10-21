@@ -23,7 +23,7 @@ class LayaShadowTests(unittest.TestCase):
         self.assertEqual(question["type"], "choice")
         self.assertEqual(
             set(question["criteria"]),
-            {"kiro", "copilot", "gemini", "abacus"},
+            {"codex", "gemini", "antigravity"},
         )
         self.assertNotIn("allow", payload)
         self.assertNotIn("deny", payload)
@@ -35,8 +35,8 @@ class LayaShadowTests(unittest.TestCase):
             seen.append(json.loads(wire))
             return b'{"answers":{"agent":{"type":"choice","choice":"gemini"}}}'
 
-        result = observe("database design", "kiro", decide)
-        self.assertEqual(result.authoritative_choice, "kiro")
+        result = observe("database design", "codex", decide)
+        self.assertEqual(result.authoritative_choice, "codex")
         self.assertEqual(result.model_choice, "gemini")
         self.assertFalse(result.matched)
         self.assertEqual(result.status, "OBSERVED")
@@ -46,8 +46,8 @@ class LayaShadowTests(unittest.TestCase):
         def decide(_wire):
             raise OSError("offline")
 
-        result = observe("security review", "copilot", decide)
-        self.assertEqual(result.authoritative_choice, "copilot")
+        result = observe("security review", "codex", decide)
+        self.assertEqual(result.authoritative_choice, "codex")
         self.assertIsNone(result.model_choice)
         self.assertIsNone(result.matched)
         self.assertEqual(result.status, "UNKNOWN")
@@ -55,18 +55,18 @@ class LayaShadowTests(unittest.TestCase):
     def test_invalid_model_choice_is_unknown(self):
         result = observe(
             "route this",
-            "abacus",
+            "codex",
             lambda _wire: b'{"answers":{"agent":{"type":"choice","choice":"untrusted-agent"}}}',
         )
         self.assertEqual(result.status, "UNKNOWN")
-        self.assertEqual(result.authoritative_choice, "abacus")
+        self.assertEqual(result.authoritative_choice, "codex")
 
     def test_parser_accepts_jev_answer_shape(self):
         self.assertEqual(
             parse_choice(
-                b'{"answers":{"agent":{"type":"choice","choice":"kiro"}}}'
+                b'{"answers":{"agent":{"type":"choice","choice":"codex"}}}'
             ),
-            "kiro",
+            "codex",
         )
 
     def test_task_size_is_bounded(self):
@@ -84,14 +84,16 @@ class LayaShadowTests(unittest.TestCase):
                 with self.assertRaisesRegex(ShadowError, "loopback"):
                     http_decider(endpoint)
 
-    def test_legacy_agent_choices_are_rejected(self):
-        for choice in ("claude", "zen"):
+    def test_paused_and_pending_agent_choices_are_rejected(self):
+        for choice in ("claude", "copilot", "kiro", "abacus", "zen"):
             with self.subTest(choice=choice):
                 raw = json.dumps({
                     "answers": {"agent": {"type": "choice", "choice": choice}}
                 }).encode("utf-8")
                 with self.assertRaisesRegex(ShadowError, "configured agents"):
                     parse_choice(raw)
+                with self.assertRaisesRegex(ShadowError, "configured agents"):
+                    observe("review this", choice, lambda _wire: b"{}")
 
     def test_http_endpoint_accepts_ipv4_and_ipv6_loopback(self):
         http_decider("http://127.0.0.1:8000/v1/systemone")
@@ -112,7 +114,7 @@ class LayaShadowTests(unittest.TestCase):
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(
-                    b'{"answers":{"agent":{"type":"choice","choice":"kiro"}}}'
+                    b'{"answers":{"agent":{"type":"choice","choice":"codex"}}}'
                 )
 
             def log_message(self, _format, *_args):
@@ -138,7 +140,7 @@ class LayaShadowTests(unittest.TestCase):
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(
-                    b'{"answers":{"agent":{"type":"choice","choice":"kiro"}}}'
+                    b'{"answers":{"agent":{"type":"choice","choice":"codex"}}}'
                 )
 
             def log_message(self, _format, *_args):
@@ -161,7 +163,7 @@ class LayaShadowTests(unittest.TestCase):
                 raw = http_decider(
                     f"http://127.0.0.1:{server.server_port}/v1/systemone"
                 )(b"{}")
-            self.assertEqual(parse_choice(raw), "kiro")
+            self.assertEqual(parse_choice(raw), "codex")
         finally:
             server.shutdown()
             thread.join()

@@ -694,15 +694,12 @@ class AnchorProcess(AuditAnchor):
 
     def commit_delta(self, head: AuditHead, records: Iterable[AuditRecord], *,
                      authority: AuditAuthority | AuditVerifier) -> tuple[int, str]:
-        """Send only the records since the child's committed count.
+        """Send a bounded extension, with its start derived from the signed head.
 
-        The sender states where its delta starts (`from_count`, its own last
-        acknowledged count); the child checks that against its own state
-        and derives the actual base itself.
+        The child checks the sender's derived start against its own committed
+        state and determines the trusted base itself.
         """
-        from_count = self.committed[0]
-        return self._exchange(_commit2_request(head, records,
-                                               from_count=from_count))
+        return self._exchange(_commit2_request(head, records))
 
     def _exchange(self, message: dict[str, Any]) -> tuple[int, str]:
         frame = _frame(message, _MAX_REQUEST_BYTES)
@@ -739,8 +736,7 @@ def _commit_request(head: AuditHead, records: Iterable[AuditRecord]) -> dict[str
     }
 
 
-def _commit2_request(head: AuditHead, records: Iterable[AuditRecord], *,
-                     from_count: int) -> dict[str, Any]:
+def _commit2_request(head: AuditHead, records: Iterable[AuditRecord]) -> dict[str, Any]:
     """The delta commit as data, bounded before anything leaves this process.
 
     The bounds are the sender's half of the protocol: at most
@@ -750,13 +746,14 @@ def _commit2_request(head: AuditHead, records: Iterable[AuditRecord], *,
     """
     if not isinstance(head, AuditHead):
         _fail("head is invalid")
-    _count(from_count, "from_count")
+    head_count = _count(head.count, "head.count")
     chain = _bounded_chain(records, _MAX_DELTA_RECORDS + 1)
     if len(chain) > _MAX_DELTA_RECORDS:
         _fail(f"delta holds more than {_MAX_DELTA_RECORDS} records")
     if not all(isinstance(record, AuditRecord) and isinstance(record.event, AuditEvent)
                for record in chain):
         _fail("records must be AuditRecord values carrying an AuditEvent")
+    from_count = _count(head_count - len(chain), "from_count")
     request = {
         "from_count": from_count,
         "head": {"count": head.count, "head_hash": head.head_hash,
@@ -811,9 +808,7 @@ class AnchorClient(AuditAnchor):
     def commit_delta(self, head: AuditHead, records: Iterable[AuditRecord], *,
                      authority: AuditAuthority | AuditVerifier) -> tuple[int, str]:
         """As `AnchorProcess.commit_delta`, over the served anchor's socket."""
-        from_count = self.committed[0]
-        return self._exchange(_commit2_request(head, records,
-                                               from_count=from_count))
+        return self._exchange(_commit2_request(head, records))
 
     def _exchange(self, request: dict[str, Any]) -> tuple[int, str]:
         nonce = os.urandom(_NONCE_BYTES).hex()
