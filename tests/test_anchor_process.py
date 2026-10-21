@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from geniusnew import anchor_process
 from geniusnew.anchor_process import AnchorClient, AnchorProcess
 from geniusnew.audit import AuditAuthority, event_from_handoff
-from geniusnew.audit_chain import AuditAnchor, AuditChain, AuditHead, sign_head, verify
+from geniusnew.audit_chain import AuditAnchor, AuditChain, AuditHead, AuditRecord, sign_head, verify
 from geniusnew.contracts import ContractError, Grant, HandoffSigner, Policy, canonical, issue, validate
 
 AUDIT_KEY = b'a-separate-audit-key-of-32-bytes!'
@@ -277,6 +277,45 @@ class AnchorProcessTest(ChainFixture, unittest.TestCase):
                       state_path=Path(self.state_path())).close()
 
 
+class AnchorDeltaWireTest(ChainFixture, unittest.TestCase):
+    """`commit2` against a real child. Kept few, like AnchorProcessTest."""
+
+    def setUp(self):
+        super().setUp()
+        self.head2 = sign_head(count=2, head_hash=self.records[1].record_hash,
+                               authority=self.authority)
+        self.anchor = AnchorProcess(verifier=self.authority.verifier())
+        self.addCleanup(self.anchor.close)
+
+    def test_two_deltas_reach_the_head_a_full_commit_would(self):
+        self.assertEqual(
+            self.anchor.commit_delta(self.head2, self.records[:2], authority=self.authority),
+            (2, self.head2.head_hash))
+        self.assertEqual(
+            self.anchor.commit_delta(self.head, self.records[2:], authority=self.authority),
+            (5, self.head.head_hash))
+        self.assertEqual(self.anchor.committed, (5, self.head.head_hash))
+        self.assertEqual(verify(self.records, self.head, authority=self.authority,
+                                anchor=self.anchor), 5)
+
+    def test_a_delta_that_skips_a_record_is_refused_by_the_child(self):
+        self.anchor.commit_delta(self.head2, self.records[:2], authority=self.authority)
+        with self.assertRaisesRegex(ContractError, 'delta does not start at the anchor'):
+            self.anchor.commit_delta(self.head, self.records[3:], authority=self.authority)
+        self.assertEqual(self.anchor.committed, (2, self.head2.head_hash))
+
+    def test_a_delta_commit_survives_a_restart_with_a_state_file(self):
+        path = self.state_path()
+        first = AnchorProcess(verifier=self.authority.verifier(), state_path=path)
+        self.addCleanup(first.close)
+        first.commit_delta(self.head2, self.records[:2], authority=self.authority)
+        first.commit_delta(self.head, self.records[2:], authority=self.authority)
+        first.close()
+        restarted = AnchorProcess(verifier=self.authority.verifier(), state_path=path)
+        self.addCleanup(restarted.close)
+        self.assertEqual(restarted.committed, (5, self.head.head_hash))
+
+
 class InProcessAnchorTest(ChainFixture, unittest.TestCase):
     def test_an_in_process_anchor_can_be_rewound_by_its_writer(self):
         """Held open: why the anchor had to leave the writer's process."""
@@ -326,14 +365,73 @@ class ChildProtocolTest(ChainFixture, unittest.TestCase):
         message.update(overrides)
         return message
 
+    def head_at(self, count):
+        return sign_head(count=count, head_hash=self.records[count - 1].record_hash,
+                         authority=self.authority)
+
+    def delta_message(self, from_count, records, head, **overrides):
+        message = {
+            'from_count': from_count,
+            'head': {'count': head.count, 'head_hash': head.head_hash,
+                     'signature': head.signature, 'version': head.version},
+            'kind': 'commit2',
+            'records': [record.to_dict() for record in records],
+        }
+        message.update(overrides)
+        return message
+
+    def test_a_delta_commit_needs_none_of_the_prefix(self):
+        """Step 1 of the incremental protocol: the suffix alone extends the anchor."""
+        self.assertEqual(
+            self.handle(self.delta_message(0, self.records[:2], self.head_at(2))),
+            {'count': 2, 'head_hash': self.records[1].record_hash, 'kind': 'ok'})
+        self.assertEqual(
+            self.handle(self.delta_message(2, self.records[2:], self.head)),
+            {'count': 5, 'head_hash': self.head.head_hash, 'kind': 'ok'})
+        self.assertEqual(self.handle({'kind': 'committed'})['count'], 5)
+
+    def test_a_delta_must_start_where_the_anchor_is(self):
+        """`from_count` is a claim; the anchor believes its own count instead."""
+        self.handle(self.delta_message(0, self.records[:2], self.head_at(2)))
+        stale = self.delta_message(0, self.records[2:], self.head)
+        with self.assertRaisesRegex(
+                ContractError, "delta does not start at the anchor's committed count"):
+            self.handle(stale)
+
+    def test_a_delta_with_a_malformed_head_or_records_is_refused(self):
+        message = self.delta_message(0, self.records[:2], self.head_at(2))
+        message['head'] = {'count': 2}
+        with self.assertRaisesRegex(ContractError, 'malformed head'):
+            self.handle(message)
+        message = self.delta_message(0, self.records[:2], self.head_at(2))
+        message['records'] = {'a': 1}
+        with self.assertRaisesRegex(ContractError, 'records must be a list'):
+            self.handle(message)
+
+    def test_from_count_must_be_a_count(self):
+        for bad in (-1, '2', True):
+            with self.subTest(from_count=bad):
+                with self.assertRaisesRegex(
+                        ContractError, 'from_count must be a non-negative integer'):
+                    self.handle(self.delta_message(bad, self.records[:2], self.head_at(2)))
+
+    def test_an_oversized_delta_is_refused_before_any_record_is_read(self):
+        message = self.delta_message(0, self.records[:2], self.head_at(2))
+        with unittest.mock.patch.object(anchor_process, '_MAX_DELTA_REQUEST_BYTES', 64):
+            with self.assertRaisesRegex(ContractError, 'anchor delta commit is too large'):
+                self.handle(message)
+
     def test_a_commit_rebuilt_from_data_is_the_same_commit(self):
         self.assertEqual(self.handle(self.commit_message()),
                          {'count': 5, 'head_hash': self.head.head_hash, 'kind': 'ok'})
         self.assertEqual(self.handle({'kind': 'committed'})['count'], 5)
 
-    def test_there_is_no_request_but_commit_and_committed(self):
+    def test_there_is_no_request_but_commit_commit2_and_committed(self):
+        delta = self.delta_message(0, self.records[:2], self.head_at(2))
         for message in ({'kind': 'reset'}, {'kind': 'committed', 'count': 0},
-                        {'kind': 'commit'}, {**self.commit_message(), 'extra': 1}):
+                        {'kind': 'commit'}, {**self.commit_message(), 'extra': 1},
+                        {**self.commit_message(), 'from_count': 0},
+                        {'kind': 'commit2'}, {**delta, 'extra': 1}):
             with self.subTest(message=sorted(message)):
                 with self.assertRaisesRegex(ContractError, 'not recognised'):
                     self.handle(message)
@@ -546,6 +644,53 @@ def envelope(request, nonce='ab' * 32):
     return {'nonce': nonce, 'request': request}
 
 
+class DeltaRequestTest(ChainFixture, unittest.TestCase):
+    """The sender's half of `commit2`: bounded before anything is sent."""
+
+    def request(self, head=None, records=None):
+        return anchor_process._commit2_request(
+            self.head if head is None else head,
+            self.records[2:] if records is None else records)
+
+    def test_the_request_carries_exactly_the_extension(self):
+        request = self.request()
+        self.assertEqual(set(request), {'from_count', 'head', 'kind', 'records'})
+        self.assertEqual(request['kind'], 'commit2')
+        self.assertEqual(request['from_count'], 2)
+        self.assertEqual(request['head']['count'], 5)
+        self.assertEqual([record['index'] for record in request['records']], [2, 3, 4])
+
+    def test_a_head_that_is_not_a_head_is_refused(self):
+        with self.assertRaisesRegex(ContractError, 'head is invalid'):
+            self.request(head='head')
+
+    def test_delta_cannot_start_before_the_signed_head(self):
+        short_head = sign_head(count=2, head_hash=self.records[1].record_hash,
+                               authority=self.authority)
+        with self.assertRaisesRegex(
+                ContractError, 'from_count must be a non-negative integer'):
+            self.request(head=short_head)
+
+    def test_more_records_than_one_delta_may_carry_are_refused(self):
+        with unittest.mock.patch.object(anchor_process, '_MAX_DELTA_RECORDS', 2):
+            with self.assertRaisesRegex(ContractError, 'delta holds more than 2 records'):
+                self.request()
+
+    def test_records_must_be_records_carrying_events(self):
+        eventless = AuditRecord(2, None, self.records[1].record_hash, '0' * 64)
+        for records in (['junk'], [eventless]):
+            with self.subTest(records=records):
+                with self.assertRaisesRegex(
+                        ContractError, 'records must be AuditRecord values'):
+                    self.request(records=records)
+
+    def test_a_delta_past_the_request_bound_is_refused(self):
+        with unittest.mock.patch.object(anchor_process, '_MAX_DELTA_REQUEST_BYTES', 64):
+            with self.assertRaisesRegex(
+                    ContractError, 'delta commit exceeds the delta request bound'):
+                self.request()
+
+
 class ServedProtocolTest(ChainFixture, unittest.TestCase):
     """The served anchor's side of one connection, without a socket or a process."""
 
@@ -742,6 +887,25 @@ class AnchorClientTest(ChainFixture, unittest.TestCase):
         with self.assertRaisesRegex(ContractError, 'head is invalid'):
             client.commit('head', self.records, authority=self.authority)
 
+    def test_a_delta_sends_only_the_sender_derived_extension(self):
+        client = self.client(os.path.join(short_directory(self), 'anchor.sock'))
+        sent = []
+
+        def exchange(message):
+            sent.append(message)
+            return 5, self.head.head_hash
+
+        with unittest.mock.patch.object(client, '_exchange', side_effect=exchange):
+            committed = client.commit_delta(self.head, self.records[2:],
+                                            authority=self.authority)
+        self.assertEqual(committed, (5, self.head.head_hash))
+        self.assertEqual(len(sent), 1)
+        request = sent[0]
+        self.assertEqual(set(request), {'from_count', 'head', 'kind', 'records'})
+        self.assertEqual(request['kind'], 'commit2')
+        self.assertEqual(request['from_count'], 2)
+        self.assertEqual([record['index'] for record in request['records']], [2, 3, 4])
+
     def test_it_is_configured_with_an_absolute_path_and_a_public_key(self):
         public = anchor_process._public_bytes(self.key)
         with self.assertRaisesRegex(ContractError, 'absolute path'):
@@ -809,6 +973,20 @@ class ServedAnchorTest(ChainFixture, unittest.TestCase):
         self.assertFalse(os.path.exists(self.socket))
         with self.assertRaisesRegex(ContractError, 'unreachable'):
             self.client().committed
+        self.start()
+        self.assertEqual(self.client().committed, (5, self.head.head_hash))
+
+    def test_deltas_are_held_across_an_anchor_restart(self):
+        process = self.start()
+        head2 = sign_head(count=2, head_hash=self.records[1].record_hash,
+                          authority=self.authority)
+        self.assertEqual(
+            self.client().commit_delta(head2, self.records[:2], authority=self.authority),
+            (2, head2.head_hash))
+        self.assertEqual(
+            self.client().commit_delta(self.head, self.records[2:], authority=self.authority),
+            (5, self.head.head_hash))
+        self.stop(process)
         self.start()
         self.assertEqual(self.client().committed, (5, self.head.head_hash))
 

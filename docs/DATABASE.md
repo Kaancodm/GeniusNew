@@ -364,6 +364,14 @@ Freigabe. Die Zahlen unten sind ein **Vorschlag**, keine Betriebsmessung oder
 bereits erteilte Freigabe. Alle D1-Tabellen gehören ausschließlich zur
 Core-Datenbank; Portal, Browser und Portal-Runtime haben keinen direkten Zugriff.
 
+**Nachbesserung zu #161, Entwurf vom 21.10.2026:** Die folgenden Präzisierungen
+adressieren F1/F2/N3/N5/N6 aus
+[Claudes Review](https://github.com/Kaancodm/GeniusNew/pull/161#issuecomment-6250132366).
+Sie sind eine neue Reviewvorlage, keine übernommene Reviewfreigabe. Insbesondere
+die Cleanup-Schnittstelle, der Portal-Zeit-/Budgetvertrag und der Ingress bleiben
+vor Code unabhängig zu prüfen. Zahlen, Betriebsort, Restore-Epochen und
+`SECURITY.md`-Grenzen werden hier nicht freigegeben.
+
 #### 4.9.1 Replay-Zeilen und Rechte
 
 ```sql
@@ -440,13 +448,15 @@ Annahme-Mutationen.
 Das Annahme-Event bindet die Core-Job-ID, die vorhandene Principal-/Handoff-
 Bindung, die Envelope-Version und `sha256(envelope_bytes)` der exakt geprüften
 kanonischen Bytes. Zusätzlich muss es die Replay-Zeile eindeutig referenzieren:
-als versionierten, domänenseparierten SHA-256 über die kanonischen Werte
-`domain`, `issuer`, `nonce` als lowercase Hex und `expires_at`; `expires_at`
-bleibt auch als eigenes Nachweisfeld lesbar. Raw-Envelope, Signatur,
+über den versionierten `replay_key_sha256` und das getrennt gebundene
+`expires_at`. Raw-Envelope, Signatur,
 Auftragstext und Zugangsdaten gehören nicht ins Audit. Die bestehenden
 `AuditEvent`-Versionen 1/2 haben diese D1-Felder noch nicht; Event-Version,
-Digest-Profil und Abgleich sind im überarbeiteten D1-Vertrag ausdrücklich
-festzulegen, nicht still als Zusatzfelder einzuführen.
+Digest-Profil und Abgleich folgen dem Entwurfsprofil `d1-audit-v1` aus
+[`PORTAL-CORE-D1-DRAFT.md`](PORTAL-CORE-D1-DRAFT.md), nicht stillen Zusatzfeldern.
+Dabei ist `replay_key_sha256` der dort definierte Digest über genau
+`domain`, `issuer` und `nonce`; `expires_at` ist ein getrennt gebundenes
+Nachweisfeld und kein Bestandteil dieses Schlüsseldigests.
 
 Die Annahme-Transaktion setzt `SET LOCAL synchronous_commit TO on` nach `BEGIN`
 und prüft den wirksamen Wert unmittelbar vor `COMMIT`; dazwischen darf kein
@@ -471,27 +481,37 @@ gegebenenfalls begonnenen
 Annahme-Transaktion entstehen in einer eigenen dauerhaften Audit-Transaktion
 nur dieses versionierte Event und sein bereits signierter Kopf. Das Event
 bindet Envelope-Version/-Digest, geprüfte Dienstidentität als Digest, Prüfzeit
-und einen geschlossenen Ablehnungsgrund, etwa Nonce-Konflikt oder Ablauf nach
-Signaturprüfung. Es entstehen weder Replay-Zeile noch Job; Job-/Handoff-Felder
+und genau `NONCE_CONFLICT` oder `REQUEST_EXPIRED` als Ablehnungsgrund.
+Nur der erste auditierte Versuch erhält eine zufällige `attempt_id` im eigenen
+Versuch-Namensraum. Es entstehen weder Replay-Zeile noch Job; Job-/Handoff-Felder
 werden nicht durch erfundene IDs ausgefüllt.
 
 Für die Deduplizierung bindet das Event zusätzlich einen versionierten,
 domänenseparierten Digest der kanonischen Werte `issuer` und `nonce`.
+Das feste Profil heißt `d1-refusal-dedupe-v1`: SHA-256 über die ASCII-Kanonform
+von genau diesen drei Feldern nach dem D1-JSON-Profil, ohne Zeilenumbruch:
+
+```text
+{"domain":"geniusnew.portal-core.refusal-dedupe.d1.v1","issuer":<Issuer>,"nonce":<64 lowercase Hex-Zeichen>}
+```
+
 `expires_at`, `key_id`, `audience`, Envelope-Digest und Ablehnungsgrund gehören
 **nicht** in diesen Schlüssel: geänderte Werte erlauben kein zweites Event.
-Der Replay-Zeilendigest mit `expires_at` ist dafür kein Ersatz. Prüfung auf
+Der Replay-Schlüsseldigest ist dafür kein Ersatz. Prüfung auf
 einen vorhandenen Ablehnungsnachweis und Append erfolgen unter derselben
 datenbankgestützten Audit-Serialisierung über alle D1-Annehmer. Die verifizierte
 Audit-Kette ist die autoritative Deduplizierungsquelle; ein abgeleiteter Cache
-darf keinen ungeprüften oder veralteten Stand verwenden. Beim Start wird der
+darf nur unter derselben Audit-Sperre mit dem gerade verifizierten Kettenzähler
+und Kopf übereinstimmen; jede Abweichung verwirft den Cache. Beim Start wird der
 Nachweis aus der geprüften Kette rekonstruiert; mehrere Ablehnungs-Events zu
 derselben Identität sind ein Startfehler. Replay-Bereinigung entfernt diesen
 Nachweis nicht. Recovery erkennt den Ereignistyp ausdrücklich als Ablehnung
 ohne Job-/Replay-Gegenstück und prüft weiterhin Signatur, Kette und Anker.
 Die neue Event-Version muss diese Form ausdrücklich zulassen.
 
-Weitere Ablehnungen derselben Identität belasten, soweit verfügbar, je ein
-Dienst-Token und dürfen ausschließlich begrenzte, aggregierte Zähler erhöhen.
+Für jeden weiteren Request derselben Identität gilt dieselbe anfängliche
+Dienst-Tokenbuchung; es gibt keine zusätzliche zweite Buchung für das Audit.
+Weitere Ablehnungen dürfen ausschließlich begrenzte, aggregierte Zähler erhöhen.
 Sie erzeugen kein weiteres Audit-Event und keinen requestbezogenen Logeintrag.
 **Bei leerem Dienst-Bucket wird sofort ohne Audit oder requestbezogenes Logging
 abgelehnt**, auch wenn noch kein Event zu dieser Identität existiert. Zähler
@@ -509,6 +529,43 @@ Ein bereits belastetes Dienst-Token bleibt verbraucht; ein leerer Bucket
 erzeugt kein Ersatz-Token. Dieses Modell und seine Crash-/Abgleichsfälle sind
 mit #159 festzulegen und unabhängig zu prüfen; **Gate 9 insgesamt bleibt bis
 dahin offen**.
+
+**Geschlossene Fallunterscheidung für F1 (Entwurf):** Die Reihenfolge gilt vor
+jeder Mutation; eine globale Sperre gewinnt vor einem Einzelrequest-Grund.
+
+| Zustand / Auslöser | Dauerhafte Wirkung dieses Requests | Sperre / Wiederanlauf |
+| --- | --- | --- |
+| Framing-/Formatfehler, ungültige Signatur oder erste Zeitprüfung vor Signatur | Kein D1-Audit, keine Reservation und kein Job; nur bereits zulässige Vorab-Budgets und begrenzter Kategorie-Zähler | Keine neue Freigabe; bestehende Sperren bleiben wirksam |
+| Start-Quarantäne, Uhrfehler, unbekannter Integritäts-/Budget-/Speicherstand oder Kapazitätsstopp | Kein requestbezogenes Audit und Logging, kein Job; begrenzter Kategorie-Zähler, soweit verfügbar | D1 bleibt gesperrt; keine Signaturarbeit oder neue Buchung als Ersatz für fehlende Integrität |
+| Anfängliche Dienst-Tokenbuchung scheitert | Kein Audit, auch beim ersten `(issuer, nonce)`; keine Erstattung anderer bereits zulässiger Buchungen | Keine Annahme; kein Ersatz-Token |
+| Signatur gültig, Dienst-Token gebucht, bestätigtes vollständiges ROLLBACK und erstmals `NONCE_CONFLICT` oder `REQUEST_EXPIRED` vor Annahme-COMMIT | Genau der erste mögliche `D1_REQUEST_REFUSED`-Nachweis; nur Audit-Event und signierter Kopf, anschließend Anker | Fehler oder unbekannter Ausgang sperrt D1; keine erneute Jobannahme |
+| Bereits nachgewiesene Ablehnung für dasselbe `(issuer, nonce)` | Kein zweites Event und keine neue Versuch-ID, nur begrenzter Kategorie-Zähler | Die Deduplizierung muss unter der Audit-Sperre bekannt sein |
+| Unbekannter Annahme- oder Ablehnungs-COMMIT / fehlende Ankerbestätigung | UNKNOWN, weder neue Ablehnung ohne Job noch Erfolg behaupten | Alle D1-Annehmer bis zum gemeinsamen Recovery-/Ankerabgleich sperren |
+| Ablauf nach bestätigtem Annahme-COMMIT | Bestehender Job erhält seinen atomaren Ledger-/Audit-Refusal | Kein `D1_REQUEST_REFUSED` ohne Job und kein neuer Nonce |
+
+Die Zähler sind flüchtige, sättigende Aggregatzähler je fester Kategorie und
+Prozess; sie enthalten keine Nonces, Envelope-Digests oder Nutzerreferenzen und
+sind kein Sicherheitsnachweis. Ihr Verlust beim Neustart erlaubt keine Annahme.
+Auch eine sonst auditierbare Ablehnung wird während Quarantäne, Integritäts-
+oder Kapazitätssperre nicht durch einen neuen Auditversuch ersetzt.
+
+Eine unbekannte erforderliche Audit-/COMMIT-/Ankerentscheidung sperrt den
+**gesamten D1-Dienst über alle Instanzen**, nicht nur den betroffenen Request.
+Für die Wiederfreigabe müssen alle D1-Annehmer nachweislich angehalten oder
+gesperrt sein; danach vollständiger Abgleich der gespeicherten Operation mit
+Replay, Job, Audit und Anker sowie alle Startprüfungen und die neue volle
+Quarantäne nach 4.9.4. Ein Prozessneustart oder ein lokales Boolean reicht nicht.
+Der dauerhafte gemeinsame Sperr-/Operationsnachweis ist Bestandteil des noch
+zu reviewenden DB-Protokolls; solange dessen Crashfestigkeit nicht belegt ist,
+bleibt die aktive D1-Implementierung HOLD. Widersprüchliche oder doppelte
+append-only Audit-Nachweise erlauben weder Löschen noch automatische Heilung;
+sie bleiben gesperrt und verlangen einen gesondert freizugebenden Recoveryweg.
+
+Ein Crash nach bestätigtem ROLLBACK, aber vor dem ersten Ablehnungs-COMMIT kann
+den Ablehnungsnachweis verlieren. Das Modell garantiert **höchstens einen**,
+nicht einen in jedem Crashfall vorhandenen Nachweis. Ein späterer neuer,
+erneut budgetierter Versuch darf nur nach eindeutigem Abgleich den ersten
+Nachweis anlegen; ein Request wird dafür nicht automatisch wiederholt.
 
 #### 4.9.3 Gespeicherte Höchstzeit (Gate 2)
 
@@ -591,10 +648,12 @@ initialisiert werden.
 
 Nach **jedem** Start nimmt D1 mindestens **65 Sekunden** nichts an: 60 Sekunden
 maximale Envelope-Gültigkeit plus 5 Sekunden erlaubter Vorlauf. Die Quarantäne
-beginnt erst, wenn **alle Startprüfungen erfolgreich abgeschlossen** sind:
-Schema-/Rechte- und Speicherprüfung, vollständiger B5/B6-Abgleich von Job-Ledger
+beginnt erst, wenn **alle Startprüfungen erfolgreich abgeschlossen** sind,
+einschließlich Schema-/Rechte- und Speicherprüfung, vollständigem B5/B6-Abgleich von Job-Ledger
 und Audit, Prüfung der signierten Köpfe gegen den getrennten Anker sowie
-Uhrprüfung nach 4.9.3. Erst danach werden die monotone Startmarke und die
+Uhrprüfung nach 4.9.3, D1-Replay-/Job-/Audit-Abgleich, bekanntem Budgetzustand,
+Durability-Werten und nachgewiesener DB-/WAL-/Ankerreserve. Erst danach werden
+die monotone Startmarke und die
 geprüfte Core-UTC-Startzeit der Quarantäne gesetzt; die Dauer der Startprüfungen
 zählt nicht zu den 65 Sekunden. Eine fehlgeschlagene oder unklare Startprüfung
 startet keine Quarantäne und gibt D1 auch nach 65 Sekunden nicht frei. Mindestens
@@ -602,6 +661,9 @@ startet keine Quarantäne und gibt D1 auch nach 65 Sekunden nicht frei. Mindeste
 müssen verstrichen sein; bei unklarem Zeitverlauf bleibt D1 gesperrt. Während
 der Quarantäne werden Requests abgelehnt, nicht für eine spätere Annahme
 zwischengespeichert. Jede neue Instanz durchläuft sie selbst.
+Scheitert eine dieser Prüfungen während der Quarantäne, werden beide
+Startmarken ungültig; nach Behebung beginnen alle Prüfungen und anschließend
+die vollen 65 Sekunden erneut. Eine Teilwartezeit wird nicht gutgeschrieben.
 
 Vor Restore oder Failover mit möglicherweise verlorenen Reservationen müssen
 **alle** D1-Annehmer gestoppt beziehungsweise nachweislich gesperrt sein; sie
@@ -670,6 +732,66 @@ Bereinigungstransaktion signieren. Die begrenzte Schnittstelle muss einen
 COMMIT ohne diesen passenden Nachweis verhindern; konkrete Routine, Guards
 und Schnittstelle werden vor DB-Code mitgeprüft.
 
+**Schnittstellenskizze für F2, ausdrücklich noch zu reviewen:** Die bestehende
+Identitätsprüfung von `AuditStore.append(transaction=...)` bleibt unverändert.
+Der Cleanup-Zugang wird weder als dessen eigene Verbindung ausgegeben noch
+über einen optionalen Fremdverbindungsparameter eingeschleust. Vorgeschlagen
+wird ein eigener `D1CleanupStore`, dessen Transaktions- und Ankersperre immer
+an **seine eine** `genius_d1_cleanup`-Verbindung gebunden sind:
+
+1. Nach erfolgreicher Uhr-/Reserveprüfung erwirbt dieser Store dieselbe
+   datenbankgestützte Audit-/Ankersperre auf seiner Verbindung, beginnt eine
+   neue Transaktion und setzt die Durability-Gates aus 4.9.2. Eine bereits
+   offene oder fremde Transaktion ist REFUSE.
+2. Eine eng berechtigte Routine, Arbeitsname `d1_cleanup_begin`, hält diese
+   Sperre und erzeugt einen einmaligen Cleanup-Handle, gebunden an aktuelle
+   DB-Transaktionsidentität und Verbindung. Sie bestimmt die erlaubte Menge
+   selbst aus geprüfter Zeit und dem festen Limit, führt DELETE aus und
+   bindet den **tatsächlichen** Rückgabesatz an diesen Handle. Der Aufrufer
+   liefert weder beliebige Zielzeilen noch eine eigene Löschgrenze. Pro
+   Verbindung/Transaktion ist höchstens ein offener Handle zulässig.
+3. Der vorgeschlagene, migrationsverwaltete Konsistenzguard hält zu diesem
+   Handle die genaue Menge der gelöschten Replay-Bindungen und ihrer
+   ursprünglichen Annahme-Event-Digests fest. Eine `DEFERRABLE INITIALLY
+   DEFERRED`-Prüfung verweigert COMMIT, solange ein Handle nicht vollständig
+   durch genau seinen Bereinigungsnachweis abgeschlossen ist. Die
+   `genius_d1_cleanup`-Rolle hat keine direkten Schreibrechte an diesem
+   Guardzustand; `PUBLIC` und `genius_core` erreichen auch die Routinen nicht.
+   Ein bloßes Python-`try/finally` ist kein Ersatz für den DB-Guard.
+4. Python baut aus genau diesem geprüften Rückgabesatz einen Record des neuen
+   Bereinigungsprofils und prüft die vollständige bisherige Kette, nächsten
+   Index, Vorgängerhash und reservierte Ankergröße unter derselben Sperre.
+   Die vorhandene `AuditAuthority` signiert den daraus berechneten Kopf.
+   Kein anderer Prozess und keine SQL-Routine bekommt ihren privaten Schlüssel.
+5. Eine zweite Routine, Arbeitsname `d1_cleanup_finish`, nimmt Record und
+   bereits signierten Kopf **auf derselben noch offenen Verbindung** entgegen.
+   Sie verlangt denselben Handle und dieselbe DB-Transaktionsidentität,
+   identischen Ausgangskopf, genau dieselbe Löschmenge sowie genau die dazu
+   gehörenden Annahmeverweise. Nur dann darf sie Event und Kopf einfügen und
+   den Handle abschließen. Handle-Replay, Fremdverbindung, fehlender Kopf,
+   Teilmenge oder zusätzliche Bindung sind REFUSE. Die vorhandenen Append-
+   und Kapazitätsinvarianten dürfen dabei nicht umgangen werden.
+6. Der Store prüft Record und Signatur vor COMMIT mit dem öffentlichen
+   Audit-Verifier. Die SQL-Guards sichern Mengen-/Transaktionskonsistenz;
+   sie behaupten keine bisher nicht vorhandene Ed25519-Prüfung durch
+   PostgreSQL. Kryptografisch ungültige Daten bleiben zusätzlich im
+   vollständigen Recovery-/Startabgleich gesperrt. Nach bestätigtem COMMIT
+   wird ausschließlich der gerade gespeicherte Kopf verankert. UNKNOWN
+   sperrt weitere Arbeit nach 4.9.2; es gibt keinen erneuten DELETE-Versuch
+   vor der Reconciliation.
+
+Die neue Eventform muss außerhalb der bisherigen `AuditEvent`-Versionen 1/2
+geschlossen definiert werden: `D1_REQUEST_REFUSED` trägt Versuch-ID und
+Ablehnungsbindungen ohne Job-/Handoff-Felder; das Bereinigungsprofil trägt
+eine begrenzte Liste **genau** der Annahme-Event-Digests, Job-IDs,
+`replay_key_sha256` und ursprünglichen `expires_at` samt geprüfter
+Bereinigungszeit. Annahmeevents behalten ihre echten Job-/Handoff-Bindungen.
+Falsche Formen und unbekannte Profilversionen sind REFUSE; kein generelles
+Optionalmachen der bestehenden Pflichtfelder. Name und Schema des
+Guardzustands, Routinen-DDL, Bereinigungs-Eventtyp, deren Parser und der
+gemeinsame Sperr-/Operationsnachweis sind **Designreview-Gates vor DB-Code**,
+keine mit dieser Skizze genehmigte Migration oder neue Runtime-Rechte.
+
 Replay-DELETE, versioniertes Bereinigungs-Event und dessen **bereits signierter**
 Kopf committen in **einer Transaktion** unter denselben Durability-Gates wie
 4.9.2. Der Audit-Vertrag muss für jede entfernte Zeile ihren Annahme-Event-
@@ -696,14 +818,14 @@ Tokenzahl; jede Anfrage kostet ein Token.
 
 | Bereich | Vorgeschlagene Grenze | Wann belastet / Verhalten bei Erschöpfung |
 | --- | --- | --- |
-| D1 am Proxy, je verifizierter Transport-Quelle | 30 Anfragen/min, nginx `burst=5 nodelay` | Vor Core-Weiterleitung; auch unsignierte/ungültige Versuche; weiterer Überschuss REFUSE, keine Warteschlange |
+| D1 am Proxy, je verifizierter Transport-Quelle | 30 Anfragen/min, nginx `burst=5 nodelay` | Erst nach erfolgreicher Ingress-Authentisierung, vor Core-Weiterleitung; auch unsignierte/ungültige D1-Versuche; weiterer Überschuss REFUSE, keine Warteschlange |
 | Globales D1-Vorab-Budget im Kern | 60 Anfragen/min, Token-Kapazität 10 | Nach billigen Framing-/Größenprüfungen, vor JSON, Body-Digest und Signatur; auch ungültige Versuche; REFUSE |
 | D1-Dienst-Bucket | 6 Anfragen/min, Token-Kapazität 2 | Unmittelbar nach erfolgreicher Signaturprüfung; auch spätere Replay-/Zeit-Ablehnungen verbrauchen das Token ohne Erstattung; REFUSE |
 | D1-Verbindungen | höchstens 4 insgesamt über alle Core-Instanzen | Zusätzlich zur bestehenden Core-Verbindungsgrenze; keine Erhöhung durch weitere Instanzen |
 | Gleichzeitig laufende D1-Jobs | höchstens 2 insgesamt, keine Warteschlange | Vor Reservation; belegt zusätzlich das bestehende Core-`max_in_flight`, dessen strengere Grenze immer gewinnt |
 | Replay-Zeilen | Warnung ab 64, Annahmestopp bei 128 vorhandenen Zeilen | Gesamte gemeinsame Tabelle, einschließlich abgelaufener, noch nicht bereinigter Zeilen; kein 129. Insert |
 | Bereinigung | höchstens 30 s zwischen erfolgreichen Läufen, höchstens 32 Zeilen je atomarem Lauf | Erst nach Quarantäne und nur nach 4.9.5; keine unlimitierte Aufholschleife |
-| Portal, vor jedem Signierversuch | 10/min je serverseitig geprüfter Nutzerreferenz UND portalweit, Token-Kapazität jeweils 2; je 200 Versuche pro UTC-Tag | Einschließlich fehlgeschlagener Versuche, über Sessions/Instanzen/Neustarts; konservatives Ein-Nutzer-Profil, nicht 10 Core-Annahmen/min |
+| Portal, vor jedem Signierversuch | 10/min je serverseitig geprüfter Nutzerreferenz UND portalweit, Token-Kapazität jeweils 2; je 200 Versuche pro UTC-Tag | Einschließlich fehlgeschlagener Versuche, über Sessions/Instanzen/Neustarts; Ein-Nutzer-Vorschlag, nicht 10 Core-Annahmen/min |
 | Freier DB-/WAL-Speicher | D1-Stopp bei weniger als 2 GiB je betroffenem Volume oder UNKNOWN | Zusätzliche Mindestreserve; falls gemessener Bedarf für Audit, WAL, Jobs oder Cleanup größer ist, früher sperren |
 | Serialisierte Anker-Anfrage einschließlich Protokollhülle | Warnung ab 32 MiB, D1-Annahmestopp ab 48 MiB | Unterhalb des bestehenden harten 64-MiB-Transportlimits |
 | Berechnete Anker-Zustandsgröße | Warnung ab 8 MiB, D1-Annahmestopp ab 12 MiB | Unterhalb des bestehenden harten 16-MiB-Dateilimits |
@@ -717,6 +839,12 @@ bezeichnet den erlaubten Überschuss, nicht dieselbe Token-Kapazität wie im Ker
 der Proxytest muss die tatsächliche Grenze belegen. Der geschützte Ingress
 bleibt Voraussetzung; das Quellenlimit allein verhindert kein Aushungern
 durch verteilte Quellen.
+Die Ingress-Authentisierung muss **vor** dem D1-Quellenlimit aus dieser Tabelle
+wirken. Ein fremder Mandant derselben NAT-/Vercel-Adresse ohne gültigen
+Ingress-Zugang darf weder dieses Quellenkontingent noch das Core-Vorab-Budget
+verbrauchen. Allgemeine Transport-/Verbindungsgrenzen bleiben davon getrennt.
+Kein erfolgreicher Test darf eine ungeprüfte Client-Headeradresse als Quelle
+verwenden. Die tatsächliche Proxy-Phasenreihenfolge ist nach 4.9.7 nachzuweisen.
 
 Vorab-/Dienst-Buchungen und Replay-Kapazitätsprüfung müssen über alle aktiven
 Core-Instanzen atomar wirksam sein. Ein `COUNT` mit anschließendem ungeschütztem
@@ -728,6 +856,10 @@ kein In-Memory-Fallback. Verbindungs- und Jobgrenzen brauchen gemeinsame
 Durchsetzung oder fest verteilte Teilkontingente mit höchstens derselben Summe.
 Die konkrete Budget-Speicherung und das Portal-Budget vor dem Signieren gehören
 zum D1-Lastnachweis. Die heutigen prozesslokalen Limits sind dafür kein Beleg.
+Auch ein dauerhafter Vorab-Budget-Write vor Signaturprüfung ist erst hinter
+dem wirksamen geschützten Ingress zulässig; sonst würde unautorisierte Last
+bereits Datenbankarbeit erzwingen. Gate 10 ist deshalb Voraussetzung, keine
+nachträglich ergänzbare Optimierung.
 
 Vor der Signaturprüfung einschließlich der ersten Zeitprüfung werden nur
 Quell- und Vorab-Budget belastet. Signaturgeprüfte Replay-/Zeit-Ablehnungen
@@ -737,7 +869,17 @@ wirksam. Dieser Entwurf erweitert keine Nutzerrechte.
 
 **Begründung der Startzahlen (nur Vorschlag, keine Messung):** Proxy 30/min entspricht einer Anfrage je 2 s pro verifizierter Transportquelle; `burst=5 nodelay` statt Burst 10 vermindert sofortige Spitzen (nginx-Burst ist kein Kern-Token-Bucket). Das globale Vorab-Budget 60/min mit Kapazität 10 erlaubt bis zur doppelten Quellrate, ohne vor der Signaturprüfung 20 sofortige Token freizugeben. Der signaturgeprüfte Dienst-Bucket 6/min mit Kapazität 2 statt Kaans Ausgangswert 20/min und Burst 5 begrenzt die teure gemeinsame Audit-Kette für eine geschlossene Beta mit genau einer Person. Vier gleichzeitig verarbeitete D1-Verbindungen statt acht je Quelladresse decken zwei laufende Jobs mit geringem Reserveplatz ab. Zwei statt vier D1-Jobs lassen einen zweiten Auftrag zu, ohne `max_in_flight` auszuweiten. Diese Zahlen müssen unter realer Last nachjustiert und durch Kaan freigegeben werden.
 
-**Portalbudgets:** Vor dem Signieren muss die Portal-Runtime atomar sowohl den Zähler der *serverseitig verifizierten* Nutzerreferenz als auch einen gemeinsamen Portal-Zähler prüfen und belasten: 10/min, Kapazität 2, höchstens 200 Versuche pro geprüftem UTC-Kalendertag. 10/min lässt kurze Bedienphasen zu; 200/Tag begrenzt unbegrenzte Signierarbeit und Kosten. Fehlgeschlagene Versuche verbrauchen ebenfalls das Portal-Signierbudget und werden nicht erstattet; ein Core-Refusal belastet dagegen gemäß Gate 8 **keine** Nutzerquote. Es gibt keine neu erzeugte Kapazität pro Session, Neustart oder Instanz. Unbekannter Zähler-/Zeitstatus bedeutet REFUSE. Ein zweiter Portal-Nutzer ist vor D3 weiterhin unzulässig.
+**Portalbudgets:** Vor dem Signieren muss die Portal-Runtime atomar sowohl den
+Zähler der *serverseitig verifizierten* Nutzerreferenz als auch einen gemeinsamen
+Portal-Zähler prüfen und belasten. Speicher- und Zeitquellenvorschlag stehen
+in §5.7; die Zahlen aus der Tabelle bleiben ungeprüft. 10/min liegt über dem
+Dienst-Bucket von 6/min und schützt ihn nicht vor Erschöpfung durch den einen
+zugelassenen Nutzer. Fehlgeschlagene Versuche verbrauchen ebenfalls dieses
+**Signierversuchsbudget** und werden nicht erstattet. Dieses Budget ist von
+der Job-Nutzerquote aus §5.4 getrennt; die Gate-8-Regel „keine Nutzerquote bei
+Core-Ablehnung“ erstattet keine Signierversuche. Es gibt keine neu erzeugte
+Kapazität pro Session, Neustart oder Instanz. Unbekannter Zähler-/Zeitstatus
+bedeutet REFUSE. Ein zweiter Portal-Nutzer ist vor D3 weiterhin unzulässig.
 
 **Replay-/Bereinigungsprofil:** Der rechnerische Normalbestand bei 6/min, Kapazität 2 und 161 Sekunden Aufbewahrungsfenster ist `ceil(2 + (6/60) × 161) = 19` Zeilen. Warnung bei 64 und Stopp bei 128 lassen somit rechnerisch 45 bzw. 109 Zeilen Reserve im rückstaufreien Betrieb; die ursprünglichen 100.000 wären für diese Beta keine frühe Störungserkennung. Eine Bereinigung von 32 je 30 s deckt höchstens fünf neu budgetierte Dienstversuche je 30 s ab, aber keinen unbegrenzten Altrückstau. Strikte atomare Kapazitätsgrenze, 2 GiB Mindestfreiraum je DB-/WAL-Volume und bestehende Audit-/Anker-Schranken wirken gemeinsam. Warn- und Ankergrenzen bei 32/48 MiB gegenüber 64 MiB Transport-Hardlimit sowie 8/12 MiB gegenüber 16 MiB Zustands-Hardlimit sollen Betriebsreserve für notwendige Ereignisse lassen; ihre **Angemessenheit ist nicht nachgewiesen**. Bei unbekanntem oder nicht ausreichendem Freiraum D1 verweigern; `DELETE` gibt nicht automatisch physische Relationsgröße frei.
 
@@ -798,16 +940,64 @@ Laufzeiteigenschaften nicht.
 #### 4.9.7 Geschützter Eingang vor dem Vorab-Budget (Gate 10)
 
 **Entwurf zur getrennten Freigabe:** Der Portal-Backend-Dienst auf Vercel spricht den Kern ausschließlich über HTTPS und einen geschützten Core-Proxy an. Vercels ausgehende IP-Adressen stammen standardmäßig aus einem dynamischen Pool; feste ausgehende Adressen dürfen nicht als bestehende Voraussetzung unterstellt werden ([Vercel: IP-Allowlisting](https://vercel.com/kb/guide/how-to-allowlist-deployment-ip-address)). Alternativ verfügbare [Static IPs](https://vercel.com/docs/networking/static-ips) sind keine Authentisierung und werden hier nicht eingerichtet.
+Dieser Vorschlag beschreibt den bisherigen Vercel-Plan; den in §5.6 genannten
+Konflikt zum vorhandenen privaten Portal entscheidet er nicht. Die gemeinsame
+Anforderung „geschützter Ingress vor D1-Budget“ gilt unabhängig vom später
+freigegebenen Betriebsort. Keine Netz-, Hosting- oder Secret-Änderung erfolgt.
 
-Für die Ein-Nutzer-Beta wird ein **separater hochentropischer Ingress-Schlüssel** in einem nur serverseitig gesetzten Transportheader, vorgeschlagen `X-Genius-Ingress-Key`, als einfache Zugangsgrenze vorgeschlagen. Der erste TLS-terminierende Proxy-Hop muss bereits auf der rohen Headerliste vor Zusammenführung, Mapping oder Protokollübersetzung ASCII-case-insensitiv prüfen, dass der Header **genau einmal** vorkommt, und dessen Wert vor Core-Weiterleitung verifizieren. Fehlender, falscher oder doppelter Header wird am Proxy abgelehnt und darf kein globales D1-Vorab-Token im Kern verbrauchen. Kein alternativer öffentlicher Listener, Port oder Route darf diese Prüfung umgehen.
+Für die Ein-Nutzer-Beta bleibt ein **separater hochentropischer Ingress-Schlüssel**
+in einem nur serverseitig gesetzten Transportheader, vorgeschlagen
+`X-Genius-Ingress-Key`, der zu prüfende Zugangsvorschlag. Er ändert weder die
+Hostingentscheidung noch den bestehenden Proxy. Der erste TLS-terminierende
+Hop muss einen gültigen Schlüssel prüfen, **bevor** D1-Quellenkontingent oder
+Core-Vorab-Budget belastet werden. Fehlender, falscher oder nicht eindeutig
+prüfbarer Wert wird dort abgelehnt, ohne Core-Weiterleitung. Kein alternativer
+Listener, Port, Pfad oder Rewrite darf diese Prüfung umgehen.
 
-**Vertragskonflikt explizit offen:** Der aktuelle D1-Proxy-Vertrag in [Issue #159](https://github.com/Kaancodm/GeniusNew/issues/159) verbietet das Entfernen sicherheitsrelevanter Header. Ein Entfernen **ausschließlich dieses zusätzlichen, bereits erfolgreich verifizierten Ingress-Headers** vor dem Core wird vorgeschlagen, damit er weder im Core noch in Logs erscheint und niemals als `Authorization`, D1-Signatur oder Core-Principal verwendet werden kann. Diese eng begrenzte Ausnahme braucht die ausdrückliche Aktualisierung des Vertrags in #163, unabhängiges Review und Kaans Freigabe. Bis dahin **Gate 10 HOLD**; andere D1-/Framing-Header werden nicht geändert, und der Kern lehnt ihre Duplikate unverändert anhand der rohen eingehenden Liste ab. Der neue Header darf keine User-/Job-Autorität ersetzen.
+Für N5 wird nicht mehr ungeprüft eine rohe Duplikaterkennung durch Standard-
+nginx vorausgesetzt. Nach erfolgreicher Prüfung muss der Proxy **sämtliche
+ASCII-case-insensitiven Instanzen dieses einen Ingress-Headers entfernen**;
+anderenfalls muss er die Anfrage vollständig ablehnen. Keine Kopie darf durch
+HTTP/2-Übersetzung, Alias, Request-Trace oder Fehlerpfad zum Kern gelangen.
+Kann eine eingesetzte Proxykonfiguration das nicht nachweislich garantieren,
+bleibt dieser Zugang HOLD. Der Kern muss als zusätzlicher Leckdetektor jede
+Anfrage mit einer verbliebenen Instanz dieses Headers auf der rohen Headerliste
+vor Mapping oder Signaturarbeit verweigern; weder Erfolg noch Logging des
+Werts ist erlaubt. Dieser neue Refusal ist vor Aktivierung separat zu testen.
+
+**Vertragskonflikt explizit offen:** Der D1-Proxy-Vertrag in
+[`PORTAL-CORE-D1-DRAFT.md`](PORTAL-CORE-D1-DRAFT.md) erhält D1-/Framing- und
+Autoritätsheader. Die gezielte Entfernung ausschließlich dieses zusätzlichen,
+bereits erfolgreich geprüften Ingress-Headers bleibt eine noch abzugleichende
+Ausnahme. D1-Envelope, `Authorization`, Framing- und sonstige Autoritätsheader
+werden weder entfernt noch zusammengeführt; ihre Duplikate verweigert der Kern
+weiter anhand der rohen Liste. Der neue Header ist niemals D1-Signatur,
+Core-Principal oder User-/Job-Autorität. Vertragsabgleich, unabhängiges Review
+und Kaans Freigabe stehen aus: **Gate 10 HOLD**.
+
+**Abnahme für N5/N6:** Ein echter isolierter Probeproxy muss für HTTP/1.1 und
+HTTP/2 zeigen: fehlende/falsche Schlüssel sowie uneindeutige Darstellungen
+werden vor D1-Budgetbuchung gestoppt; gültige Schlüssel gelangen einschließlich
+Duplikat-/Casevarianten nie zum Core; Envelope-/Authorization-Duplikate bleiben
+erhalten und werden dort verweigert. Ein direkter Request mit verbliebenem
+Ingress-Header scheitert am Core. Bei gleicher Transportquelle dürfen viele
+unberechtigte Versuche das D1-Kontingent einer nachfolgenden berechtigten
+Anfrage nicht aufbrauchen. „Kein Core-Request“ und unveränderte Budgetzähler
+sind getrennt nachzuweisen. Eine bloße nginx-Konfigurationslektüre oder
+Annahme über die Reihenfolge seiner Phasen genügt nicht.
 
 Schlüssel nur in getrennten Secret-Stores für Vercel-Backend und Proxy, niemals Browser, Repository, Fehlerantwort, Request-Log oder Trace; keine Ableitung aus Core-Root-Secret oder D1-Signierschlüssel. Rotation, Proxy, TLS, Firewall und Deployment bleiben unverändert und benötigen eigene Freigabe. **Betriebsnachweis:** tatsächliche Vercel-Runtime, nginx/TLS-/HTTP2-Übersetzung, Duplikat-/Mischheader, ungültige/fehlende Schlüssel, Bypass-Ports und Lastbudget müssen reproduzierbar geprüft werden. Ein korrekter Ingress-Schlüssel umgeht niemals Signatur-, Zeit-, Replay-, Policy-, Audit- oder Quotenprüfungen. mTLS ist eine mögliche spätere Alternative, hier nicht eingerichtet.
 
 ## 5. Portal-Schema
 
 Portal-Tabellen sind keine Autorität für Core-Policy oder Worker-Rechte.
+
+**Sperre vor Implementierung:** Die SQL-Vorlagen in §5.1–5.5 sind ein älterer
+Entwurfsstand und werden durch den HOLD-Vertrag in §5.6 in Bezug auf
+Identität, Sessions und Migrationen überholt. **Nicht als Migration 0005/0006
+übernehmen**, bis die D3-/Restore-Gates geschlossen und das Schema explizit
+neu geprüft sind. Das bestehende lokale Portal-Schema ist zusätzlich ein
+separater Istzustand und darf keinesfalls still migriert werden.
 
 ### 5.1 Nutzer
 
@@ -891,6 +1081,228 @@ create table portal_jobs (
 ```
 
 Diese Tabelle ist nur UX-Zustand. Bei Widerspruch gewinnt der Kern.
+
+
+### 5.6 Portal-D2/D3-Wiring und Eigentumsgrenzen (Vorschlag, HOLD)
+
+**Status: Doku-Entwurf, keine Migrations-/Runtime-Freigabe.** Das bereits
+akzeptierte dunkelblaue GeniusNew-Portal ist eine UI-Vorlage für **ein**
+bestehendes privates Portal, kein eigenständiges Produktivsystem. Der
+Prototyp liefert Mock-Daten. Echte Statuswerte dürfen nur über den
+authentisierten, serverseitigen Datenprovider dieses Portals kommen;
+bis dahin bleiben sie UNKNOWN. Öffentliche Design-Vorschauen erhalten
+keine Portal-DB-DSN, Core-URL oder Signier- und Auth-Schlüssel; dort sind
+nur klar als MOCK/UNKNOWN gekennzeichnete Beispieldaten erlaubt.
+
+**Read-only-Bestandsaufnahme 19.10.2026:** Auf dem Server wurde ein vorhandenes,
+separat betriebenes Python-/Gunicorn-Portal auf Loopback mit einer
+PostgreSQL-Verbindung beobachtet. Seine vorhandene SQL-Quelldefinition
+enthält acht Tabellen (users, sessions, jobs, approvals, api_keys, quotas,
+login_attempts, audit_events) und weicht deutlich von §5.1–5.5 ab.
+Die tatsächlich angewandten Migrationen und der Schema-/Datenzustand
+wurden **nicht** durch DB-Abfragen verifiziert (UNKNOWN). Das Portal ist
+nicht mit dem signierten GeniusNew-Core- oder externen Ankerpfad verbunden.
+Weder die Live-DB noch ihre Zugangsdaten werden in diesem PR berührt.
+Vor jedem DB-Code ist die Migration vom Ist- zum Zielmodell getrennt zu
+entwerfen und gegen eine Wegwerfkopie zu testen; **kein CREATE/ALTER am Server**.
+
+**Wichtiger Konflikt mit 5.1–5.5:** Die vorhandenen Tabellen verwenden
+für Portal-Konten den Schlüssel user_id und sogar subject. Der **selbst noch auf HOLD stehende**
+D3-Entwurf vom 18.10.2026 nennt dagegen eine eigene, zufällige und
+unveränderliche portal_user_ref aus 16 Bytes (= 32 lowercase Hex-Zeichen).
+Diese Referenz ist weder eine Core-Personen-ID noch ein Core-Subject.
+Die im D3-Entwurf beschriebene Bestätigung durch Kaan ersetzt keinen
+noch ausstehenden Eintrag in DECISIONS.md und keinen Security-Review.
+Die SQL-Vorlagen 5.1–5.5 sind daher noch **nicht** unmittelbar als
+Migration 0005/0006 zu implementieren. Vor DB-Code sind sie nach
+Security-Review entsprechend zu überarbeiten. Kein stilles Umbenennen
+bereits angewandter Migrationen (derzeit sind Portal-Migrationen nicht
+als auf main implementiert belegt).
+
+**Vorgeschlagener relationaler Schlüsselwechsel (Review-Gate):**
+
+- Portal users: portal_user_ref als 128-Bit-CSPRNG-Schlüssel, einmalig,
+  unveränderlich, nie einer zweiten Person zuweisbar. Deaktivierte
+  Konten bleiben als Tombstones; E-Mail ist nur Login-/UX-Attribut,
+  niemals Identitätsbeweis für den Core.
+- Sessions: SHA-256-Digest des 32-Byte-Tokens als einziger Schlüssel,
+  Fremdschlüssel auf portal_user_ref, Ablauf und Sperrzeit; niemals
+  das rohe Token, Cookie oder ein CSRF-Secret speichern. Login und
+  Tokenrotation in einer Transaktion. Gesperrte/abgelaufene Sessions,
+  DB-Ausfall und unsichere Zeit sind REFUSE.
+- Rollen: weiterhin USER/APPROVER/ADMIN als reine Portal-UI-Rollen,
+  keine Autorität für Core-Policy, C3-Approvals oder Job-Eigentum.
+- Quoten und Nutzung: Schlüssel portal_user_ref; HOUR/MONTH und separater
+  Dienst-Bucket werden in fester Reihenfolge in **einer** Transaktion
+  belastet. Pro Fenster atomarer Upsert mit bedingter Erhöhung und
+  RETURNING; null Zeilen bedeutet REFUSE. Nach Belastung und Versuch
+  gibt es auch bei Core-REFUSED/UNKNOWN keine stille Erstattung.
+  Core-Personen-Quoten bleiben **autoritativ** über Neueinladungen und
+  Portalreferenz-Wechsel hinweg. Das Pending-Limit aus §5.4 benötigt
+  einen eigenen synchronisierten Zähler/registrierte Core-Abfrage:
+  bis dahin kein positives Pending-Limit-Versprechen. Beträge,
+  Zeitquelle, Dienstbudget und Recovery-Grenze aus #161 sind offen;
+  bei unbekanntem Budget wird keine Anfrage signiert.
+- Portal-History: (portal_user_ref, job_id) nur nichtautoritativer
+  Anzeige-/UX-Cache. Vor dem Netzwerkaufruf wird eine dauerhafte
+  Submission-Zeile (neuer, getrennt zu reviewender Entwurf) mit
+  zufälliger submission_id, Alias, Envelope-Digest und einem strikt
+  validierten Zustand SUBMITTING/ACCEPTED/REFUSED/UNKNOWN angelegt.
+  Ein Crash nach Core-COMMIT kann dadurch als UNKNOWN angezeigt und
+  später nur durch eine neue signierte Core-Leseoperation abgeglichen
+  werden; **keine erneute Core-Joberzeugung**. last_status benötigt
+  ebenfalls einen geschlossenen Zustands-Check. Fremde Aufträge
+  antworten einheitlich 404; der Browser darf Job-Eigentum oder
+  Status nicht selbst festlegen.
+
+**Identitäts- und Datenfluss:**
+
+~~~text
+Browser (untrusted)
+  -> privates GeniusNew Portal Backend
+    -> eigene Portal-PostgreSQL (Sessions/Konten/UX, Rolle genius_portal)
+    -> signierte versionierte Portal->Core HTTP-Operation (D1/v2 HOLD)
+      -> Core-seitig verwaltete Personenbindung und Policy
+      -> persistenter Ledger, Audit-Kette und separater Anker
+~~~
+
+Der Core verwaltet die Bindung des Tupels
+(portal_service_principal_id, portal_user_ref) an den Core-Subject
+und die kanonische Personen-ID. Die Portal-Datenbank darf diese
+Core-Registry nicht duplizieren oder als Autorität ersetzen.
+Ein deaktivierter oder mehrfach gemappter Alias: REFUSE. Die
+Portal-Signatur stellt die Dienstidentität sicher, nicht die
+persönliche Approver-Identität. Ein zweiter Benutzer und Freigaben
+bleiben ohne D3-v2-Gate gesperrt. D1s begrenzte Ein-Nutzer-Ausnahme
+bleibt auf risikoarme Tools ohne Approvals beschränkt.
+
+**Transaktions- und Recovery-Gates vor Code:**
+
+1. Login: Argon2id aus PR #151, Token/CSRF aus PR #152; Session
+   wird nur bei ACTIVE-Konto, gültigem Digest und Zeitfenster
+   akzeptiert. Stateful Login-Drosselung gegen unbekannte Adressen
+   wie gegen falsche Passwörter; nicht prozesslokal. Alle mutierenden
+   Aktionen inkl. Login/Logout benötigen Origin-Prüfung und einen
+   serverseitig HMAC-gebundenen CSRF-Header; der HMAC bindet die
+   aktive Session und wird nach Rotation ungültig. __Host-Cookie,
+   Secure, HttpOnly, Host-only, Path=/; für die geschlossene Beta
+   SameSite=Strict **vorgeschlagen** (PR #152 beschreibt Lax;
+   Profilentscheidung und Test noch ausstehend). Keine Mutation
+   per GET und kein automatisches Demo-Login.
+2. Kontosperrung wird erst nach **bestätigter Core-Registry-Sperre**
+   endgültig, danach Portal-Konto DISABLED und Sessions atomar
+   widerrufen. Ist die Core-Sperre unbestätigt, meldet das System
+   PENDING/HOLD, niemals erfolgreichen Abschluss. Ein Job-Request
+   hält das Portal-Konto nur während Session-/Quote-/Signaturprüfung
+   (transaktionslokale Row-Sperre), **niemals während des HTTP-Aufrufs**.
+   Bei Core-Annahme wird die aktuelle gesperrte Registry erneut geprüft.
+   DISABLED ist terminal; DB-Test/Trigger verweigert DISABLED->ACTIVE.
+   Alte portal_user_ref bleibt unveränderlich und wird nie recycelt.
+3. Job: sichere Session -> in einer Transaktion persistente Quoten
+   plus Submission-/Envelope-Digest -> Portal-Signatur über den nur
+   serverseitig ermittelten Alias -> Core-Signatur-/Replay-/Policy-/
+   Registry-Prüfung -> atomare Core-Annahme/Audit -> erst nach
+   bestätigtem Ergebnis UX-Caching. Ungewisser COMMIT-Ausgang oder
+   Netzverlust bleibt in der Submission-Zeile UNKNOWN/HOLD und wird
+   nur durch signierten Core-Status abgeglichen, **niemals still neu
+   signiert/abgesendet**.
+4. Eine Core-Jobsignatur autorisiert nicht automatisch History,
+   Approval oder API-Key-Verwaltung. Jede dieser Operationen
+   braucht einen gesondert versionierten Vertrag und Test.
+5. Portal-Laufzeit ohne Core-DB-DSN, Root-/Anker-Secret, DDL-,
+   TRIGGER-, TRUNCATE-, Owner- oder Superuser-Recht. Die separate
+   Portal-Migrationsrolle besitzt ausschließlich Portal-DDL.
+   Die Runtime-Rolle erhält DML nur je tatsächlich benötigter
+   Portal-Tabelle/Spalte; kein DELETE auf users und kein unkontrolliertes
+   Rollen-/Statusupdate. Server-Konfiguration ist die einzige
+   Quelle von Secrets; nie Browser-Bundle/Repo.
+6. PostgreSQL-Integration nur in isolierter Wegwerf-DB:
+   Sessionablauf, Rotation, Logout, parallele Sperre und Core-Block,
+   fremdes Job-404, Budget-Race, Replay, DB-Ausfall, Restore und
+   unbekannter COMMIT. Nach Restore werden **alle alten Sessions
+   unabhängig vom wiederhergestellten DB-Inhalt ungültig**; Core-
+   Sperrstatus und extern verankerte Sicherheitszustände gewinnen.
+   Unbekanntes Budget: REFUSE. Verfahren für einen externen
+   Session-Epochenanker/Rotation und Core-Reconciliation ist **HOLD**.
+   Rote Negativtests zuerst, dann CI/Refusal-Guard, unabhängiges
+   Claude DB Review am exakten SHA, Kaan-Merge.
+7. OFFENE ARCHITEKTURFRAGEN: §2.2 und die bisherigen
+   DECISIONS.md-Einträge sehen Vercel vor. Am 19.10.2026 beschrieb
+   Kaan die neue UI-Vorschau als spätere Einbindung in ein einzelnes
+   privates selbst gehostetes Portal. Dieser noch nicht nach
+   DECISIONS.md übertragene Betriebsort-Widerspruch ist ausdrücklich
+   **HOLD**; bis zu Kaans dokumentierter Entscheidung kein Wechsel
+   von Host, TLS, Pooler oder Zugang. Bei Vercel nur transaktionslokale
+   Locks und TLS-DB verify-full, bei gemeinsamem Host getrennte
+   OS-Nutzer und separate DB-Cluster/Secrets als zu prüfende
+   Anforderungen. Weiter offen: Einladungs-/E-Mail-Kanonisierung
+   (Wiederaufnahme darf an unique Email nicht scheitern),
+   Token-Formate und Session-Epochen, Quoten-/Zeitanker, Retention,
+   administrative Core-Registry-Sperr- und Restore-Transaktionen.
+8. Core-seitiger, eigener Datenbankentwurf (§4.10 als Folgethema)
+   für kanonische Personen-ID, unveränderliche gesperrte Aliasse,
+   getrennte D3/v2-Replay-Domäne und Schlüsselrotation ist vor
+   D3-Code verpflichtend. §4.9 ist ausschließlich für D1 bestimmt
+   und darf nicht still als v2-Tabelle umgedeutet werden.
+
+
+### 5.7 Portal-Signierversuchsbudget (N3, Vorschlag zur Prüfung)
+
+Dieses Budget liegt ausschließlich in der **separaten Portal-Datenbank** und
+begrenzt Signierversuche, nicht Jobs und keine Core-Personenquote. Folgende
+Arbeitsnamen konkretisieren den noch freizugebenden Migrationsvertrag; sie
+sind kein bereits installiertes Schema und reservieren keine Migrationsnummer:
+
+| Vorgeschlagene Tabelle | Gebundener Zustand |
+| --- | --- |
+| `portal_signing_budget_state` | Genau ein portalweiter Bucket und je eingeladener, serverseitig geprüfter `portal_user_ref` ein Bucket; Resttokens, letzte geprüfte Auffüllzeit, UTC-Tag und Tagesverbrauch |
+| `portal_budget_clock_state` | Vorinitialisierte Singleton-Zeile mit höchster bestätigter Portal-DB-UTC; kein Client-Zeitwert und keine Core-DB-Verbindung |
+
+Einladungs-/Migrationspfad legt zulässige Budgetidentitäten an; Requests dürfen
+weder aus Browserwerten neue Buckets erzeugen noch den Portal-Bucket durch
+neue Sessions, Schlüssel oder Instanzen vervielfachen. Die Runtime erhält
+nur die konkret benötigten DML-Rechte unter Guards, keine DDL-/Owner-Rechte
+und keine Rücksetzung von Zeit oder Verbrauch. Ein Bucket ist kein Datensatz
+je Versuch: der Platz ist durch eingeladene Referenzen begrenzt; gesperrte
+Referenzen werden nicht zu neuen Nutzern umgewidmet. Das genaue DDL und
+atomare Verfahren bleiben vor DB-Code zu reviewen.
+
+**Vorgeschlagene Zeitquelle:** frisches PostgreSQL-`clock_timestamp()` auf dem
+autoritativen Portal-Primary, nach Erwerb der gemeinsamen Uhr-/Budgetlocks.
+Der UTC-Kalendertag wird daraus serverseitig abgeleitet, nicht aus Vercel-
+Instanzzeit, Session oder Request. Vergleich und Fortschreiben der gespeicherten
+Höchstzeit, Auffüllen und Verbrauch beider Buckets sowie Tageszähler erfolgen
+in einer kurzen Transaktion mit fester Lockreihenfolge: Uhrzeile, portalweiter
+Bucket, Nutzerbucket. Ein Rücksprung unter die gespeicherte Höchstzeit,
+unbekannte Zeit, fehlende Zeile oder unbestätigter COMMIT verweigert das
+Signieren; kein lokaler Fallback. Beide Buckets müssen gemeinsam erfolgreich
+belastet sein, bevor ein Signierversuch beginnt. Kein Lock bleibt während des
+Core-HTTP-Aufrufs offen und keine spätere Ablehnung erstattet diese Buchung.
+
+Die DB-Zeit ist **eine vorgeschlagene betriebliche Vertrauensgrenze**, kein
+unabhängiger Zeitnachweis. NTP-/Provider-Zeitstatus, zulässige Vorwärtssprünge,
+Budget-Auffüllung und Tageswechsel sind mit dem tatsächlichen Betriebsort zu
+prüfen. Ein Restore derselben DB kann sowohl Zähler als auch Höchstzeit
+zurücksetzen; daher ist dieser Vorschlag ausdrücklich keine Restore-Lösung.
+Bei unbekanntem Restore-/Failover-/Budgetstand keine neue Signatur, bis der
+noch separat freizugebende Reconciliation-/Epoch-Vertrag den Zustand bestätigt.
+Hier wird weder eine neue Session-Epoche gewählt noch ein Rücksetzen auf volle
+Tokens zugelassen. Lastzahlen aus 4.9.6 bleiben ebenfalls Vorschläge.
+
+Ein kompromittiertes Portal-Backend hält seinen Signierschlüssel und könnte
+dieses eigene Budget umgehen. Die unabhängige Schutzgrenze des Kerns bleiben
+Ingress, Vorab-/Dienst-Bucket, Replay, Policy, Audit und Anker. Der Vorschlag
+verspricht weder Schutz des Core-Buckets vor dem einzigen Nutzer noch neue
+Core-Rechte durch eine Portal-Buchung.
+
+Abnahme vor Aktivierung: parallele Signierversuche über zwei Portal-Instanzen
+und mehrere Sessions überschreiten weder Nutzer- noch Portalbudget; ein
+einseitig fehlgeschlagener Verbrauch rollt beide Budgetmutationen zurück,
+nach bestätigter Buchung bleibt der Versuch trotz Signierfehler verbraucht.
+Neustart, Tageswechsel, Uhrfehler, DB-Ausfall, unbekannter COMMIT und Restore
+dürfen keine zusätzliche Kapazität erzeugen. Schema/Migration, Zeitprofil,
+Reconciliation und Tests benötigen den unabhängigen Entwurfsreview; DB-Code
+danach `Claude DB Review: APPROVED` am exakten Head. **N3 bleibt bis dahin HOLD.**
 
 ## 6. Audit-Commit und Anchor-Crashfenster
 
@@ -982,6 +1394,17 @@ Reihenfolge:
 5. `0005_portal_identity`: users, sessions, roles, quotas;
 6. `0006_portal_history`.
 
+**HOLD für 0005/0006:** §5.1–5.5 beschreiben ein veraltetes Schema,
+§5.6 den noch zu reviewenden D3-Identitätsvertrag. Die existierende
+Portal-PostgreSQL-Installation hat ein abweichendes Schema; weder
+bestehende Daten noch Migrationen dürfen ohne eigenständige
+Bestands-/Rollback-/Restore-Prüfung überschrieben werden.
+Einladung, Konto-Sperrlebenszyklus, Submission/UNKNOWN und Kosten-
+Budget gehören in den freizugebenden neuen Portal-Migrationsvertrag.
+Dieser umfasst auch die vorgeschlagenen getrennten Signierversuchs-/Uhrtabellen
+aus §5.7; `quota_usage` ist dafür kein Ersatz. Keine der noch offenen
+Portal-Migrationsnummern oder -versionen wird durch diesen Entwurf festgelegt.
+
 Eine spätere, separat freizugebende D1-Migration legt die Tabellen und geprüften
 Guards/Rollen aus 4.9 an.
 Sie erhält eine neue Version nach den bestehenden Migrationen, ist aber vom
@@ -1007,6 +1430,16 @@ Mindestens getrennte Rollen:
   erbbar noch per `SET ROLE` oder `EXECUTE` erreichbar; `AuditAuthority`
   signiert im Kern-Prozess;
 - **`genius_portal`:** nur Portal-Tabellen, ohne Zugriff auf Core-Tabellen.
+
+**Portal-Rechte-Gate (vor Implementierung):** Ein eigenständiger
+Portal-Migrationseigentümer besitzt DDL nur für das separate Portal-Schema.
+Die Laufzeitrolle `genius_portal` hat keinen Superuser-, Owner-,
+TRUNCATE-, CREATE-, REFERENCES- oder Core-DB-Zugang. SELECT und eng
+begrenzte INSERT/UPDATE-Rechte werden je Portal-Tabelle begründet;
+users sind für die Runtime nicht löschbar und Kernidentität bleibt
+außerhalb der Portal-DB. Rollen-/Statuswechsel benötigen geprüfte
+Administration statt freiem UPDATE. Diese Minimalbeschreibung ist
+noch **keine** überprüfte produktive GRANT-Matrix (HOLD).
 
 Mindest-Rechte der Core-Runtime pro Tabelle:
 
@@ -1066,5 +1499,7 @@ Implementierungsreihenfolge:
 4. Pending Jobs;
 5. Approval Store;
 6. Audit Chain + Startup-Reconciliation mit Anchor;
-7. Portal-Identität und Sessions;
-8. Portal.
+7. Portal-Identität und Sessions erst nach §5.6-D3-Baseline,
+   Schema-/Migrationsreview, sicherer Session-Epoche/Restore-Regel;
+8. Portal erst nach signierter Core-Identitätsanbindung und
+   Ende-zu-Ende-Prüfung der unter D1/D3 getrennten Autorität.

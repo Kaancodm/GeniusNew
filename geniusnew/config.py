@@ -38,6 +38,12 @@ child) or `anchor_socket` with `anchor_reply_public_key` (gate C2: the anchor as
 its own service, whose replies the service believes only when signed by that key).
 Both, or neither, is refused.
 
+**An `ai_advisory` table that is not a single boolean.** The advisory bridge
+(`geniusnew/advisory.py`) is the Core's only path to a local model, and it is off
+unless this table says otherwise. A missing value, an unknown key or a non-boolean
+`enabled` refuses the start rather than defaulting, so no deployment turns model
+inference on by inheriting a half-written table.
+
 Nothing here reads the environment. A secret in an environment variable is
 visible in `/proc/<pid>/environ` to the same user and inherited by every child,
 including the worker; a file with mode 0600 is neither.
@@ -53,11 +59,12 @@ import tomllib
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from .advisory import AdvisorySettings
 from .approvals import ApproverPolicy
 from .contracts import ContractError, Grant, Policy
 from .http_entry import HttpLimits
 from .worker_service import WorkerServiceProfile
-from .workers import DeterministicSummarizer, Worker
+from .workers import DeterministicSummarizer, TextDigest, Worker
 
 # Published in scripts/demo.py. Refused here so it cannot become a real key.
 DEMO_ROOT_SECRET = b"demo-root-secret-not-for-real-use!!!"
@@ -79,11 +86,15 @@ _POLICY_KEYS = frozenset({"version", "orchestrator_id", "handoff_ttl_seconds",
                           "allowed_tools", "allowed_sandbox_profiles", "grants"})
 _GRANT_KEYS = frozenset({"subject", "user_id", "worker_agent_id", "tier", "tools",
                          "sandbox_profile", "requires_approval"})
+# One key, and it is required inside the table: an `[ai_advisory]` header with
+# nothing under it is a half-written switch, not a disabled one.
+_ADVISORY_KEYS = frozenset({"enabled"})
 
 # The workers a server can run. A tool in the policy with no entry here would be
 # advertised and then fail per request, so it is refused at start instead.
 BUILTIN_WORKERS: Mapping[str, type[Worker]] = {
     DeterministicSummarizer.tool: DeterministicSummarizer,
+    TextDigest.tool: TextDigest,
 }
 
 
@@ -108,6 +119,7 @@ class ServiceConfig:
     approvers: Mapping[str, str]
     workers: tuple[Worker, ...]
     worker_service: WorkerServiceProfile
+    advisory: AdvisorySettings = AdvisorySettings()
 
     def __repr__(self) -> str:
         # The dataclass default would print the root secret.
@@ -137,7 +149,9 @@ def _loopback_host(value: Any) -> str:
         address = ipaddress.ip_address(value)
     except ValueError as exc:
         raise ContractError("service.listen_host must be a literal IP address") from exc
-    if not address.is_loopback:
+    # As in http_entry.serve: an IPv4-mapped IPv6 address is refused on
+    # every Python version, although newer ones call it loopback.
+    if not address.is_loopback or getattr(address, "ipv4_mapped", None) is not None:
         _fail("service.listen_host must be a loopback address; "
               "put a TLS reverse proxy in front instead")
     return value
@@ -296,9 +310,14 @@ def _limits(value: Any) -> HttpLimits:
     return HttpLimits(**_table(value, "service.limits", _LIMIT_KEYS))
 
 
+def _advisory(value: Any) -> AdvisorySettings:
+    # Off unless a table says otherwise; a present table must be complete.
+    return AdvisorySettings(enabled=_table(value, "ai_advisory", _ADVISORY_KEYS)["enabled"])
+
+
 def parse_config(data: Mapping[str, Any]) -> ServiceConfig:
     """Check a parsed configuration and read the secret it names."""
-    top = _table(data, "configuration", _TOP_KEYS, frozenset({"approvers"}))
+    top = _table(data, "configuration", _TOP_KEYS, frozenset({"approvers", "ai_advisory"}))
     service = _table(top["service"], "service", _SERVICE_KEYS, _ANCHOR_KEYS)
     policy = _policy(top["policy"])
     principals, approver_policy = _principals(
@@ -320,6 +339,8 @@ def parse_config(data: Mapping[str, Any]) -> ServiceConfig:
         approvers=approver_policy.identities,
         workers=_workers(policy),
         worker_service=WorkerServiceProfile(**worker),
+        advisory=(_advisory(top["ai_advisory"]) if "ai_advisory" in top
+                  else AdvisorySettings()),
     )
 
 
