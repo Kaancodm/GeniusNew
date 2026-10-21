@@ -26,6 +26,24 @@ Zugangsdaten) gehören nicht in dieses Repository. NotebookLM bekommt Quellen we
 **Offen:** Es gibt noch kein dokumentiertes, hochgeladenes Quellenpaket; eine
 NotebookLM-Importprüfung wurde nicht durchgeführt (UNKNOWN).
 
+## Portal-Nachtrag (21.10.2026)
+
+Geprüft gegen `main` `9385f5bd9dc43f277af8f3b0265c7b4d45cfbc71`:
+#151 (Argon2id, Merge `1f1c5d9096ee4a47f3bc7880e8a8e463f67c2250`) und
+#152 (Session-/CSRF-Token, Merge `9385f5bd9dc43f277af8f3b0265c7b4d45cfbc71`)
+sind **gemergt, als Sicherheitsbausteine ohne Runtime-Verdrahtung**.
+Keine aktive Login-Route oder Session-DB; D1 HOLD, D2 offen, D3 HOLD.
+Login-Budgets/Dummy-Hash/Mindestlänge, Session-Rotation und serverseitiger
+Ablauf/Widerruf, Origin/CSRF einschließlich Login-Bootstrap, CSRF-Key,
+Cookie-Profil und Restore-Grenzen bleiben vor Login zu schließen.
+Dienstauthentisierung ersetzt keine Core-Personenbindung.
+
+Der [belegte D1–D3-Abgleich](PORTAL-GATE-STATUS-20261021.md) trennt Code,
+Vertragsentwürfe und verbleibende Abnahmen. #161 bearbeitet den DB-Vertrag,
+#196 die E2-Checkliste; keine konkurrierende Änderung dieser Dateien.
+Dieser Nachtrag aktualisiert nur den Portalstatus, nicht die historischen
+Gesamtnachweise vom 20.10.2026. Kein D1–D3-/Beta-/Betriebs-PASS.
+
 ## In einem Satz
 
 GeniusNew ist ein Zero-Trust-Agentensystem, in dem kein Bauteil seine eigene
@@ -70,6 +88,7 @@ Audit-Kette festgehalten.
 | C5 (Teil) | Restore gegen den unabhängigen Anker durchgespielt | #119 |
 | D1 (nur Doku) | Portal→Kern-Vertrag, Replay- und Identitäts-Gates; Code fehlt. Security-Review am `3d26d74` (H1, M1–M4); Gates 1–5, 7 und 8 sowie der Annahmepfad von Gate 9 von Kaan am 18.10.2026 entschieden (`docs/DECISIONS.md`); Entwurf danach überarbeitet (#163, gemergt 18.10.2026); der erneute Review (Gate 6) ist am 20.10.2026 an `main` `0e6e0db` bestanden (Issue #159); D1 bleibt HOLD | #120, #158, #163 |
 | D1 (Kern) | HTTP-Eingang lehnt doppelte Header vor Body und Mapping ab | #162 |
+| D2 (Bausteine) | Argon2id-Passwortgrenze und Session-/CSRF-/Cookie-Helfer gemergt; keine aktive Login-Route/Session-DB, Gate offen | #151, #152 |
 | D3 (nur Doku) | Entwurf der administrierten Personenbindung mit neuer Envelope-Version; Portal-DB-Wiring D2/D3 mit sicheren Identitätsgrenzen. Beide HOLD, kein Code aktiv | #148, #176 |
 | E1 | Demo mit Persistenz-Angriffen | #112 |
 | Härtung, E3-Werkzeug, Audit-Delta (Arena 19.10.) | `serve()` verweigert Nicht-Loopback und IPv4-mapped IPv6 selbst; `scripts/check_dependencies.py`, Audit-Workflow nur als Beispiel (`docs/examples/audit-workflow.yml`, nicht aktiv); Benchmark `scripts/bench_audit.py` (Decke 62.137 Records); Fresh-Clone-Runner `scripts/e3_fresh_clone.py` (E3 selbst offen); Worker `TextDigest` in `BUILTIN_WORKERS` mit `tools/genius_client.py`; `AuditAnchor.commit_delta`/`commit2` als Protokoll-Schritt 1, **nicht** im Store-/Serve-Pfad verdrahtet. Unabhängiges Security-Review der Kernänderungen: UNKNOWN | #174 |
@@ -82,9 +101,9 @@ Audit-Kette festgehalten.
 **Noch offen:** C5 (Betriebsanleitung mit systemd, Rotation und Betriebsabnahme des
 Worker-Dienstes aus #140), E3 (frischer Klon auf einem echten Server), D1-Code, D2, D3
 und E2 (Security-Review am Head). **D1-Code bleibt auf HOLD** (Entscheidung vom
-18.10.2026); D2 und D3 sind nicht aktiv (#151 und #152 offen, #148 und #176 nur Doku).
-#151 hat seit 20.10.2026 Kaans GO für die neue Abhängigkeit, ist aber mit `main`
-konfliktbehaftet. Die
+18.10.2026); D2 und D3 sind nicht aktiv. #151 und #152 sind seit 21.10.2026
+als inaktive Bausteine gemergt; #148 und #176 bleiben Vertragsdokumente.
+Die
 `ROADMAP-V02.md`-Spalte „Stand“ wurde mit #130 und #167 angeglichen; zwei Punkte fehlen
 dort noch. Die C3-Zelle nennt `Claude DB Review` UNKNOWN; belegt ist APPROVED am
 Merge-Head `cc95586ca27e6f9d76fd737967d87cdb2e8a44d5` (`docs/DECISIONS.md`, 04.10.2026).
@@ -197,7 +216,7 @@ Jobs, Annahmen und Policy).
 3. CI nach der Entscheidung vom 20.10.2026: Matrix 3.11/3.13 und `ruff`-Job mit
    `requirements-dev.txt` (Codex, ein PR); `pip-audit`-Vorlage nach
    `.github/workflows/audit.yml` verschieben (Kaan, braucht Workflow-Rechte).
-   #151: Konflikt auflösen, CI am neuen Head, dann Merge (Codex).
+   #151 ist seit 21.10.2026 gemergt; verbleibende Login-Auflagen siehe Portal-Nachtrag.
 4. Server einrichten (`ops/server/genius-server`, Kaan) und Landlock dort prüfen.
 5. C5: Betriebsanleitung mit systemd-Units, eigenen OS-Nutzern (Worker, Anker),
    Schlüsselrotation (Entwurf von ChatGPT in #117, Draft).
@@ -214,8 +233,8 @@ Jobs, Annahmen und Policy).
    eigener `SECURITY.md`-PR, Zahlen fürs Lastbudget zur Freigabe, Gate 10. **Gate 6 am
    20.10.2026 bestanden** (Claude, an `main` `0e6e0db`, Kommentar in Issue #159: kein
    Critical/High, 1 Medium zur Audit-Kapazität, 2 Low). Erst danach D1-Code (Codex),
-   dann D3. D2-Bausteine (#151, #152) sind unabhängig davon mergefähig nach
-   Konfliktauflösung.
+   dann D3. D2-Bausteine (#151, #152) sind seit 21.10.2026 gemergt;
+   die Runtime-Integration und Login-Gates bleiben offen (Portal-Nachtrag).
 10. E2: Security-Review des vollständigen Heads (Claude und Gemini; seit 20.10.2026
     Gemini statt Copilot).
 11. KI-Pilot: P1 ist mit #179 auf `main` (identisch mit #172, das damit überholt ist).
@@ -254,8 +273,8 @@ Weitere Ergebnisse: #117 (C5) — die Core-Unit erzeugt mit `ProtectSystem`/`Pro
 `PrivateTmp` eine eigene Mount-Namespace, die der Worker-Hostnachweis aus #140
 (`_HOST_NAMESPACES`) ablehnt; Lösung braucht Kaans Entscheidung (Empfehlung im PR:
 Unit ohne Mount-Namespace-Optionen, Ausgleich über seccomp-basierte Optionen und
-Dateirechte). #151 und #152: einziger Konflikt ist `scripts/refusals.py`; begrenzter
-Auftrag an Codex steht in beiden PRs. #147: Copilot-Review am älteren Head gilt weiter
+Dateirechte). #151 und #152: die früheren Konfliktaufträge sind durch die Merges
+vom 21.10.2026 erledigt; keine Login-Aktivierung. #147: Copilot-Review am älteren Head gilt weiter
 (Codec und Tests seitdem byte-gleich), Merge aber HOLD wie D1-Code.
 
 **Gates bis v0.2 (Stand 20.10.2026):**
@@ -271,7 +290,7 @@ Auftrag an Codex steht in beiden PRs. #147: Copilot-Review am älteren Head gilt
 | C3 | PASS | #111 |
 | C5 | BLOCKED: Core-Unit gegen Worker-Hostnachweis (Kaans Entscheidung), Schlüsselrotation, Weg nach Restore | #117 |
 | D1 | HOLD (Entwurf Gate 6 PASS; Gates 2, 4, 5, 10 und DB-Vertrag #161 offen) | Issue #159 |
-| D2 | offen (#151 GO, #152 reviewt; beide Konflikt) | #151, #152 |
+| D2 | offen; #151/#152 am 21.10.2026 als inaktive Bausteine gemergt, Runtime-/Login-Gates fehlen | #151, #152; [Abgleich](PORTAL-GATE-STATUS-20261021.md) |
 | D3 | HOLD (Entwürfe #148, #176) | `docs/DECISIONS.md` 20.10.2026 |
 | E1 | PASS | #112 |
 | E2 | offen | — |
@@ -311,7 +330,7 @@ Offene Fragen:
 
 - **Erledigt am 20.10.2026** (`docs/DECISIONS.md`): Die Pause entfällt; die
   D3-Entscheidung aus #148 ist bestätigt und eingetragen; #151 hat Kaans GO für die neue
-  Abhängigkeit (Merge nach Konfliktauflösung und grüner CI).
+  Abhängigkeit (Merge #151 inzwischen am 21.10.2026 erfolgt).
 - **Erledigt am 20.10.2026** (`docs/DECISIONS.md`): Gemini übernimmt projektweit die
   Copilot-Reviewrolle, auch für offene PRs; Regeltexte in #191. Frühere Einzelausnahmen
   (#145 laut #153, Kommentar 6244844507; #188) sind damit allgemein abgelöst.
