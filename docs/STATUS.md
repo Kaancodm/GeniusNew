@@ -152,14 +152,17 @@ genannten Head und wurden, außer wo „geprüft“ steht, nicht neu abgerufen:
 | #194 B4-Negativtests | `2b5a6e525272cff17cfaa57771add50314a2e18e` | Gemini-Flash-Review am früheren SHA `7acb9e6` ohne Befund, CI am Head laut PR ausstehend; reiner Test-Diff, keine neue DB-Code-Freigabe |
 | #181 Dependency-Checker | `35699c907419960304813097fd01e24b3a201c5c` | Gemini-Review A–E PASS laut PR, CI am Head laut PR zum Zeitpunkt offen |
 | #182 E3-Runner | `a3338ac66aa6cd3b5465c68885bbb37616479c28` | Gemini-Flash A–C PASS, `contracts` grün laut PR; Pro-Modell-Review und Live-E3 offen |
-| #195 Entscheidungsdesk | `2884be59437d173911492c83961643a2c1241132` | geprüft am 21.10.2026: `contracts` und alle 29 Jobs SUCCESS. Gemini-Review am Head ausstehend. Technischer Owner nach Übernahme: Codex |
+| #195 Entscheidungsdesk | `dbe4c3c29af0eee58deec88d6c0ea74d16831093` | Codex-Folgecommit (Archivierung des Journals, Befund 7). Laut PR und Check-Runs: `contracts` und Refusal-Guard SUCCESS. Claude-Review am vollen Head ohne Critical/High/Medium (PR-Kommentar). Gemini-Review am Head ausstehend. Technischer Owner nach Übernahme: Codex |
 | #196 E2-Checkliste | `531b8f0d642b9183c80add3972026170d07affaf` | Claude-Review ohne Critical/High (Kommentar im PR); Gemini und CI offen. Die Checkliste ist kein E2-Abschluss |
 | #197 Roadmap D2 | `3e083ee2421b57130b2f310542b00a53e7d017f7` | **gemergt am 21.10.2026** auf Kaans Anweisung (Merge-Commit `e37eb22ac643f92c9097e0dc03d20f3dfdf497d8`); CI SUCCESS, **kein Gemini-Review am Head** (nachzuholen) |
-| #198 Portal-Doku | `fd46b8a703a682d83a90af68124fdd601bb31eb2` | offen, Draft. Ändert dieselbe Roadmap-Zeile D2 wie das gemergte #197 und wird mit `main` kollidieren (Auflösung beim Branch-Owner, Codex). Sein STATUS-Hunk widerspricht der Dateizuständigkeit, #198 beruft sich dafür auf einen Auftrag Kaans (nicht belegt; siehe `docs/DECISIONS.md` 21.10.2026) |
+| #198 Portal-Doku | `b066b5509b0c93f89202b58494ba6cbb16f5ade4` | offen, Draft. Roadmap-Konflikt mit dem gemergten #197 vom Branch-Owner (Codex) gelöst; der STATUS-Hunk ist entfernt, der Diff umfasst laut PR nur `docs/PORTAL-GATE-STATUS-20261021.md` und `docs/ROADMAP-V02.md`. CI und Gemini-Review am Head ausstehend |
+| #200 CI-Matrix, Ruff, Audit | `ac709dde7fab708f6f4a3832d3fc8f61fcfbaeac` | offen, Draft. Neue Dev-Abhängigkeit Ruff (`requirements-dev.txt`): Gemini-Pro-Sicherheitsreview und Kaans OK fehlen. Laut PR GitHub-CI bestanden |
+| #201 Gemini über Antigravity | `8a75a7387ab96944a025ed1ad4ea732e3a85ecfd` | offen, Draft. Ändert auch die Wissensdateien; Reihenfolge laut Koordination: #199 vor #201, danach bereinigt der Branch-Owner die abgedeckten Hunks. Gemini-Review am Head ausstehend |
+| #161 D1-Datenbankentwurf | `06394d2e94cd1f0ca3cbcbe5fe96766a7e3a2025` | HOLD-Entwurf von ChatGPT. Claude-Security-Review der Nachbesserung ohne Critical/High; N-A (Core-Tagesgrenze für Ablehnungen) bleibt als Gate offen. Freigabe nur durch Kaan |
 
 **Messwerte:** Für `main` `9385f5b` liegt keine neue Testzahl vor: UNKNOWN. Zahlen aus
 den PR-Beschreibungen gelten nur für deren Heads (z. B. #195: 1480 Tests, Demo 15/15 am
-Head `2884be5`, gemessen auf dem Stand der Basis `f297bc3`).
+Head `2884be5`, gemessen auf dem Stand der Basis `f297bc3`; für den Folgecommit `dbe4c3c` nennt der PR 1611 Tests laut GitHub-CI).
 
 **Offene PRs:** am 21.10.2026 sind 32 offen (GitHub-Abfrage).
 
