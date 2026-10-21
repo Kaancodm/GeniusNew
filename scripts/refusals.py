@@ -67,6 +67,7 @@ ROOT = Path(__file__).resolve().parent.parent
 GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/audit.py", "geniusnew/audit_chain.py",
            "geniusnew/results.py", "geniusnew/keys.py",
+           "geniusnew/portal_session_tokens.py",
            "geniusnew/workers.py", "geniusnew/isolation.py",
            "geniusnew/worker_service.py",
            "geniusnew/isolation_child.py", "geniusnew/gateway.py",
@@ -124,6 +125,7 @@ GUARDED_PYTHON = {
         "test_pending_database.py", "test_b7_crash_recovery.py", "test_serve.py",
     ),
     "geniusnew/config.py": ("test_config.py", "test_approver_config.py"),
+    "geniusnew/portal_session_tokens.py": ("test_portal_session_tokens.py",),
     "geniusnew/__main__.py": ("test_persistent_audit_wiring.py", "test_serve.py"),
 }
 
