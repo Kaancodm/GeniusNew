@@ -15,7 +15,10 @@ dadurch nicht verändert.
 | Gemini Pro | Ein Pro-Konto gemeldet; Restkontingent vor Modellauftrag prüfen | ja, nur bei verfügbarem Kontingent |
 | Google Antigravity (`agy`) | CLI, Modellliste und kurzer Argon-Low-Auftrag am 20.10. geprüft; Restkontingent ungeprüft | ja, solange der Modellzugang funktioniert |
 | Claude Pro | Kontingent-Reset etwa 40 Minuten nach der Meldung erwartet; danach neu prüfen | noch nicht |
-| GitHub Copilot, Kiro, Abacus.AI | Laut Kaan für zwei Wochen nicht verwendbar; Wiedervorlage am 03.11.2026 | nein |
+| GitHub Copilot, Kiro | Laut Kaan für zwei Wochen nicht verwendbar; Wiedervorlage am 03.11.2026 | nein |
+
+Abacus ist seit Kaans Auftrag vom 21.10.2026 aus der aktuellen Werkzeugauswahl
+entfernt und bleibt im Shadow-Test abgelehnt.
 
 Die Wiedervorlage aktiviert kein Werkzeug automatisch. Eine neue Nutzbarkeitsprüfung
 und eine Listenänderung sind nötig. Die Pause hebt keine Review-Pflichten aus

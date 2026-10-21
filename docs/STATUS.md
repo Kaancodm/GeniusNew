@@ -327,7 +327,7 @@ Offene Fragen:
 
 Ab 27.09.2026 gilt `docs/COLLABORATION.md` in aktualisierter Fassung. **Codex setzt
 Kerncode um und mergt.** **Seit 04.10.2026 pflegt Claude Code `docs/STATUS.md`**
-(dieses Dokument); Gemini prüft über die Antigravity- oder Abacus-CLI (`docs/COLLABORATION.md`). **Kaan entscheidet
+(dieses Dokument); Gemini prüft seit Kaans Auftrag vom 21.10.2026 über die Antigravity-CLI (`docs/COLLABORATION.md`). **Kaan entscheidet
 Ziele und offene Fragen zur Datenbank; ChatGPT erstellt `docs/DATABASE.md` in seinem
 Auftrag.** **ChatGPT** übernimmt außerdem neue Werkzeuge, Server-Pflege und
 Infrastruktur. **Seit 20.10.2026 reviewt Gemini jeden PR** (statt Copilot). Microsoft 365
@@ -337,12 +337,12 @@ Plattformen mit Überschreibrecht und hilft, wenn Codex feststeckt.
 
 | Werkzeug | Rolle | Liest |
 | --- | --- | --- |
-| Gemini Pro | Review jedes PRs (seit 20.10.2026, statt Copilot) über Antigravity-, Abacus- oder Gemini-CLI; Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung | `GEMINI.md`, `.gemini/styleguide.md` |
+| Gemini Pro | Review jedes PRs (seit 20.10.2026, statt Copilot) über die Antigravity-CLI; Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung | `GEMINI.md`, `.gemini/styleguide.md` |
 | NotebookLM | **Wissensdatenbank**: Auskunft für alle, mit Quelle | dieses Dokument, `docs/DECISIONS.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`, `AGENTS.md` |
 | ChatGPT Pro / Codex | **Kerncode-Umsetzung**, ein Thema pro PR (`codex/<thema>`), mit Wissensblock | `AGENTS.md`, `docs/COLLABORATION.md` |
 | ChatGPT (Chat) | **Neue Werkzeuge, Server-Pflege, Infrastruktur, Integrationen** (`chatgpt/<thema>`), NotebookLM + eigenes Notebook; Kaan mergt | `AGENTS.md`, `docs/COLLABORATION.md` |
 | GitHub Copilot Pro | Editor; seit 20.10.2026 kein Pflicht-Reviewer mehr (laut Kaan bis 03.11.2026 nicht nutzbar) | `.github/copilot-instructions.md` |
-| Kiro-CLI | Unabhängige Zweitprüfung für Claudes eigenen Code, nur lesend; laut Kaan bis 03.11.2026 pausiert (Abacus ebenso) | `docs/COLLABORATION.md` |
+| Kiro-CLI | Unabhängige Zweitprüfung für Claudes eigenen Code, nur lesend; laut Kaan bis 03.11.2026 pausiert | `docs/COLLABORATION.md` |
 | Microsoft 365 Copilot | Berichte, E-Mails, Folien | OneDrive-Ordner `GeniusNew` |
 | Claude Code | **Besitzt `docs/COLLABORATION.md`/`docs/DECISIONS.md`, Ordnung, Konfliktlöser mit Überschreibrecht**, Sicherheits-Review von Kaans DB-Entwurf und Codex' DB-Code, Hilfe bei Hilferuf | `AGENTS.md`, `docs/COLLABORATION.md` |
 

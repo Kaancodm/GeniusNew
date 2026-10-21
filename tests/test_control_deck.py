@@ -226,12 +226,13 @@ class ControlDeckTest(unittest.TestCase):
 
     @patch("tools.control_deck.checks._run")
     @patch("tools.control_deck.checks._which")
-    def test_gemini_status_prefers_antigravity(self, which, run):
+    def test_antigravity_model_catalog_does_not_prove_account_eligibility(self, which, run):
         which.side_effect = lambda name: "/x/agy" if name == "agy" else None
         run.return_value = (0, "gemini-3.8-flash-high\tGemini 3.8 Flash (High)")
         state = checks.tool_status("gemini")
-        self.assertEqual(state["status"], "green")
+        self.assertEqual(state["status"], "yellow")
         self.assertIn("Antigravity", state["detail"])
+        self.assertIn("account eligibility", state["detail"])
         self.assertIn("quota unverified", state["detail"])
         run.assert_called_once_with(
             ["/x/agy", "models"], cwd=checks.Path.home(), timeout=8.0
@@ -736,15 +737,16 @@ class AgentControlTest(unittest.TestCase):
         cards = checks.agent_hub(repo)["agents"]
         self.assertEqual([c["id"] for c in cards],
                          ["codex", "claude", "gemini", "antigravity", "copilot", "kiro",
-                          "grok", "grok_bot", "abacus", "hermes"])
+                          "grok", "grok_bot", "hermes"])
         by_id = {card["id"]: card for card in cards}
         self.assertIn("100 %", by_id["codex"]["status_label"])
         self.assertEqual(by_id["codex"]["status"], "yellow")
         self.assertEqual(by_id["gemini"]["status"], "yellow")
         self.assertNotIn("command", by_id["gemini"])
         self.assertEqual(by_id["antigravity"]["command"],
-                         f"cd {shlex.quote(str(repo))} && /usr/bin/agy")
-        for name in ("copilot", "kiro", "abacus"):
+                         f"cd {shlex.quote(str(repo))} && /usr/bin/agy --mode plan --sandbox")
+        self.assertEqual(by_id["antigravity"]["status"], "yellow")
+        for name in ("copilot", "kiro"):
             with self.subTest(name=name):
                 card = by_id[name]
                 self.assertEqual(card["status"], "red")

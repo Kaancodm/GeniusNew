@@ -49,6 +49,8 @@ Die Browser-Regression für diesen Fall läuft mit vorhandenem Node.js ohne
 Zusatzpakete: `node tests/control_deck_ui.test.cjs`.
 
 Für Gemini wird bei vorhandenem Antigravity weiterhin `agy models` abgefragt.
+Auch eine erfolgreiche Modellliste bleibt Gelb: Der Katalog kann trotz fehlender
+Kontofreigabe erscheinen. Er belegt weder Berechtigung noch ein erfolgreiches Review.
 Ohne `agy` prüft das Deck ausschließlich, ob die Gemini-CLI im Suchpfad vorhanden
 ist. Es startet sie nicht und zeigt Gelb mit „CLI installiert · Anmeldung ungeprüft“.
 Fehlt auch `gemini`, bleibt der Status Rot (`missing`). Wiederholte Statusabfragen
@@ -153,14 +155,15 @@ Der Status muss aus Repository, Diensten und tatsächlichen Nachweisen folgen.
 Stand der manuellen Meldung von Kaan: 20.10.2026. Codex über ChatGPT Pro hat
 laut Meldung 100 % Kontingent. Für Claude Pro wurde ein Reset etwa 40 Minuten
 nach der Meldung erwartet; sein aktuelles Kontingent ist nicht erneut geprüft.
-GitHub Copilot, Kiro und Abacus.AI sind für zwei Wochen nicht verwendbar. Die
+GitHub Copilot und Kiro sind für zwei Wochen nicht verwendbar. Die
 Wiedervorlage ist der 03.11.2026; sie aktiviert sie nicht automatisch. Ihre
 Karten enthalten in dieser Zeit keine Start- oder Kopierbefehle.
 
 Gemini Pro hat laut Kaan noch ein Pro-Konto. Google Antigravity erscheint als
 eigener Agentenclient in der Auswahl. Das Deck prüft für ihn weiterhin nur
-`agy models`; eine erfolgreiche Modellliste bestätigt den Zugang, nicht
-Restkontingent. Am 20.10.2026 beantwortete `gemini-4-argon-low` einen kurzen
+`agy models`; eine erfolgreiche Modellliste bestätigt nur den abrufbaren Katalog,
+nicht Kontofreigabe oder Restkontingent. Der TERM-Befehl startet `agy --mode plan --sandbox`.
+Am 20.10.2026 beantwortete `gemini-4-argon-low` einen kurzen
 Auftrag im Plan-Modus. Dieser Einzeltest misst kein Restkontingent. Ist Antigravity
 erreichbar, bleibt es als Werkzeug verfügbar. Es ist kein Nachweis für ein
 zusätzliches Gemini-Kontingent. Die Pause der anderen Werkzeuge ändert keine
@@ -176,11 +179,9 @@ unterschiedliche Zustände; eine offene Terminal-Sitzung beweist keinen Modellzu
 - Grok: direkter Web-Zugang; der Browser prüft die Anmeldung.
 - Grok Bot: externer Zugang, ohne unterstützten direkten Steuerungsadapter.
   Weder ein installierter Skill noch eine frühere SSH-Einrichtung beweisen Live-Zugriff.
-- Abacus.AI: Textreview-Profile wurden am 05.10.2026 geprüft. Dieser alte
-  Testnachweis belegt keine aktuelle Nutzbarkeit. Während der gemeldeten Pause
-  zeigt die Karte weder Browser-Link noch TERM-Kopierknöpfe. Automatische
-  Repo-Arbeit bleibt ungeprüft. Das Deck liest keine Credentials und reicht
-  keine Secrets weiter.
+- Abacus.AI ist seit Kaans Auftrag vom 21.10.2026 aus der Agentenauswahl und
+  dem Reviewweg entfernt. Gemini-Reviews laufen über Antigravity; Einrichtung:
+  [`ANTIGRAVITY-REVIEW.md`](ANTIGRAVITY-REVIEW.md).
 - Grok Build bleibt pausiert, bis sein unterstützter Zugriffs- und Sandbox-Umfang neu
   geprüft und als eigenes Gate freigegeben ist.
 - Hermes-Status liest nur Programmpfad und tmux-Zustand; der Paket-Launcher wird

@@ -28,9 +28,11 @@ Head der Datenbank ersetzt hätte, ist weiterhin **nicht übernommen** — er di
 als Übergabestand. Siehe `docs/DECISIONS.md` für beide Begründungen.
 
 **Seit 04.10.2026 (Kaan), schlankere Abläufe:** `docs/STATUS.md` führt Claude Code statt
-Gemini. Gemini prüft nur noch, über die **Antigravity-CLI**, die **Abacus-CLI** oder die
-Gemini CLI (Format „Gemini-Review“ unten), weil die GitHub-App Gemini Code Assist in diesem Repository nie
-ein Review abgegeben hat. **Keine Stapel-PRs:** Jeder PR basiert auf `main`. Begründung:
+Gemini. Gemini prüft nur noch (Format „Gemini-Review“ unten), weil die GitHub-App Gemini
+Code Assist in diesem Repository nie ein Review abgegeben hat. Seit Kaans Auftrag vom
+21.10.2026 ist die **Antigravity-CLI** der Reviewweg; Abacus ist entfernt.
+Einrichtung: [`ANTIGRAVITY-REVIEW.md`](ANTIGRAVITY-REVIEW.md).
+**Keine Stapel-PRs:** Jeder PR basiert auf `main`. Begründung:
 `docs/DECISIONS.md`.
 
 **Seit 20.10.2026 (Kaan): Gemini übernimmt projektweit die bisherige Copilot-Reviewrolle**,
@@ -47,7 +49,7 @@ fehlendes Review ist ab jetzt ein Gemini-Review und bleibt offen, bis es vorlieg
 | Wer | Macht | Macht nicht |
 | --- | --- | --- |
 | **Kaan** | entscheidet Produktziele, Architektur und Ausnahmen (Portal/Kern-Betriebsort, DB-Technologie, neue Dependencies, `SECURITY.md`-Grenzen, Tags, Deployment-/Produktionsfreigaben); gibt ChatGPT den Auftrag für DB-/Infra-Entwürfe; entscheidet offene Architekturfragen und gibt den DB-Entwurf frei; mergt Claudes und ChatGPTs eigene PRs | `docs/DATABASE.md` selbst schreiben zu müssen — das übernimmt ChatGPT in seinem Auftrag |
-| **Gemini Pro** | **Prüfer:** **reviewt jeden PR** (seit 20.10.2026, statt Copilot), ist **Pflicht-Zweitmeinung** bei den Ausnahmen und prüft Designs vorab bei Prozessgrenzen und Kryptografie. Läuft über die **Antigravity-CLI**, die **Abacus-CLI** (im Terminal, per Termius auch vom iPhone) oder die Gemini CLI; das Ergebnis steht als PR-Kommentar im Format „Gemini-Review“ (unten), Maßstab `.gemini/styleguide.md`. Kontext: `GEMINI.md` | irgendeine Datei im Repository ändern (auch `docs/STATUS.md` nicht mehr), die Datenbank entwerfen oder freigeben |
+| **Gemini Pro** | **Prüfer:** **reviewt jeden PR** (seit 20.10.2026, statt Copilot), ist **Pflicht-Zweitmeinung** bei den Ausnahmen und prüft Designs vorab bei Prozessgrenzen und Kryptografie. Läuft über die **Antigravity-CLI** (im Terminal, per Termius auch vom iPhone); das Ergebnis steht als PR-Kommentar im Format „Gemini-Review“ (unten), Maßstab `.gemini/styleguide.md`. Kontext: `GEMINI.md` | irgendeine Datei im Repository ändern (auch `docs/STATUS.md` nicht mehr), die Datenbank entwerfen oder freigeben |
 | **NotebookLM** | **Auskunft für alle:** beantwortet Fragen zu Stand, Entscheidungen, Grenzen und Datenbank-Schema (aus `docs/DATABASE.md`) aus seinen Quellen, jede Antwort mit Quellenangabe; Quellen strikt getrennt von ChatGPTs eigenem Recherche-Notebook | Entscheidungen treffen, Inhalte ohne Quelle |
 | **Codex** (ChatGPT Pro) | setzt **Kerncode** um, implementiert den von Kaan freigegebenen DB-Code, und **mergt selbst**: ein Thema pro PR, Branch `codex/<thema>`, mit einem **Wissensblock** in der PR-Beschreibung (siehe unten) | `docs/STATUS.md`, `docs/COLLABORATION.md`, `docs/DECISIONS.md` und `docs/DATABASE.md` ändern, einen DB-Code-PR ohne `Claude DB Review: APPROVED` mergen, Ausnahmen ohne Kaans OK mergen, Tags anlegen |
 | **ChatGPT** (Chat) | **neue Werkzeuge, laufende Server-Pflege, Dashboards, Monitoring, externe Integrationen** (eigener Abschnitt unten), **inklusive technischer Architekturentwürfe im Infra-/DB-Bereich und der Erstellung/Pflege von `docs/DATABASE.md` im Auftrag von Kaan**; plant, formuliert Prompts, erklärt | Kerncode (`geniusnew/`, `tests/`, `scripts/refusals.py`, `scripts/demo.*`, `schemas/`), Core-Tests, `SECURITY.md` eigenständig ändern, `requirements.txt`, Governance-/Wissensdateien (siehe unten) ändern; Änderungen ohne Kaans Auftrag; den eigenen DB-Entwurf sicherheitstechnisch freigeben; selbst mergen |
@@ -244,7 +246,7 @@ DB-Entwurf sicherheitstechnisch frei und mergt nie eigene PRs.
 3. **Gemini reviewt jeden PR** (seit 20.10.2026, statt Copilot), zusätzlich als
    Pflicht-Zweitmeinung bei den Ausnahmen und als Design-Vorprüfung. Der Umsetzer fragt
    es im PR an; Kaan, oder in seinem Auftrag ChatGPT oder Claude Code, startet es über
-   die Antigravity-CLI, die Abacus-CLI oder die Gemini CLI und stellt das Ergebnis
+   die Antigravity-CLI und stellt das Ergebnis
    **unverändert** als PR-Kommentar ein, mit Werkzeug, tatsächlichem Modell und vollem
    Head-SHA. Ist kein Gemini-Zugang verfügbar, bleibt das Review offen (BLOCKED); ein
    anderes Werkzeug ersetzt es nur mit Kaans Entscheidung.
@@ -305,7 +307,7 @@ Stand vorlag, bleibt als Beleg gültig.
 welches Werkzeug. Ein Flash-Modell reicht für die Design-Vorprüfung und freiwillige
 Reviews; für das Standard-Review jedes PRs genügt jedes Gemini-Modell, das im Review
 genannt ist. Das Werkzeug arbeitet nur lesend im Projektverzeichnis (Plan-Modus, kein Zugriff
-außerhalb des Checkouts); Zugangsschlüssel von Abacus oder Antigravity liegen nur auf
+außerhalb des Checkouts); Zugangsdaten von Antigravity liegen nur auf
 dem Gerät, nie im Repository.
 
 ## Konflikte zwischen den Plattformen (Claude Code entscheidet)
