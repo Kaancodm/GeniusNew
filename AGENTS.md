@@ -2,7 +2,8 @@
 
 Gilt für jeden Assistenten, der in diesem Repository arbeitet: Claude Code, ChatGPT /
 Codex, GitHub Copilot, Gemini, Kiro. **Wer was macht, steht in `docs/COLLABORATION.md`:**
-Codex setzt Kerncode um und mergt, Gemini Pro prüft (Antigravity- oder Abacus-CLI),
+Codex setzt Kerncode um und mergt, Gemini Pro prüft jeden PR (seit 20.10.2026 statt
+Copilot; Antigravity-CLI, Abacus-CLI oder Gemini CLI),
 Kiro prüft Claudes eigenen Code, NotebookLM gibt Auskunft, Kaan entscheidet Ziele und
 Architektur, ChatGPT übernimmt neue Werkzeuge, Server-Pflege,
 Infrastruktur und erstellt die Datenbank-Dokumentation (`docs/DATABASE.md`) in Kaans
@@ -10,7 +11,7 @@ Auftrag, Claude Code besitzt `docs/COLLABORATION.md`, `docs/DECISIONS.md` und
 `docs/STATUS.md`, reviewt
 den DB-Entwurf und DB-Code sicherheitstechnisch, sorgt für Ordnung und Struktur, löst
 Konflikte zwischen den Plattformen (mit Überschreibrecht) und hilft bei einem Hilferuf.
-Kurzfassung für Copilot: `.github/copilot-instructions.md`. Aktueller Projektstand:
+Kurzfassung für Copilot (Editor): `.github/copilot-instructions.md`. Aktueller Projektstand:
 `docs/STATUS.md`.
 
 ## Was das ist

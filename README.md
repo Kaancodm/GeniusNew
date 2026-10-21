@@ -154,12 +154,15 @@ Siehe:
 - `geniusnew/contracts.py`
 - `geniusnew/approvals.py`
 - `geniusnew/workers.py`
+- `docs/PRODUCT-DIGEST.md` — erstes Produkt: das `digest`-Tool (Demo `scripts/demo_product.py`, Client `tools/genius_client.py`)
 - `geniusnew/isolation.py`
 - `geniusnew/gateway.py`
 - `geniusnew/orchestrator.py`
 - `geniusnew/verifier.py`
 - `geniusnew/http_entry.py`
 - `geniusnew/wiring.py` — Kompositionswurzel
+- `geniusnew/advisory.py` — einziger Weg zu einem lokalen Modell, beratend und
+  ohne Autorität (`docs/AI-ADVISORY.md`)
 - `geniusnew/anchor_process.py` — Audit-Anker in eigenem Prozess
 - `geniusnew/audit.py`, `geniusnew/audit_chain.py`
 - `docs/ISOLATION-V01.md`

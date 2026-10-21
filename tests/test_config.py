@@ -93,6 +93,14 @@ class ValidConfigurationTest(Files, unittest.TestCase):
         data["service"]["listen_host"] = "::1"
         self.assertEqual(parse_config(data).listen_host, "::1")
 
+    def test_the_advisory_table_is_optional_and_off_by_default(self):
+        self.assertFalse(parse_config(self.data()).advisory.enabled)
+
+    def test_an_enabled_advisory_table_is_accepted(self):
+        data = self.data()
+        data["ai_advisory"] = {"enabled": True}
+        self.assertTrue(parse_config(data).advisory.enabled)
+
     def test_the_repr_does_not_disclose_the_root_secret(self):
         self.assertNotIn(ROOT_SECRET.decode(), repr(parse_config(self.data())))
 
@@ -114,6 +122,8 @@ class ValidConfigurationTest(Files, unittest.TestCase):
         self.assertIn("REPLACE_WITH_SHA256_OF_THE_API_KEY", config.principals)
         # The example documents the defaults the proxy template is sized for.
         self.assertEqual(config.limits, HttpLimits())
+        # Advisory inference ships switched off in the example, not omitted.
+        self.assertFalse(config.advisory.enabled)
 
 
 class StructureTest(Files, unittest.TestCase):
@@ -168,6 +178,26 @@ class StructureTest(Files, unittest.TestCase):
         data["policy"]["grants"] = 3
         self.refused(data, "must be an array of tables")
 
+    def test_an_advisory_table_that_is_not_a_table_is_refused(self):
+        data = self.data()
+        data["ai_advisory"] = True
+        self.refused(data, "ai_advisory must be a table")
+
+    def test_an_unknown_advisory_key_is_refused(self):
+        data = self.data()
+        data["ai_advisory"] = {"enabled": False, "model": "qwen3.5:4b-q4_K_M"}
+        self.refused(data, "unknown keys: model")
+
+    def test_a_missing_enabled_key_is_refused_not_defaulted(self):
+        data = self.data()
+        data["ai_advisory"] = {}
+        self.refused(data, "missing keys: enabled")
+
+    def test_a_non_boolean_enabled_is_refused(self):
+        data = self.data()
+        data["ai_advisory"] = {"enabled": "yes"}
+        self.refused(data, "must be a boolean")
+
     def test_empty_grants_are_refused(self):
         data = self.data()
         data["policy"]["grants"] = []
@@ -200,6 +230,11 @@ class ListenerTest(Files, unittest.TestCase):
 
     def test_a_public_address_is_refused(self):
         self.refused(host="203.0.113.7", message="loopback")
+
+    def test_a_mapped_loopback_is_refused(self):
+        # Newer Pythons report ::ffff:127.0.0.1 as loopback via the embedded
+        # address; the listener binds the address as written, so it refuses.
+        self.refused(host="::ffff:127.0.0.1", message="loopback")
 
     def test_a_hostname_is_refused(self):
         # "localhost" resolves through a file an attacker on the host may edit.

@@ -44,10 +44,11 @@ a decision it can make itself.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from threading import Lock
 from typing import Any, Callable, Iterable, Mapping
 
+from .advisory import AdvisoryBridge
 from .anchor_process import AnchorProcess
 from .approvals import ApprovalStore, ApproverPolicy, create_scope
 from .audit import AuditAuthority, AuditEvent, event_from_handoff
@@ -235,6 +236,10 @@ class Service:
     pending: PendingJobs
     clock: Callable[[], int]
     _recorder: _AnchoredAudit
+    # Advisory text only: no key, no signature, no permit, no audit write. It
+    # exists so a caller can ask a local model for a draft; it decides nothing,
+    # which is why it sits beside the parts instead of inside their path.
+    advisory: AdvisoryBridge = field(default_factory=AdvisoryBridge)
 
     def approve(self, job_id: str, *, approver_subject: str | None = None,
                 ttl_seconds: int = _APPROVAL_TTL_SECONDS) -> bytes:
@@ -304,7 +309,8 @@ def build(*, root_secret: bytes, policy: Policy,
           job_ledger: JobLedger | None = None,
           acceptance_ledger: AcceptanceLedger | None = None,
           database_connection=None,
-          audit_chain_factory: Callable[[AuditAuthority], AuditChain] | None = None) -> Service:
+          audit_chain_factory: Callable[[AuditAuthority], AuditChain] | None = None,
+          advisory: AdvisoryBridge | None = None) -> Service:
     """Assemble one service. The only function that knows all the parts.
 
     The default anchor is an `AnchorProcess`, persisted to `anchor_state` when
@@ -328,6 +334,11 @@ def build(*, root_secret: bytes, policy: Policy,
     policy and public keys to remain compatible; rotation is a separate gate.
     `audit_chain_factory` loads and verifies the durable chain and reconciles
     its already signed head with the independent anchor before runners exist.
+
+    `advisory` is the bridge to a local model (`geniusnew/advisory.py`). It
+    holds no key and no decision; without one the service still carries a
+    disabled bridge that refuses every request, so nothing has to check for
+    its absence.
     """
     if (api_keys is None) == (principals is None):
         _fail("pass exactly one of api_keys or principals")
@@ -340,6 +351,8 @@ def build(*, root_secret: bytes, policy: Policy,
     if worker_service_profile is not None and not isinstance(
             worker_service_profile, WorkerServiceProfile):
         _fail("worker_service_profile must be a WorkerServiceProfile")
+    if advisory is not None and not isinstance(advisory, AdvisoryBridge):
+        _fail("advisory must be an AdvisoryBridge")
     if runner_factory is not None and worker_service_profile is not None:
         _fail("worker service profile cannot be combined with a runner factory")
     limits = limits or HttpLimits()
@@ -480,6 +493,7 @@ def build(*, root_secret: bytes, policy: Policy,
             policy=policy, keys=keys, handoff_verifier=handoff_verifier,
             approvals=approvals, approver_policy=approver_policy, pending=pending,
             clock=now, _recorder=recorder,
+            advisory=advisory if advisory is not None else AdvisoryBridge(),
         )
         return service
     except BaseException:

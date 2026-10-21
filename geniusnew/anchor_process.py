@@ -4,13 +4,16 @@
 the chain defeats its purpose: whoever writes the log could reach into the
 anchor's memory and move it backwards. Here the anchor's state lives in a child
 interpreter, and the writer holds nothing but two pipes. Across them it can ask
-two things — commit this signed head over these records, and what is committed —
-and there is no message that resets, rewinds or overwrites anything.
+three things — commit this signed head over these records, commit it over only
+the records since the committed one (`commit2`, protocol step 1 of
+`docs/AUDIT-INCREMENTAL-DRAFT.md`), and what is committed — and there is no
+message that resets, rewinds or overwrites anything.
 
-The child runs the existing `AuditAnchor` unchanged. It receives records as
-data, rebuilds them for checking, and applies the same verification and the
-same extension rule the in-process anchor always applied, so this module adds a
-boundary and no new chain logic.
+The child runs the existing `AuditAnchor`. It receives records as data,
+rebuilds them for checking, and applies the same verification and extension
+rule the in-process anchor applies — for a delta, `verify_extension` against
+the base the anchor itself committed, never one the sender names — so this
+module adds a boundary and no new chain logic.
 
 ## What the boundary is, and is not
 
@@ -83,8 +86,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (Ed25519PrivateKey
                                                               Ed25519PublicKey)
 
 from .audit import AuditAuthority, AuditEvent, AuditVerifier, rehydrate_event
-from .audit_chain import (AuditAnchor, AuditHead, AuditRecord, _bounded_chain, _count,
-                          _digest, _verify_head)
+from .audit_chain import (AuditAnchor, AuditHead, AuditRecord, _MAX_DELTA_RECORDS,
+                          _bounded_chain, _count, _digest, _verify_head)
 from .contracts import ContractError, canonical
 from .isolation import _minimal_environment
 
@@ -92,6 +95,11 @@ from .isolation import _minimal_environment
 # will take in one message. Roughly sixty thousand records at the size an audit
 # event serializes to — far past what a v0.1 process holds.
 _MAX_REQUEST_BYTES = 64 * 1024 * 1024
+# A delta commit (`commit2`) carries at most _MAX_DELTA_RECORDS records, so
+# its frame gets a bound of its own, far under the full-chain one: a sender
+# who needs more has several deltas or a full commit available, and the
+# anchor never has to buffer a history to learn a suffix.
+_MAX_DELTA_REQUEST_BYTES = 8 * 1024 * 1024
 _MAX_REPLY_BYTES = 4096
 _MAX_REFUSAL_CHARS = 512
 _REPLY_SECONDS = 30.0
@@ -184,11 +192,29 @@ def _committed(state: tuple[int, str]) -> dict[str, Any]:
     return {"count": count, "head_hash": head_hash, "kind": "ok"}
 
 
+_COMMIT2_KEYS = frozenset({"from_count", "head", "kind", "records"})
+
+
 def _handle(message: dict[str, Any], anchor: AuditAnchor,
             verifier: AuditVerifier) -> dict[str, Any]:
-    """Answer one request. There is deliberately no third kind."""
+    """Answer one request: ask, commit whole, or commit an extension."""
     if message.get("kind") == "committed" and set(message) == {"kind"}:
         return _committed(anchor.committed)
+    if message.get("kind") == "commit2" and set(message) == _COMMIT2_KEYS:
+        if len(canonical(message)) > _MAX_DELTA_REQUEST_BYTES:
+            _fail("anchor delta commit is too large")
+        head = _head(message["head"])
+        from_count = _count(message["from_count"], "from_count")
+        if not isinstance(message["records"], list):
+            _fail("anchor request records must be a list")
+        records = [_record(value) for value in message["records"]]
+        # `from_count` is the sender's claim about where its delta starts,
+        # checked against the anchor's own state before any verification
+        # work; `commit_delta` then derives the base itself and never
+        # believes the claim. A desynchronised client learns so here, cheap.
+        if from_count != anchor.committed[0]:
+            _fail("delta does not start at the anchor's committed count")
+        return _committed(anchor.commit_delta(head, records, authority=verifier))
     if message.get("kind") != "commit" or set(message) != {"head", "kind", "records"}:
         _fail("anchor request is not recognised")
     head = _head(message["head"])
@@ -666,6 +692,15 @@ class AnchorProcess(AuditAnchor):
         """
         return self._exchange(_commit_request(head, records))
 
+    def commit_delta(self, head: AuditHead, records: Iterable[AuditRecord], *,
+                     authority: AuditAuthority | AuditVerifier) -> tuple[int, str]:
+        """Send a bounded extension, with its start derived from the signed head.
+
+        The child checks the sender's derived start against its own committed
+        state and determines the trusted base itself.
+        """
+        return self._exchange(_commit2_request(head, records))
+
     def _exchange(self, message: dict[str, Any]) -> tuple[int, str]:
         frame = _frame(message, _MAX_REQUEST_BYTES)
         with self._lock:
@@ -699,6 +734,36 @@ def _commit_request(head: AuditHead, records: Iterable[AuditRecord]) -> dict[str
         "kind": "commit",
         "records": [record.to_dict() for record in chain],
     }
+
+
+def _commit2_request(head: AuditHead, records: Iterable[AuditRecord]) -> dict[str, Any]:
+    """The delta commit as data, bounded before anything leaves this process.
+
+    The bounds are the sender's half of the protocol: at most
+    `_MAX_DELTA_RECORDS` records in at most `_MAX_DELTA_REQUEST_BYTES`
+    canonical bytes. The anchor enforces both again on its side; refusing
+    here only saves a doomed round trip.
+    """
+    if not isinstance(head, AuditHead):
+        _fail("head is invalid")
+    head_count = _count(head.count, "head.count")
+    chain = _bounded_chain(records, _MAX_DELTA_RECORDS + 1)
+    if len(chain) > _MAX_DELTA_RECORDS:
+        _fail(f"delta holds more than {_MAX_DELTA_RECORDS} records")
+    if not all(isinstance(record, AuditRecord) and isinstance(record.event, AuditEvent)
+               for record in chain):
+        _fail("records must be AuditRecord values carrying an AuditEvent")
+    from_count = _count(head_count - len(chain), "from_count")
+    request = {
+        "from_count": from_count,
+        "head": {"count": head.count, "head_hash": head.head_hash,
+                 "signature": head.signature, "version": head.version},
+        "kind": "commit2",
+        "records": [record.to_dict() for record in chain],
+    }
+    if len(canonical(request)) > _MAX_DELTA_REQUEST_BYTES:
+        _fail("delta commit exceeds the delta request bound")
+    return request
 
 
 def _check_commit_size(head: AuditHead, records: Iterable[AuditRecord]) -> None:
@@ -739,6 +804,11 @@ class AnchorClient(AuditAnchor):
                authority: AuditAuthority | AuditVerifier) -> tuple[int, str]:
         """As `AnchorProcess.commit`: the anchor checks with the key it was started with."""
         return self._exchange(_commit_request(head, records))
+
+    def commit_delta(self, head: AuditHead, records: Iterable[AuditRecord], *,
+                     authority: AuditAuthority | AuditVerifier) -> tuple[int, str]:
+        """As `AnchorProcess.commit_delta`, over the served anchor's socket."""
+        return self._exchange(_commit2_request(head, records))
 
     def _exchange(self, request: dict[str, Any]) -> tuple[int, str]:
         nonce = os.urandom(_NONCE_BYTES).hex()

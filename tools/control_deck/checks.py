@@ -35,8 +35,15 @@ BETA_GATES = [
     ("E2", "Security-Review final", None),
 ]
 
-# The required DB reviews have not been evidenced at the current head.
-PENDING_REVIEWS = {"B4": 94, "B5": 95, "C3": 111}
+# Historical Gemini reviews exist; model recognition and current E2 evidence remain open.
+# C3 has a documented Claude DB review at its merge head (docs/DECISIONS.md).
+PENDING_REVIEWS = {"B4": 94, "B5": 95}
+REVIEW_EVIDENCE = {
+    "B4": "Gemini-Review durchgeführt (historische Testabdeckung FAIL); "
+          "HOLD: heutige B4-Restabdeckung im E2 zu klären; Pro-Modell-Anerkennung offen",
+    "B5": "Gemini-Review ohne Befund durchgeführt (historischer Head); "
+          "HOLD: Pro-Modell-Anerkennung offen",
+}
 PENDING_OPERATIONS = {
     "C5": "Restore-Probe-Code gemergt; HOLD: produktiver Backup-/Restore-Betrieb nicht nachgewiesen",
     "A2": "Landlock implementiert; HOLD: eigener Worker-OS-Nutzer im Betrieb nicht nachgewiesen",
@@ -149,7 +156,8 @@ def tool_status(name: str) -> dict[str, str]:
             logged_in = code == 0 and "gemini-" in out
             return _simple(
                 "green" if logged_in else "yellow",
-                "logged in via Antigravity" if logged_in else "Antigravity login required",
+                "Antigravity model list available; Gemini quota unverified"
+                if logged_in else "Antigravity login required",
             )
 
     exe = _which(name)
@@ -298,11 +306,12 @@ def project_resume(
             break
 
     merged = sum(1 for gate in gates if gate.get("implementation_status") == "green")
+    main_code, main_head = _run(
+        ["git", "rev-parse", "--short=12", "refs/remotes/origin/main"], cwd=repo)
     return {
         "focus": focus,
         "stopped_at": stopped,
-        "main_head": _run(["git", "rev-parse", "--short=12", "refs/remotes/origin/main"],
-                          cwd=repo)[1],
+        "main_head": main_head if main_code == 0 else "",
         "release_ready": False,
         "ci": {"status": "yellow", "detail": "nicht live abgefragt"},
         "evidence_note": ("Lokaler origin/main-Stand; keine Live-Abfrage von GitHub. "
@@ -342,9 +351,8 @@ def snapshot(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
             status = "yellow"
         if implementation_status == "green" and review_pr:
             detail = (f"PR #{review_pr} gemergt; "
-                      "HOLD: erforderlicher Claude-DB-Review am PR-Head nicht nachgewiesen")
-            if gate in {"B4", "B5"}:
-                detail += "; Nachprüfung auf main 7f81e24 dokumentiert, ersetzt dieses Gate nicht"
+                      f"{REVIEW_EVIDENCE[gate]}; "
+                      "separater DB-Review entfällt; E2-Gesamtreview noch offen")
         elif implementation_status == "green" and gate in PENDING_OPERATIONS:
             detail = PENDING_OPERATIONS[gate]
         else:
@@ -399,7 +407,36 @@ def agent_session(name: str) -> dict[str, str]:
 def agent_hub(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
     """Inspect supported access points without model calls or credential reads."""
     launch = repo
+    agy = _which("agy")
+    antigravity_ready = bool(agy and tool_status("gemini")["status"] == "green")
     cards = [
+        {"id": "codex", "name": "Codex (ChatGPT Pro)", "status": "yellow",
+         "status_label": "100 % GEMELDET · 20.10.2026",
+         "detail": "Kaan meldet volles Kontingent; vor längeren Aufträgen erneut prüfen."},
+        {"id": "claude", "name": "Claude Pro", "status": "yellow",
+         "status_label": "KONTINGENT NEU PRÜFEN",
+         "detail": "Kaan meldete am 20.10.2026 einen Reset nach etwa 40 Minuten; aktuelle Nutzbarkeit ungeprüft.",
+         "disabled_label": "Kontingent prüfen"},
+        {"id": "gemini", "name": "Gemini Pro", "status": "yellow",
+         "status_label": "EIN PRO-KONTO GEMELDET",
+         "detail": "Kaan meldet ein Pro-Konto; Restkontingent vor einem Modellauftrag prüfen."},
+        {"id": "antigravity", "name": "Google Antigravity (`agy`)",
+         "status": "green" if antigravity_ready else "yellow",
+         "status_label": "CLI ERREICHBAR" if antigravity_ready else "ZUGANG PRÜFEN",
+         "detail": ("Google-Agentenclient listet Modelle; Argon-Low-Auftrag am 20.10.2026 "
+                    "beantwortet. Restkontingent ungeprüft."
+                    if antigravity_ready else
+                    "Antigravity-Modellliste nicht bestätigt; vor der Nutzung prüfen."),
+         "command": (f"cd {shlex.quote(str(launch))} && {shlex.quote(agy)}"
+                     if antigravity_ready else None)},
+        {"id": "copilot", "name": "GitHub Copilot", "status": "red",
+         "status_label": "ZWEI WOCHEN PAUSE",
+         "detail": "Laut Kaan seit 20.10.2026 nicht verwendbar; Wiedervorlage am 03.11.2026.",
+         "disabled_label": "Derzeit nicht verwendbar"},
+        {"id": "kiro", "name": "Kiro", "status": "red",
+         "status_label": "ZWEI WOCHEN PAUSE",
+         "detail": "Laut Kaan seit 20.10.2026 nicht verwendbar; Wiedervorlage am 03.11.2026.",
+         "disabled_label": "Derzeit nicht verwendbar"},
         {"id": "grok", "name": "Grok", "status": "yellow",
          "detail": "Web-App · Anmeldung wird im Browser geprüft",
          "url": "https://grok.com/", "url_label": "Grok öffnen"},
@@ -407,23 +444,12 @@ def agent_hub(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
          "detail": "Externer Bot · hier kein unterstützter Steuerungsadapter",
          "note": "Vorhandenen Bot auf deinem Gerät öffnen. SSH-Einrichtung allein ist kein Live-Nachweis.",
          "disabled_label": "Direktstart nicht verfügbar"},
-        {"id": "abacus", "name": "Abacus.AI", "status": "yellow",
-         "status_label": "TEXT-REVIEW GEPRÜFT",
-         "detail": "Browser-Zugang und geprüfte CLI-Textreviews · Kontingent aktuell ungeprüft",
-         "url": "https://apps.abacus.ai/chatllm/", "url_label": "Abacus.AI öffnen",
-         "models": [
-             {"name": "Gemini 3.8 Flash", "purpose": "Kleine Textreviews",
-              "verified_on": "05.10.2026", "model_id": "GEMINI_3_8_FLASH_THINKING",
-              "term_command": shlex.quote(str(Path.home() / "src/geniusnew-abacus-setup-20260930/start.sh")) + " flash",
-              "button_label": "Flash · TERM kopieren"},
-             {"name": "Sonnet 5.5", "purpose": "Anspruchsvolle Textreviews",
-              "verified_on": "05.10.2026", "model_id": "CLAUDE_V5_5_SONNET",
-              "term_command": shlex.quote(str(Path.home() / "src/geniusnew-abacus-setup-20260930/start.sh")) + " sonnet",
-              "button_label": "Sonnet · TERM kopieren"},
-         ],
-         "note": "Testnachweis vom 05.10.2026: Antworten und Starter geprüft, Plan-Modus. "
-                 "Vor jedem Auftrag Kontingent prüfen. Repo-Automatik ungeprüft. "
-                 "Das Deck startet keine Abacus-Aufträge."},
+        {"id": "abacus", "name": "Abacus.AI", "status": "red",
+         "status_label": "ZWEI WOCHEN PAUSE",
+         "detail": "Laut Kaan seit 20.10.2026 nicht verwendbar; Wiedervorlage am 03.11.2026.",
+         "note": "Die Textreviews vom 05.10.2026 belegen keine aktuelle Nutzbarkeit. "
+                 "Nach der Pause ist eine neue Prüfung nötig.",
+         "disabled_label": "Derzeit nicht verwendbar"},
     ]
     installed = tool_status("hermes")
     running = agent_session("hermes")
