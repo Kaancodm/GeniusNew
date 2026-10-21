@@ -372,6 +372,38 @@ die Cleanup-Schnittstelle, der Portal-Zeit-/Budgetvertrag und der Ingress bleibe
 vor Code unabhängig zu prüfen. Zahlen, Betriebsort, Restore-Epochen und
 `SECURITY.md`-Grenzen werden hier nicht freigegeben.
 
+#### Gemeinsame Durability-Gates aller D1-Schreibpfade
+
+Der Entwurf verlangt für **jede** D1-Schreibtransaktion dieselben Durability-Gates:
+Annahme, separates Ablehnungs-Audit einschließlich Deduplizierung, Fortschreibung
+von `max_seen_at`, persistente Core-/Portalbudgets, gemeinsame Sperrnachweise
+und Replay-Bereinigung. Für Portal-Schreibpfade gilt dies auf dem eigenen
+Portal-Primary; zwei Datenbankzugänge erzeugen keine gemeinsame Transaktion.
+
+Jede solche Transaktion setzt nach `BEGIN`
+`SET LOCAL synchronous_commit TO on` und prüft den wirksamen Wert unmittelbar
+vor `COMMIT`; Savepoint-Rollback und Hilfsaufrufe dürfen diese Einstellung nicht
+aufheben. `fsync=on` und `full_page_writes=on` müssen beim Start und vor jedem
+Schreibpfad als wirksame Serverwerte geprüft sein. Kann ihre Gültigkeit bis
+zum COMMIT nicht sichergestellt werden, bleibt der jeweilige D1-/Signierpfad
+gesperrt. Ein bestätigter synchroner COMMIT ist Voraussetzung für jede
+weitere Aktion, die sich auf die Buchung verlässt; UNKNOWN erlaubt weder
+Signatur noch Jobannahme, Token-Erstattung oder automatischen Retry.
+
+Audit-Transaktionen verlangen zusätzlich die bestehende Ankerbestätigung.
+Eine reine Uhr- oder Budgetbuchung bekommt dadurch nicht fälschlich einen
+Audit-Nachweis zugesprochen. Restore und möglicher Verlust bestätigter
+Buchungen bleiben separat zu reconciliieren; lokale WAL-Dauerhaftigkeit
+beweist keine verlustfreie Replikation oder Restore-Festigkeit.
+Primärquelle: [PostgreSQL 17: WAL-Konfiguration](https://www.postgresql.org/docs/17/runtime-config-wal.html).
+
+**Abnahme M1:** Jede oben benannte Transaktionsart einzeln gegen einen
+Wegwerf-Primary mit Standard `synchronous_commit=off` prüfen: wirksamer
+Transaktionswert vor COMMIT ist `on`; fehlende/unklare Serverprüfung sperrt.
+Crash-/Neustart- und UNKNOWN-Fälle müssen nachweisen, dass keine bestätigte
+Zeit-/Budgetbuchung als verloren behandelt und dadurch neue Kapazität
+erzeugt wird. Dies sind geplante Prüfungen, keine ausgeführten Nachweise.
+
 #### 4.9.1 Replay-Zeilen und Rechte
 
 ```sql
@@ -911,6 +943,39 @@ vor Freigabe zu messen. Bei fehlender oder unbekannter Reserve sperrt D1 schon
 vor weiterer Signaturarbeit. Die bestehende Kapazitätsprüfung vor jedem
 Audit-COMMIT bleibt maßgeblich; eine kleine Replay-Tabelle hebt sie nicht auf.
 
+**Kapazitätsrechnung zu M2 (begrenzte Messgrundlage, keine D1-Abnahme):**
+Ein synthetisch gemessener bestehender Kernablauf am Quellstand
+`c0d68f6eb0638bcc4325aede591de9a4f5b1269c` erzeugt vier Events ohne Freigabe
+beziehungsweise fünf mit Freigabe. Die konservative harte Zustandsprüfung
+erlaubt 61.230 Records. Ohne Altbestand, Cleanup, Ablehnungen und sonstige
+Auditlast entsprechen vier Events je Job höchstens
+`floor(61230/4) = 15307` vollständigen Jobs. Bei sechs Jobs je Minute
+sind das rund 42,5 Stunden. Fünf Events je Job ergeben 12.246 Jobs
+beziehungsweise rund 34 Stunden. Die vorgeschlagene 12-MiB-Stoppschwelle
+entspricht im selben Zustandsmodell 45.923 Records: bei vier Events
+höchstens 11.480 Jobs beziehungsweise rund 31,9 Stunden.
+
+Diese Werte sind optimistische Vergleichsrechnungen, keine garantierte
+Betriebsdauer: Der bestehende Vier-/Fünf-Event-Pfad ist kein implementierter
+D1-Pfad. Größere Events können schon vorher die Requestgrenze erreichen;
+Altbestand, Refusals, Cleanup und andere Jobs verkürzen die Reserve.
+Ein korrekt neu signiertes, jeweils anderes Nonce kann trotz Deduplizierung
+dauerhaft neue Refusal-Events erzeugen. Sechs pro Minute entsprechen
+8.640 pro Tag; 61.230 Records reichen dafür ohne weitere Last nur rund
+7,1 Tage. Das Portal-Tagesbudget bindet einen kompromittierten Signierer
+nicht und ist deshalb kein harter Core-Auditdeckel.
+
+**N-A bleibt ein eigenständiger Entwurfspunkt:** Vor Aktivierung ist eine
+im Kern über alle Instanzen dauerhaft und atomar gezählte Tagesobergrenze
+für erstmalige `D1_REQUEST_REFUSED`-Nachweise mit geprüfter UTC-Tagesbindung
+festzulegen. Zahl, Zählervertrag, Restore-Verhalten und Behandlung oberhalb
+der Grenze brauchen Vertragsabgleich mit §4.9.2 und unabhängigen Review;
+insbesondere darf ein bislang erforderlicher Auditnachweis nicht still
+wegfallen. Bis dahin gilt kein unbeschränkter Dauerbetrieb als freigegeben.
+Die Rechnung muss Annahmen, erstmalige Refusals, Cleanup, sonstige Auditlast
+und bestehende Records gemeinsam berücksichtigen. Eine spätere
+`commit_delta`-Verdrahtung allein beseitigt die Kopfjournalgrenze nicht.
+
 Der Zeilendeckel ist kein Langzeitbudget für Job-Ledger, Audit, WAL oder freien
 Plattenplatz. Überwachung und ein vor deren Erschöpfung wirksames Stopprofil
 bleiben Teil des Betriebsnachweises. DELETE garantiert zudem keine Verkleinerung
@@ -934,6 +999,10 @@ Signaturen dürfen `max_seen_at` weder sperren noch fortschreiben; spätere
 berechtigte Zeitprüfungen erkennen zwischenzeitliche Rücksprünge. Der interne
 Bereinigungspfad signiert ausschließlich über die `AuditAuthority` im Kern;
 die normale Runtime-DSN kann weder DELETE noch den Bereinigungspfad ausführen.
+Zusätzlich muss ein in der DB liegender Bereinigungsnachweis mit ungültiger
+Signatur beim Start abgelehnt werden (L2); gültige Form und bloße Existenz des
+Kopfes reichen nicht. Nach Replay-DELETE bleibt für alte Requests die geprüfte
+Uhrgrenze maßgeblich (L1); die zugehörige SECURITY-Grenze ist separat abzugleichen.
 Link-, Konsistenz- und Diff-Prüfungen dieses Entwurfs belegen diese späteren
 Laufzeiteigenschaften nicht.
 
