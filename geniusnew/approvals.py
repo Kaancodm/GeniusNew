@@ -58,8 +58,8 @@ class ApprovalScope:
     origin: object = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        for field in ("handoff_sha256", "job_id", "user_id", "worker_agent_id", "risk_tier", "policy_version", "action"):
-            _string(getattr(self, field), field)
+        for field_name in ("handoff_sha256", "job_id", "user_id", "worker_agent_id", "risk_tier", "policy_version", "action"):
+            _string(getattr(self, field_name), field_name)
         if _integer(self.handoff_expires_at, "handoff_expires_at") <= 0:
             _fail("handoff_expires_at must be positive")
         if len(self.handoff_sha256) != 64 or any(char not in "0123456789abcdef" for char in self.handoff_sha256):

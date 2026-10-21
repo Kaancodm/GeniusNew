@@ -1,6 +1,5 @@
 """Unprivileged acceptance-contract and driver safety regression tests."""
 
-import copy
 from contextlib import ExitStack
 import io
 import json
@@ -295,7 +294,7 @@ class DriverSafetyTest(unittest.TestCase):
             child = driver.Child("baseline")
             child.process = Mock(stdout=Mock())
             child.process.stdout.fileno.return_value = 9
-            with patch.object(select := driver.select, "select", return_value=([9], [], []) if readable else ([], [], [])), \
+            with patch.object(driver.select, "select", return_value=([9], [], []) if readable else ([], [], [])), \
                     patch.object(os, "read", side_effect=[chunk, AssertionError("unexpected repeated read")]):
                 with self.assertRaises(common.Refused):
                     child.event()

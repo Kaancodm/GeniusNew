@@ -2,8 +2,7 @@ import hashlib
 import unittest
 from dataclasses import replace
 
-from geniusnew.audit import (CONSTITUTION_VERSION, AuditAuthority, AuditEvent,
-                             ComponentActor, event_from_handoff, rehydrate_event)
+from geniusnew.audit import (CONSTITUTION_VERSION, AuditAuthority, ComponentActor, event_from_handoff, rehydrate_event)
 from geniusnew.contracts import (ContractError, Grant, HandoffSigner, Policy, issue, validate,
                                  validate_pending)
 

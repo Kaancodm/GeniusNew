@@ -252,12 +252,12 @@ class AuditEvent:
     result_sha256: str | None = None
 
     def __post_init__(self) -> None:
-        for field in ("trace_id", "job_id", "subject", "policy_version", "constitution_version"):
-            _identifier(getattr(self, field), field)
+        for field_name in ("trace_id", "job_id", "subject", "policy_version", "constitution_version"):
+            _identifier(getattr(self, field_name), field_name)
         if not isinstance(self.actor, ComponentActor):
             _fail("actor must be a ComponentActor minted by an AuditAuthority")
-        for field in ("handoff_sha256", "payload_sha256"):
-            _digest(getattr(self, field), field)
+        for field_name in ("handoff_sha256", "payload_sha256"):
+            _digest(getattr(self, field_name), field_name)
         if self.approval_record_hash is not None:
             _digest(self.approval_record_hash, "approval_record_hash")
         if type(self.action) is not str or self.action not in _ACTIONS:

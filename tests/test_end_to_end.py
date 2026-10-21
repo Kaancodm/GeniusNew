@@ -28,7 +28,7 @@ from geniusnew.contracts import ContractError, Grant, Policy
 from geniusnew.gateway import Gateway
 from geniusnew.http_entry import HttpLimits, serve
 from geniusnew.isolation import IsolatedWorkerRunner
-from geniusnew.results import WorkerAuthority, accept
+from geniusnew.results import WorkerAuthority
 from geniusnew.verifier import Rejected
 from geniusnew.wiring import build
 from geniusnew.workers import DeterministicSummarizer, Worker, WorkerRunner

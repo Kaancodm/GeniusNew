@@ -9,7 +9,6 @@ import psycopg
 
 from geniusnew import database
 from geniusnew import anchor_process
-from geniusnew.audit import AuditAuthority
 from geniusnew.audit_chain import AuditAnchor, _record_hash, verify
 from geniusnew.audit_store import PostgresAuditChain, _AUDIT_LOCK
 from geniusnew.contracts import ContractError

@@ -12,6 +12,10 @@ permissions:
 jobs:
   tests:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
     # Disposable CI database only; no production credentials or external endpoint.
     services:
       postgres:
@@ -28,7 +32,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
-          python-version: '3.11'
+          python-version: ${{ matrix.python }}
       - name: Configure disposable PostgreSQL
         env:
           POSTGRES_PORT: ${{ job.services.postgres.ports['5432'] }}
@@ -117,17 +121,30 @@ jobs:
           MODULE: ${{ matrix.module }}
         run: python scripts/refusals.py "$MODULE"
 
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.13'
+      - name: Install the pinned CI lint tool
+        run: python -m pip install --require-hashes -r requirements-dev.txt
+      - name: Check Python errors
+        run: python -m ruff check --select E9,F .
+
   # The check name branch protection may require. A skipped job counts as
-  # passing there, so this runs always and demands success from both.
+  # passing there, so this runs always and demands success from every gate.
   contracts:
-    needs: [tests, refusals]
+    needs: [tests, refusals, lint]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Tests and every refusal check passed
+      - name: Tests, every refusal check and lint passed
         env:
           TESTS: ${{ needs.tests.result }}
           REFUSALS: ${{ needs.refusals.result }}
+          LINT: ${{ needs.lint.result }}
         run: |
-          echo "tests=$TESTS refusals=$REFUSALS"
-          test "$TESTS" = success && test "$REFUSALS" = success
+          echo "tests=$TESTS refusals=$REFUSALS lint=$LINT"
+          test "$TESTS" = success && test "$REFUSALS" = success && test "$LINT" = success

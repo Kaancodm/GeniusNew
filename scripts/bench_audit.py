@@ -212,7 +212,7 @@ def _print(result: Result) -> None:
     print("linear in the coefficient above; the PostgreSQL read adds more):")
     for records, ms in result.projected_commit_ms:
         print(f"  at {records:>8} records: {ms:>9.0f} ms per committed event")
-    print(f"\nProjected anchor-verification CPU to reach the binding ceiling,")
+    print("\nProjected anchor-verification CPU to reach the binding ceiling,")
     print(f"committing every event: {result.projected_lifetime_hours:.1f} hours.")
     print("\nReading: append stays flat; everything that re-reads or re-verifies")
     print("the chain grows with its length. That is the O(n) P-01 names, and")
