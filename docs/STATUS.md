@@ -127,6 +127,7 @@ oder vierte Stufe belegt.
 | #150 | 21.10.2026 | Werkzeug für die Worker-Abnahme | gemergt; **Liveabnahme nicht belegt** (braucht Kaans GO) |
 | #151 | 21.10.2026 | D2: Argon2id-Passwortgrenze (`portal_passwords.py`), Merge `1f1c5d9096ee4a47f3bc7880e8a8e463f67c2250` | **inaktiver Baustein** |
 | #152 | 21.10.2026 | D2: Session-/CSRF-Token und Cookie-Helfer (`portal_session_tokens.py`), Merge `9385f5bd9dc43f277af8f3b0265c7b4d45cfbc71` | **inaktiver Baustein** |
+| #197 | 21.10.2026 | Roadmap-Zeile D2 und Abgleichsabsatz, Merge `e37eb22ac643f92c9097e0dc03d20f3dfdf497d8` | Doku gemergt auf Kaans Anweisung; **ohne Gemini-Review am Head** |
 
 **D2 im Einzelnen (Code geprüft an `9385f5b`):** Argon2id mit m=65536, t=3, p=4, Passwort
 1 bis 1024 Byte; Token mit SHA-256-Digest und sessiongebundenem CSRF-Vergleich; Cookie
@@ -139,7 +140,8 @@ und Dummy-Hash, Login-Budgets, serverseitiger Ablauf, Rotation und Widerruf der 
 Origin-/CSRF-Prüfung einschließlich des Bootstraps vor dem Login, ein eigener CSRF-Schlüssel
 und die Entscheidung zum Cookie-Profil (Lax im Code gegenüber Strict im Vorschlag von
 `docs/DATABASE.md`). **D1, D2 und D3 bleiben Pflicht der technischen Beta; #151 und #152 ergeben
-keinen D2-PASS.** Die Fassung der Roadmap dazu liegt in #197 und #198 (offen, siehe unten).
+keinen D2-PASS.** Die Roadmap-Zeile D2 ist mit #197 gemergt (21.10.2026, Merge-Commit
+`e37eb22ac643f92c9097e0dc03d20f3dfdf497d8`); #198 (D1/D3-Zeilen, Abgleichsdokument) ist offen.
 
 **Offene PRs mit Bezug zu Gates.** Die Angaben stammen aus den PR-Beschreibungen zum
 genannten Head und wurden, außer wo „geprüft“ steht, nicht neu abgerufen:
@@ -152,7 +154,8 @@ genannten Head und wurden, außer wo „geprüft“ steht, nicht neu abgerufen:
 | #182 E3-Runner | `a3338ac66aa6cd3b5465c68885bbb37616479c28` | Gemini-Flash A–C PASS, `contracts` grün laut PR; Pro-Modell-Review und Live-E3 offen |
 | #195 Entscheidungsdesk | `2884be59437d173911492c83961643a2c1241132` | geprüft am 21.10.2026: `contracts` und alle 29 Jobs SUCCESS. Gemini-Review am Head ausstehend. Technischer Owner nach Übernahme: Codex |
 | #196 E2-Checkliste | `531b8f0d642b9183c80add3972026170d07affaf` | Claude-Review ohne Critical/High (Kommentar im PR); Gemini und CI offen. Die Checkliste ist kein E2-Abschluss |
-| #197, #198 Portal-Doku | `3e083ee2421b57130b2f310542b00a53e7d017f7`, `fd46b8a703a682d83a90af68124fdd601bb31eb2` | beide ändern die Roadmap-Zeile D2 und kollidieren dort. #198 ist die umfassendere Fassung; sein STATUS-Hunk widerspricht der Dateizuständigkeit, #198 beruft sich dafür auf einen Auftrag Kaans (nicht belegt; siehe `docs/DECISIONS.md` 21.10.2026) |
+| #197 Roadmap D2 | `3e083ee2421b57130b2f310542b00a53e7d017f7` | **gemergt am 21.10.2026** auf Kaans Anweisung (Merge-Commit `e37eb22ac643f92c9097e0dc03d20f3dfdf497d8`); CI SUCCESS, **kein Gemini-Review am Head** (nachzuholen) |
+| #198 Portal-Doku | `fd46b8a703a682d83a90af68124fdd601bb31eb2` | offen, Draft. Ändert dieselbe Roadmap-Zeile D2 wie das gemergte #197 und wird mit `main` kollidieren (Auflösung beim Branch-Owner, Codex). Sein STATUS-Hunk widerspricht der Dateizuständigkeit, #198 beruft sich dafür auf einen Auftrag Kaans (nicht belegt; siehe `docs/DECISIONS.md` 21.10.2026) |
 
 **Messwerte:** Für `main` `9385f5b` liegt keine neue Testzahl vor: UNKNOWN. Zahlen aus
 den PR-Beschreibungen gelten nur für deren Heads (z. B. #195: 1480 Tests, Demo 15/15 am
