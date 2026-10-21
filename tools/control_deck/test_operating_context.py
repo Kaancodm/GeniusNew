@@ -61,8 +61,11 @@ class ContextTest(unittest.TestCase):
                 self.assertEqual(snapshot(path)["status"], "unavailable")
 
     def test_oversized_context_is_refused_even_when_it_is_valid_json(self):
-        data=self.data(); data["padding"]="x"*70000
-        self.assertEqual(self.read(data)["status"], "unavailable")
+        # Valid JSON plus whitespace: only the read bound can refuse it.
+        with tempfile.TemporaryDirectory() as tmp:
+            path=Path(tmp)/"context.json"
+            path.write_text(json.dumps(self.data())+" "*70000)
+            self.assertEqual(snapshot(path)["status"], "unavailable")
 
     def test_wrong_schema_version_is_refused(self):
         data=self.data(); data["schema"]=2
