@@ -42,17 +42,61 @@ den bootgebundenen, durch Host-Root erzeugten Beleg
 `/run/geniusnew-worker/ipc/host-state.json`. Ohne diese Voraussetzungen
 verweigert er den Auftrag; es gibt keinen lokalen Worker-Fallback.
 
-### Abgleich mit A2/PR #140 (19.10.2026) — HOLD
+### Core-Unit ohne eigene Mount-Namespace — Vorschlag (a), HOLD
 
-Die ältere Core-Unit `docs/examples/geniusnew-core.service` ist noch **keine
-betriebsfähige Vorlage für den getrennten Worker**. Insbesondere erzeugen ihre
-Härtungsoptionen `ProtectSystem=strict`, `ProtectHome=yes` und
-`PrivateTmp=yes` voraussichtlich eine private Mount-Namespace. Der
-Worker-Hostnachweis fordert aber, dass der Core in der geprüften Host-Namespace
-bleibt (siehe `ops/worker/README.md`). Dieser Widerspruch ist auf dem Zielhost
-noch nicht abgenommen. Die Optionen dürfen nicht einfach entfernt werden:
-Zuerst braucht es einen unabhängig sicherheitsgeprüften Ersatzvertrag ohne
-schwächere Schutzwirkung.
+Der [unabhängige Claude-Security-Review zu #117](https://github.com/Kaancodm/GeniusNew/pull/117#issuecomment-6299935630)
+am Head `412df30654f7411e65bf35d312fd5cd4706f5d92` bestätigt den
+Betriebsfähigkeitsfehler: `ProtectSystem=strict`, `ProtectHome=yes` und
+`PrivateTmp=yes` erzeugen eine eigene Mount-Namespace. Der Worker-Hostnachweis
+verlangt dieselbe Mount-, PID-, User- und Cgroup-Namespace wie die
+root-erzeugte Bootreferenz; diese ältere Core-Unit verweigert deshalb vor Connect.
+
+`docs/examples/geniusnew-core.service` bereitet den vom Review empfohlenen
+**Vorschlag (a)** konkret vor: Diese drei Optionen entfallen, auch
+`ReadWritePaths` wird für den Core nicht eingeführt. Die Anker-Unit bleibt
+unverändert; der Anker unterliegt nicht dem Worker-Hostnachweis. Am Worker-
+Vertrag und an dessen Namespace-Prüfungen ändert sich nichts.
+
+Der Ersatzvertrag kombiniert den eigenen unprivilegierten Core-Nutzer mit
+`NoNewPrivileges=yes`, `RestrictSUIDSGID=yes`, leeren Capability- und
+Ambient-Capability-Mengen, `SystemCallFilter=@system-service`,
+`SystemCallErrorNumber=EPERM`, `RestrictNamespaces=yes`,
+`RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`, `LockPersonality=yes`,
+`UMask=0077` und den bisherigen Ressourcenlimits. Diese Optionen verlangen
+keine private Mount-Namespace. Die ergänzende Gruppe `geniusnew-worker-ipc`
+ist allein die geplante Worker-Socketgruppe, nicht die primäre Worker-Gruppe;
+ihre feste numerische GID muss zum Worker-Profil passen.
+
+Das ist eine **veränderte Schutzeigenschaft**, kein Nachweis gleicher Isolation:
+Der Core sieht nun die Host-Homeverzeichnisse und teilt `/tmp` mit dem Host.
+Schreibschutz und Secret-Trennung beruhen auf geprüften Unix-Rechten/ACLs statt
+auf der entfernten Mount-Isolation. Vor Freigabe müssen sämtliche Host-
+Homeverzeichnisse den Zugang des Core verweigern (im vorgesehenen Modell
+`0700`), Systempfade und Code samt Python-Laufzeit root-eigen und für Core
+unbeschreibbar sein. Fremde ergänzende Gruppen und ACL-Freigaben sind zu
+prüfen. Der Core darf keinen gemeinsamen temporären Pfad für vertrauliche
+Daten benutzen; benötigt eine spätere Core-Funktion temporäre Dateien, braucht sie
+einen separat geschützten Pfad und eine eigene Prüfung. Die Worker-Jobpfade
+bleiben beim eigenen Worker-Nutzer und systemd-Lebenszyklus.
+
+**Noch keine Entscheidung oder Betriebsfreigabe:** Kaan muss den konkreten
+Ersatzvertrag annehmen; Claude und Gemini müssen die geänderte Unit und die
+Dateirechte am neuen Head unabhängig prüfen. Ein statischer
+`systemd-analyze verify`-/`security`-Befund bestätigt keine laufenden Kernel-
+Filter, Gruppen, Dateirechte oder Namespace-Gleichheit. Die echte Worker-
+Abnahme muss mit genau der freigegebenen Core-Unit erfolgen.
+
+Statischer Prüfstand dieses Vorschlags vom 21.10.2026, systemd
+`257.13-1~deb13u1`, ohne laufendes systemd und ohne Installation: Offline-
+`systemd-analyze security` bewertet den Core mit **3.7**, den unveränderten
+Anker mit **8.1**. Die Skala misst die konfigurierten systemd-Optionen, keine
+GeniusNew-Sicherheitsfreigabe. `systemd-analyze --generators=no verify` der
+Originale scheitert hier ausschließlich am fehlenden
+`/opt/geniusnew/.venv/bin/python`. Temporäre Kopien, in denen nur dieser
+Executable-Pfad durch `/usr/bin/python3` ersetzt wurde, bestehen die Prüfung
+mit Exit 0. Der tatsächliche installierte Interpreter und die Filterwirkung
+auf dem Zielhost bleiben ungeprüft; diese Substitution ist keine Änderung
+der Betriebs-Units und kein Startnachweis.
 
 Zusätzlich fehlen im bisherigen Installationsablauf die fest zugeordneten
 numerischen Core-/Worker-/Socket-Gruppenidentitäten, die separat geschützte,
@@ -60,8 +104,13 @@ root-kontrollierte Python-Laufzeit, der Boot-Referenz-Erzeuger und die echte
 Systemprobe. Eine vorhandene Datei oder systemd-Unit ist kein Nachweis ihrer
 korrekten Bereitstellung. Die gesonderten Worker-Vorlagen unter `ops/worker/`
 werden nicht durch die Core-/Anker-Beispiele ersetzt.
+Auch die C5-TOML bleibt ein unvollständiger Entwurf: Ihr fehlt noch der nach
+#140 erforderliche `[worker]`-Block mit den festen numerischen Identitäten
+und Pfaden. Syntaktisch gültiges TOML belegt keinen erfolgreichen
+`load_config`- oder Dienststart.
 
-**Bis zum geprüften Ersatz der Core-Unit und zum bestandenen Test von
+**Bis zur Entscheidung und zum unabhängigen Review des Ersatzvertrags sowie
+zum bestandenen Test von
 [PR #144](https://github.com/Kaancodm/GeniusNew/pull/144) sowie den
 Worker-Absturztests aus [PR #150](https://github.com/Kaancodm/GeniusNew/pull/150):
 keine Core-/Worker-Aktivierung, keine produktive Peer-DB-Anbindung und kein
@@ -70,7 +119,7 @@ eigenes Kaan-GO.
 
 ### Dienst-Installation nach Freigabe
 
-Die zwei älteren Core-/Anker-Beispiele unter `docs/examples/` sind
+Die Core-/Anker-Beispiele unter `docs/examples/` sind
 **Entwurfsartefakte**, nicht installierbar, solange das A2/C5-HOLD besteht.
 Die separat geprüften Worker-`.in`-Vorlagen liegen unter `ops/worker/`.
 Der geprüfte Commit muss später unveränderlich in einer root-kontrollierten
@@ -90,10 +139,11 @@ Modus `0600` und keine Symlinks. Die TOML nennt ausschließlich
 Ihr `listen_host` wird privat auf Loopback gesetzt; der Reverse-Proxy aus
 `docs/REVERSE-PROXY.md` übernimmt TLS und äußere Limits.
 
-Der bisherige Ablauf zum Kopieren und Aktivieren dieser beiden Units ist
-**gesperrt**: Die Core-Unit ist nicht mit dem Boot-/Namespace-Vertrag von
-PR #140 abgeglichen. Nach unabhängigem Review sind ein neuer Installations-
-und Reboot-Probelauf sowie die vollständige A2/C5-Abnahme erforderlich. Hier
+Der bisherige Ablauf zum Kopieren und Aktivieren dieser beiden Units bleibt
+**gesperrt**: Der vorbereitete Ersatzvertrag der Core-Unit ist weder entschieden
+noch am neuen Head unabhängig geprüft und auf dem Host abgenommen. Nach dem
+Review sind ein neuer Installations- und Reboot-Probelauf sowie die vollständige
+A2/C5-Abnahme erforderlich. Hier
 stehen absichtlich keine ausführbaren `systemctl enable --now`-Kommandos.
 
 Der Platzhalter `AUDIT_PUBLIC_KEY_HEX` in der Anker-Unit muss vorher durch den
@@ -622,7 +672,7 @@ auf dem Entwicklungsserver ersetzt diesen Betriebsnachweis nicht.
 ## Noch offene konkrete Freigaben
 
 Am **aktuellen vollständigen PR-Head** erforderlich: Claude-Sicherheitsreview
-für Deploy, Netz und DB sowie Copilot-Review; historische Kiro-/ChatLLM-PASS
+für Deploy, Netz und DB sowie Gemini-Review; historische Kiro-/ChatLLM-PASS
 ersetzen diese neuen Gates nicht. Kaan mergt; keine automatische Freigabe.
 Offen sind insbesondere Peer-/Worker-Negativnachweis, isolierte HBA/TLS-/Rollen-/
 Checksum-Prüfung, Monitoring-Exportprüfung und die regelmäßige Restore-Planung.
