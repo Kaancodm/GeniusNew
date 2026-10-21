@@ -53,7 +53,7 @@ import time
 from collections import Counter
 from typing import Any, Mapping
 
-from .contracts import ContractError, Handoff
+from .contracts import ContractError, Handoff, canonical
 from .gateway import DispatchPermit, consume_handoff_from_permit
 from .results import WorkerAuthority, handoff_digest, produce
 
@@ -128,10 +128,10 @@ class DeterministicSummarizer(Worker):
 # and a test can assert exactly. A learned summarizer can replace the scoring
 # later without changing the tool's contract: one text in, one digest out.
 #
-# Output sizes are bounded by construction (at most three shortened
-# sentences, ten keywords, eight figures, fixed statistics), so a maximal
-# 16 KiB payload still produces a result that fits the result wire instead
-# of dying as OUTPUT_REJECTED at the signing boundary.
+# Displayed sections are bounded so long tokens do not crowd out statistics.
+# Figures and keyword labels also cap canonical JSON bytes: a non-BMP character
+# takes twelve bytes on the wire. The result boundary still checks the complete
+# signed envelope, including identifiers, against its wire limit.
 
 _WORD = re.compile(r"[^\W\d_]+(?:[-'][^\W\d_]+)*", re.UNICODE)
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+|\n+")
@@ -144,7 +144,9 @@ _FIGURE = re.compile(
 _MAX_SUMMARY_SENTENCES = 3
 _MAX_SENTENCE_CHARS = 320
 _MAX_KEYWORDS = 10
+_MAX_KEYWORD_DISPLAY_BYTES = 80
 _MAX_FIGURES = 8
+_MAX_FIGURE_DISPLAY_BYTES = 320
 _MAX_OUTPUT_CHARS = 6000
 _WORDS_PER_MINUTE = 200
 
@@ -263,10 +265,26 @@ def _core_sentences(sentences: list[str],
     return chosen
 
 
+def _display_excerpt(value: str, byte_limit: int) -> str:
+    """Bound a display label by its escaped JSON content size."""
+    if len(canonical(value)) - 2 <= byte_limit:
+        return value
+    marker = " …"
+    remaining = byte_limit - (len(canonical(marker)) - 2)
+    prefix: list[str] = []
+    for character in value:
+        size = len(canonical(character)) - 2
+        if size > remaining:
+            break
+        prefix.append(character)
+        remaining -= size
+    return "".join(prefix).rstrip() + marker
+
+
 def _figures(text: str) -> list[str]:
     seen: list[str] = []
     for match in _FIGURE.findall(text):
-        figure = " ".join(match.split())
+        figure = _display_excerpt(" ".join(match.split()), _MAX_FIGURE_DISPLAY_BYTES)
         if figure and figure not in seen:
             seen.append(figure)
         if len(seen) >= _MAX_FIGURES:
@@ -313,10 +331,14 @@ def render_digest(text: str) -> str:
         f"## {labels['core']}",
         "",
     ]
-    lines.extend(_core_sentences(sentences, keywords) or [sentences[0]])
+    fallback = sentences[0]
+    if len(fallback) > _MAX_SENTENCE_CHARS:
+        fallback = fallback[:_MAX_SENTENCE_CHARS - 2].rstrip() + " …"
+    lines.extend(_core_sentences(sentences, keywords) or [fallback])
     if keywords:
         lines += ["", f"## {labels['keywords']}", "",
-                  ", ".join(f"{word} ({count})" for word, count in keywords)]
+                  ", ".join(f"{_display_excerpt(word, _MAX_KEYWORD_DISPLAY_BYTES)} ({count})"
+                            for word, count in keywords)]
     figures = _figures(text)
     if figures:
         lines += ["", f"## {labels['figures']}", ""]
@@ -331,7 +353,7 @@ def render_digest(text: str) -> str:
         f"- {labels['avg_word']}: {sum(len(word) for word in words) / len(words):.1f}",
     ]
     rendered = "\n".join(lines) + "\n"
-    if len(rendered) > _MAX_OUTPUT_CHARS:  # unreachable by construction; held anyway
+    if len(rendered) > _MAX_OUTPUT_CHARS:  # defence in depth for future formatting
         rendered = rendered[:_MAX_OUTPUT_CHARS - 16].rstrip() + f"\n{labels['truncated']}\n"
     return rendered
 

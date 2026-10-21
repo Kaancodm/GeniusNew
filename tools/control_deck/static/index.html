@@ -10,7 +10,7 @@
 .pill,.badge{display:inline-flex;align-items:center;border:1px solid #2f3b63;border-radius:999px;padding:5px 9px;font-size:.75rem;font-weight:800}.badge{border-radius:7px}.green{color:#7ee2b8;background:#10251f}.yellow{color:var(--wait);background:#292310}.red{color:var(--danger);background:#2b1518}
 .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}.card{grid-column:span 6;background:rgba(20,32,51,.86);border:1px solid var(--line);border-radius:16px;padding:15px;min-width:0}.wide{grid-column:1/-1}.card h2,.card h3{margin:0 0 10px}.card h2{font-size:1rem}.card h3{font-size:.9rem;color:#e4e9f5}
 .row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid #1a2342}.row:last-child{border-bottom:0}.click{cursor:pointer}.stack{display:grid;gap:8px}.item{background:#0b1120;border:1px solid #1f2a4a;border-radius:11px;padding:11px}.item b{display:block;margin-bottom:3px}.item small{color:var(--muted);line-height:1.4}
-button,.btn{appearance:none;border:1px solid #2a3558;background:#141d36;color:var(--text);border-radius:9px;padding:9px 12px;font-weight:750;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;min-height:40px}.primary{background:var(--accent);border-color:var(--accent);color:#05101f}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+button,.btn{appearance:none;border:1px solid #2a3558;background:#141d36;color:var(--text);border-radius:9px;padding:9px 12px;font-weight:750;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;min-height:40px}button:disabled{opacity:.55;cursor:not-allowed}.primary{background:var(--accent);border-color:var(--accent);color:#05101f}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
 textarea{width:100%;min-height:86px;resize:vertical;background:#080d1a;color:var(--text);border:1px solid #2a3558;border-radius:10px;padding:11px;font:inherit}.note{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:start}.note button{min-height:auto;padding:5px 8px}
 .agentgrid,.gates,.linkgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:9px}.agent,.gate,.linkcard{background:#0b1120;border:1px solid #1f2a4a;border-radius:12px;padding:12px}.agent p,.linkcard p{font-size:.82rem;color:var(--muted);line-height:1.45}.linkcard a{color:#e4e9f5;text-decoration:none}.linkcard .tag{font-size:.68rem;color:var(--accent);font-weight:900;letter-spacing:.08em}
 .mailrow{display:grid;grid-template-columns:auto 1fr auto;gap:9px;align-items:center;padding:10px 0;border-bottom:1px solid #1a2342}.mailrow:last-child{border:0}.mailflag{font-size:.7rem;font-weight:900;color:var(--wait)}
@@ -24,12 +24,12 @@ textarea{width:100%;min-height:86px;resize:vertical;background:#080d1a;color:var
 <div class="hero"><div class="eyebrow">Aktueller Fokus</div><h2 id="focus">Projektstand wird geladen</h2><div id="projectMeta" class="heroLine"></div><div id="evidence" class="muted"></div></div>
 <div class="grid">
 <section class="card"><h2>Weiterarbeiten</h2><div id="resume" class="stack"></div></section>
-<section class="card"><h2>Nächste Schritte</h2><div id="priorities"></div><div class="actions"><button id="runAll" class="primary">Ausführbare Checks starten</button></div></section>
+<section class="card"><h2>Nächste Schritte</h2><div id="priorities"></div><div class="actions"><button data-quick-check="git_status" disabled>Git prüfen</button><button data-quick-check="tests" disabled>Tests starten</button><button data-quick-check="demo" disabled>Demo starten</button><button id="runAll" class="primary" disabled>Prüfkette starten</button></div><small class="muted">Git, Tests und Demo laufen im angezeigten Deck-Checkout; die Kette stoppt beim ersten Fehler und gibt keine Projekt-Gates frei.</small></section>
 <section class="card"><h2>Notizen</h2><textarea id="noteInput" maxlength="800" placeholder="Kurze Notiz, Fund oder Idee für später…"></textarea><div class="actions"><button id="saveNote" class="primary">Speichern</button></div><div id="notes" class="stack" style="margin-top:10px"></div></section>
 <section class="card"><h2>Gespeichert für später / neue Befunde</h2><div id="research" class="stack"></div></section>
 </div></section>
 <section id="dev" class="view">
-<div class="hero"><div class="eyebrow">Development Workflow</div><h2>Build → Review → Evidence → Gate</h2><div class="muted">Tools und Agenten sind Ressourcen. Git, CI und nachprüfbare Evidenz bleiben maßgeblich.</div></div>
+<div class="hero"><div class="eyebrow">Development Workflow</div><h2>Build → Review → Evidence → Gate</h2><div class="muted">Agentenbefehle werden hier nur angezeigt oder kopiert. Start und Modellauftrag erfolgen erst im Terminal. Die Prüfknöpfe führen ausschließlich feste lokale Checks aus.</div></div>
 <div class="grid"><section class="card wide"><h2>KI & Fallbacks</h2><div id="agentCards" class="agentgrid">lädt…</div></section><section class="card"><h2>System</h2><div id="system"></div></section><section class="card"><h2>Tools / Agenten</h2><div id="tools"></div></section><section class="card wide"><h2>Projekt-Gates</h2><div id="gates" class="gates"></div></section><section class="card wide"><h2>TERM / feste Befehle</h2><div id="commands"></div></section></div>
 </section>
 <section id="market" class="view">
@@ -56,32 +56,32 @@ textarea{width:100%;min-height:86px;resize:vertical;background:#080d1a;color:var
 <div class="linkcard"><div class="tag">SPÄTER · EVAL</div><h3>T3MP3ST / Red-Team</h3><p>Erst vor Beta/Staging isoliert für autorisierte Red-Team-Evaluation hervorholen.</p></div>
 </div></section>
 </div></section>
-<div id="panel" class="panel"><div class="sheet"><h2 id="ptitle">Details</h2><div id="pbody"></div><pre id="poutput" hidden></pre><div class="actions"><button id="prun" hidden class="primary">Ausführen</button><button id="pclose">Schließen</button></div></div></div>
+<div id="panel" class="panel"><div class="sheet"><h2 id="ptitle">Details</h2><div id="pbody"></div><textarea id="pcopy" readonly hidden aria-label="Terminalbefehl zum manuellen Kopieren"></textarea><pre id="poutput" hidden></pre><div class="actions"><button id="prun" hidden class="primary">Ausführen</button><button id="pclose">Schließen</button></div></div></div>
 </main>
 <script>
 const $=id=>document.getElementById(id),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const labels={green:'PASS',yellow:'ACTION',red:'OPEN'},actionFor={Git:'git_status',Docker:'docker_status'};let state=null,mail=null,agentsLoading=false,runAllRunning=false;
+const labels={green:'PASS',yellow:'ACTION',red:'OPEN'},actionFor={Git:'git_status',Docker:'docker_status'};let state=null,mail=null,agentsLoading=false,runAllRunning=false,actionRunning=false;
 /** Return status badge HTML, labeling unrecognized states UNKNOWN. */
 const badge=s=>'<span class="badge '+esc(s)+'">'+(labels[s]||'UNKNOWN')+'</span>';
 /** Show text details; a is the optional action name offered by the Run button. */
-function openPanel(t,b,a){$('ptitle').textContent=t;$('pbody').textContent=b;$('poutput').hidden=true;$('prun').hidden=!a;$('prun').dataset.action=a||'';$('panel').classList.add('open')}
+function openPanel(t,b,a){if(actionRunning||runAllRunning)return;$('ptitle').textContent=t;$('pbody').textContent=b;$('pcopy').hidden=true;if(t==='TERM-Befehl'){$('pbody').textContent='Automatisches Kopieren fehlgeschlagen. Den Befehl unten auswählen und in Termius einfügen.';$('pcopy').value=b;$('pcopy').hidden=false}$('poutput').hidden=true;$('prun').hidden=!a;$('prun').dataset.action=a||'';$('panel').classList.add('open')}
 /**
  * Resolve true after copying v, or show it for manual copying and resolve false.
- * Use selection copying when the secure Clipboard API is unavailable; a rejected
- * clipboard write or selection-copy error goes directly to the manual panel.
+ * On private HTTP, try selection copying. A failed browser copy opens a visible,
+ * selectable command through the panel.
  */
-async function copyText(v){try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(v);return true}const box=document.createElement('textarea');box.value=v;box.style.position='fixed';box.style.opacity='0';document.body.appendChild(box);box.select();box.setSelectionRange(0,v.length);const ok=document.execCommand('copy');box.remove();if(ok)return true}catch(e){}openPanel('TERM-Befehl',v,null);return false}
+async function copyText(v){let box=null;try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(v);return true}box=document.createElement('textarea');box.value=v;box.style.position='fixed';box.style.opacity='0';document.body.appendChild(box);box.select();box.setSelectionRange(0,v.length);if(document.execCommand('copy'))return true}catch(e){}finally{box?.remove()}openPanel('TERM-Befehl',v,null);return false}
 /**
  * Post an action and show its result, ignoring calls while Run is disabled.
  * Display request, HTTP, and JSON errors as FAIL, then unlock Run and start
  * a status/mail refresh without waiting for it to finish.
  */
 async function runAction(name){
- if($('prun').disabled)return;
- $('prun').disabled=true;$('poutput').hidden=false;$('poutput').textContent='läuft…';
+ if($('prun').disabled||runAllRunning)return;
+ actionRunning=true;$('prun').disabled=true;$('runAll').disabled=true;document.querySelectorAll('[data-quick-check]').forEach(b=>b.disabled=true);$('poutput').hidden=false;$('poutput').textContent='läuft…';
  try{const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:name})});if(!r.ok)throw Error('HTTP '+r.status);const d=await r.json();$('poutput').textContent=(d.ok?'PASS\n':'FAIL\n')+(d.output||'')}
  catch(e){$('poutput').textContent='FAIL\n'+String(e?.message||e||'Unbekannter Fehler')}
- finally{$('prun').disabled=false;load()}
+ finally{actionRunning=false;$('prun').disabled=false;$('runAll').disabled=!state;document.querySelectorAll('[data-quick-check]').forEach(b=>b.disabled=!state);load()}
 }
 /** Return a status button's HTML using v.detail or, when absent, v.head. */
 function itemRow(name,v){return '<button class="row click" data-item="'+esc(name)+'"><span>'+badge(v.status)+' '+esc(name)+'</span><span class="muted">'+esc(v.detail||v.head||'')+'</span></button>'}
@@ -142,45 +142,48 @@ async function loadStatus(){
  try{
  const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error('HTTP '+r.status);state=await r.json();
  $('stamp').textContent='Aktualisiert '+new Date(state.generated_at*1000).toLocaleTimeString();$('focus').textContent=state.project.focus;
- $('projectMeta').innerHTML='<span class="pill">origin/main '+esc(state.project.main_head)+'</span><span class="pill">Code '+esc(state.project.merged_gates)+'/'+esc(state.project.total_gates)+'</span><span class="pill">CI '+esc(state.project.ci?.detail||'ungeprüft')+'</span>';$('evidence').textContent=state.project.evidence_note||'';
+ $('projectMeta').innerHTML='<span class="pill">Deck: '+esc(state.repo.branch)+' '+esc(state.repo.head)+(state.repo.dirty?' · lokal geändert':'')+'</span><span class="pill">lokal origin/main '+esc(state.project.main_head||'UNKNOWN')+'</span><span class="pill">Code '+esc(state.project.merged_gates)+'/'+esc(state.project.total_gates)+'</span><span class="pill">CI '+esc(state.project.ci?.detail||'ungeprüft')+'</span>';$('evidence').textContent=(!state.project.main_head?'Lokal origin/main konnte nicht aufgelöst werden; laufenden Stand prüfen. ':state.repo.head!==state.project.main_head?'Deck-Checkout und lokal origin/main unterscheiden sich; laufenden Stand prüfen. ':state.repo.dirty?'Deck-Checkout enthält lokale Änderungen. ':'')+(state.project.evidence_note||'');
  $('resume').innerHTML=state.project.resume.map((s,i)=>{let c='';if(s.type==='command')c='<button data-resume-cmd="'+esc(s.value)+'">TERM kopieren</button>';else if(s.type==='url')c='<a class="btn" href="'+esc(s.value)+'" target="_blank" rel="noopener">Öffnen</a>';else if(s.type==='action')c='<button data-resume-action="'+esc(s.value)+'">Prüfen</button>';return '<div class="item"><b>'+(i+1)+'. '+esc(s.title)+'</b><small>'+esc(s.detail)+'</small><div class="actions">'+c+'</div></div>'}).join('')||'<div class="item">Kein Wiedereinstiegspunkt offen.</div>';
- $('priorities').innerHTML=state.priorities.map((s,i)=>'<div class="row"><span><b>'+(i+1)+'.</b> '+esc(s.title)+'</span><span class="muted">'+esc(s.detail)+'</span></div>').join('')||'<div class="muted">Keine offenen Prioritäten.</div>';$('runAll').dataset.actions=JSON.stringify(state.priorities.map(s=>s.action).filter(Boolean));
+ $('priorities').innerHTML=state.priorities.map((s,i)=>'<div class="row"><span><b>'+(i+1)+'.</b> '+esc(s.title)+'</span><span class="muted">'+esc(s.detail)+'</span></div>').join('')||'<div class="muted">Keine offenen Prioritäten.</div>';$('runAll').dataset.actions=JSON.stringify(['git_status','tests','demo']);
  $('research').innerHTML=state.research.map(x=>'<button class="item click" data-research="'+esc(x.title)+'" data-reason="'+esc(x.reason)+'" data-source="'+esc(x.source||'Quelle ungeprüft')+'"><b>'+esc(x.verdict)+' · '+esc(x.title)+'</b><small>'+esc(x.reason)+'</small><small>Quelle: '+esc(x.source||'Quelle ungeprüft')+'</small></button>').join('')||'<div class="muted">Keine gespeicherten Funde.</div>';
  const items={Git:state.repo,Tailscale:state.services.tailscale,'Desktop Commander':state.services.desktop_commander,Docker:state.services.docker,tmux:state.tmux};$('system').innerHTML=Object.entries(items).map(([k,v])=>itemRow(k,v)).join('');$('tools').innerHTML=Object.entries(state.tools).map(([k,v])=>itemRow(k,v)).join('');
  $('gates').innerHTML=state.gates.map(g=>'<button class="gate click" data-gate="'+esc(g.id)+'" data-name="'+esc(g.name)+'" data-detail="'+esc(g.detail||'Nachweis ungeprüft')+'">'+badge(g.status)+' <b>'+esc(g.id)+'</b><div>'+esc(g.name)+'</div></button>').join('');
  $('commands').innerHTML=Object.entries(state.commands).map(([k,v])=>'<div class="item"><b>'+esc(k)+'</b><code>'+esc(v)+'</code><div class="actions"><button data-cmd="'+esc(v)+'">Kopieren</button></div></div>').join('');
  renderReports();wire();
  $('runAll').disabled=runAllRunning;
+ if(actionRunning)$('runAll').disabled=true;
+ document.querySelectorAll('[data-quick-check]').forEach(b=>b.disabled=runAllRunning||actionRunning);
  }catch(e){
  state=null;$('stamp').textContent='Status nicht verfügbar';$('focus').textContent='Status nicht verfügbar: '+String(e?.message||e||'Unbekannter Fehler');
- for(const id of ['projectMeta','evidence','resume','priorities','research','system','tools','gates','commands','reportMeta','dailyReport','weeklyReport','ptitle','pbody'])$(id).textContent='';
- $('runAll').dataset.actions='';$('runAll').disabled=true;$('prun').dataset.action='';$('prun').hidden=true;
- if($('poutput').hidden)$('panel').classList.remove('open');
+  for(const id of ['projectMeta','evidence','resume','priorities','research','system','tools','gates','commands','reportMeta','dailyReport','weeklyReport'])$(id).textContent='';
+  $('runAll').dataset.actions='';$('runAll').disabled=true;document.querySelectorAll('[data-quick-check]').forEach(b=>b.disabled=true);$('prun').dataset.action='';$('prun').hidden=true;
+  if($('poutput').hidden&&$('pcopy').hidden){$('ptitle').textContent='';$('pbody').textContent='';$('panel').classList.remove('open')}
  }
 }
 /** Refresh status and mail concurrently, resolving after both refreshes finish. */
 async function load(){await Promise.all([loadStatus(),loadMail()])}
 /** Bind current status controls to details, optional checks, and confirmed command copies. */
-function wire(){document.querySelectorAll('[data-item]').forEach(b=>b.onclick=()=>openPanel(b.dataset.item,'Statusdetails und sichere Aktion für '+b.dataset.item,actionFor[b.dataset.item]));document.querySelectorAll('[data-gate]').forEach(b=>b.onclick=()=>openPanel(b.dataset.gate+' '+b.dataset.name,b.dataset.detail,null));document.querySelectorAll('[data-research]').forEach(b=>b.onclick=()=>openPanel(b.dataset.research,b.dataset.reason+'\nQuelle: '+b.dataset.source,null));document.querySelectorAll('[data-cmd]').forEach(b=>b.onclick=async()=>{if(await copyText(b.dataset.cmd)){const old=b.textContent;b.textContent='✓ Kopiert';setTimeout(()=>b.textContent=old,1200)}});document.querySelectorAll('[data-resume-cmd]').forEach(b=>b.onclick=async()=>{if(await copyText(b.dataset.resumeCmd)){const old=b.textContent;b.textContent='✓ Kopiert';setTimeout(()=>b.textContent=old,1200)}});document.querySelectorAll('[data-resume-action]').forEach(b=>b.onclick=()=>openPanel('Wiedereinstieg','Sichere Prüfung starten.',b.dataset.resumeAction))}
+function wire(){document.querySelectorAll('[data-item]').forEach(b=>b.onclick=()=>openPanel(b.dataset.item,'Statusdetails und sichere Aktion für '+b.dataset.item,actionFor[b.dataset.item]));document.querySelectorAll('[data-gate]').forEach(b=>b.onclick=()=>openPanel(b.dataset.gate+' '+b.dataset.name,b.dataset.detail,null));document.querySelectorAll('[data-research]').forEach(b=>b.onclick=()=>openPanel(b.dataset.research,b.dataset.reason+'\nQuelle: '+b.dataset.source,null));document.querySelectorAll('[data-cmd]').forEach(b=>b.onclick=async()=>{if(await copyText(b.dataset.cmd)){const old=b.textContent;b.textContent='✓ Kopiert';setTimeout(()=>b.textContent=old,1200)}});document.querySelectorAll('[data-resume-cmd]').forEach(b=>b.onclick=async()=>{if(await copyText(b.dataset.resumeCmd)){const old=b.textContent;b.textContent='✓ Kopiert';setTimeout(()=>b.textContent=old,1200)}});document.querySelectorAll('[data-resume-action]').forEach(b=>b.onclick=()=>openPanel('Wiedereinstieg','Sichere Prüfung starten.',b.dataset.resumeAction));document.querySelectorAll('[data-quick-check]').forEach(b=>b.onclick=()=>{if(b.disabled||$('prun').disabled)return;openPanel(b.textContent,'Feste lokale Prüfung im Deck-Checkout.',b.dataset.quickCheck);runAction(b.dataset.quickCheck)})}
 /**
  * Refresh agent cards and bind their copy/check controls, skipping overlapping loads.
  * Request, HTTP, JSON, or rendering errors show an unavailable notice and release the lock.
  */
 async function loadAgents(){if(agentsLoading)return;agentsLoading=true;try{const r=await fetch('/api/agents',{cache:'no-store'});if(!r.ok)throw Error();const d=await r.json();$('agentCards').innerHTML=d.agents.map(a=>{const models=(a.models||[]).map(m=>'<div class="item"><b>'+esc(m.name)+'</b><small>'+esc(m.purpose)+'<br>Geprüft: '+esc(m.verified_on||'ungeprüft')+'</small><div class="actions"><button data-agent-cmd="'+esc(m.term_command)+'">'+esc(m.button_label)+'</button></div></div>').join('');const link=a.url?'<a class="btn" href="'+esc(a.url)+'" target="_blank" rel="noopener noreferrer">'+esc(a.url_label)+'</a>':'';const cmd=a.command?'<button data-agent-cmd="'+esc(a.command)+'">TERM</button>':'';const action=a.action?'<button data-agent-check="'+esc(a.action)+'">Prüfen</button>':'';const disabled=a.disabled_label?'<button disabled>'+esc(a.disabled_label)+'</button>':'';return '<article class="agent"><h3>'+esc(a.name)+'</h3>'+badge(a.status)+' <span class="muted">'+esc(a.status_label||'')+'</span><p>'+esc(a.detail)+'</p>'+(a.note?'<p>'+esc(a.note||'')+'</p>':'')+models+'<div class="actions">'+link+cmd+action+disabled+'</div></article>'}).join('');document.querySelectorAll('[data-agent-cmd]').forEach(b=>b.onclick=async()=>{if(await copyText(b.dataset.agentCmd)){b.textContent='✓ Kopiert · in Termius einfügen'}});document.querySelectorAll('[data-agent-check]').forEach(b=>b.onclick=()=>{openPanel('Installation prüfen','Lokale Prüfung ohne Modellauftrag.',b.dataset.agentCheck);runAction(b.dataset.agentCheck)})}catch(e){$('agentCards').textContent='Agentenstatus derzeit nicht erreichbar.'}finally{agentsLoading=false}}
 document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));b.classList.add('active');$(b.dataset.tab).classList.add('active')});
-$('pclose').onclick=()=>$('panel').classList.remove('open');$('panel').onclick=e=>{if(e.target===$('panel'))$('panel').classList.remove('open')};$('prun').onclick=()=>runAction($('prun').dataset.action);
+/** Dismiss the view without treating a pending action as completed or cancelled. */
+$('pclose').onclick=()=>{$('panel').classList.remove('open')};$('panel').onclick=e=>{if(e.target===$('panel'))$('panel').classList.remove('open')};$('prun').onclick=()=>runAction($('prun').dataset.action);
 /**
- * Run priority actions in order until one fails, displaying results or request errors.
+ * Run the three fixed local checks in order until one fails.
  * Ignore duplicate clicks; keep the batch locked through refresh, then enable it only
  * with valid status. Invalid action-list JSON and refresh rejections propagate.
  */
 $('runAll').onclick=async()=>{
  if($('runAll').disabled)return;
- const acts=JSON.parse($('runAll').dataset.actions||'[]');if(!acts.length){openPanel('Nächste Schritte','Keine automatisch ausführbare Prüfung in den Top-Prioritäten.',null);return}openPanel('Checks','Allowlist-Prüfungen werden nacheinander ausgeführt.',null);$('poutput').hidden=false;$('poutput').textContent='';
- $('runAll').disabled=true;runAllRunning=true;
- try{for(const a of acts){const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a})});if(!r.ok)throw Error('HTTP '+r.status);const d=await r.json();$('poutput').textContent+=a+': '+(d.ok?'PASS':'FAIL')+'\n'+(d.output||'')+'\n\n';if(!d.ok)break}}
- catch(e){$('poutput').textContent+='FAIL\n'+String(e?.message||e||'Unbekannter Fehler')}
- finally{try{await load()}finally{runAllRunning=false;$('runAll').disabled=!state}}
+ const acts=JSON.parse($('runAll').dataset.actions||'[]');if(!acts.length){openPanel('Prüfungen','Keine Prüfung verfügbar: Projektstatus konnte nicht geladen werden.',null);return}openPanel('Checks','Git, Tests und Demo werden nacheinander im Deck-Checkout ausgeführt.',null);$('poutput').hidden=false;$('poutput').textContent='';
+ $('runAll').disabled=true;runAllRunning=true;document.querySelectorAll('[data-quick-check]').forEach(b=>b.disabled=true);
+ let active='';try{for(const a of acts){active=a;const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:a})});if(!r.ok)throw Error('HTTP '+r.status);const d=await r.json();$('poutput').textContent+=a+': '+(d.ok?'PASS':'FAIL')+'\n'+(d.output||'')+'\n\n';if(!d.ok)break}}
+ catch(e){$('poutput').textContent+=(active||'Prüfkette')+': FAIL\n'+String(e?.message||e||'Unbekannter Fehler')}
+ finally{try{await load()}finally{runAllRunning=false;$('runAll').disabled=!state;document.querySelectorAll('[data-quick-check]').forEach(b=>b.disabled=!state)}}
 };
 notesLoad();load();loadAgents();setInterval(load,30000);setInterval(loadAgents,30000);
 </script></body></html>

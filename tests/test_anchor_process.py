@@ -300,7 +300,7 @@ class AnchorDeltaWireTest(ChainFixture, unittest.TestCase):
 
     def test_a_delta_that_skips_a_record_is_refused_by_the_child(self):
         self.anchor.commit_delta(self.head2, self.records[:2], authority=self.authority)
-        with self.assertRaisesRegex(ContractError, 'extension holds 2 records'):
+        with self.assertRaisesRegex(ContractError, 'delta does not start at the anchor'):
             self.anchor.commit_delta(self.head, self.records[3:], authority=self.authority)
         self.assertEqual(self.anchor.committed, (2, self.head2.head_hash))
 
@@ -647,11 +647,10 @@ def envelope(request, nonce='ab' * 32):
 class DeltaRequestTest(ChainFixture, unittest.TestCase):
     """The sender's half of `commit2`: bounded before anything is sent."""
 
-    def request(self, head=None, records=None, from_count=2):
+    def request(self, head=None, records=None):
         return anchor_process._commit2_request(
             self.head if head is None else head,
-            self.records[2:] if records is None else records,
-            from_count=from_count)
+            self.records[2:] if records is None else records)
 
     def test_the_request_carries_exactly_the_extension(self):
         request = self.request()
@@ -665,10 +664,12 @@ class DeltaRequestTest(ChainFixture, unittest.TestCase):
         with self.assertRaisesRegex(ContractError, 'head is invalid'):
             self.request(head='head')
 
-    def test_from_count_must_be_a_count(self):
+    def test_delta_cannot_start_before_the_signed_head(self):
+        short_head = sign_head(count=2, head_hash=self.records[1].record_hash,
+                               authority=self.authority)
         with self.assertRaisesRegex(
                 ContractError, 'from_count must be a non-negative integer'):
-            self.request(from_count=-1)
+            self.request(head=short_head)
 
     def test_more_records_than_one_delta_may_carry_are_refused(self):
         with unittest.mock.patch.object(anchor_process, '_MAX_DELTA_RECORDS', 2):
@@ -886,22 +887,20 @@ class AnchorClientTest(ChainFixture, unittest.TestCase):
         with self.assertRaisesRegex(ContractError, 'head is invalid'):
             client.commit('head', self.records, authority=self.authority)
 
-    def test_a_delta_asks_where_the_anchor_is_then_sends_only_the_extension(self):
+    def test_a_delta_sends_only_the_sender_derived_extension(self):
         client = self.client(os.path.join(short_directory(self), 'anchor.sock'))
         sent = []
 
         def exchange(message):
             sent.append(message)
-            if message == {'kind': 'committed'}:
-                return 2, self.records[1].record_hash
             return 5, self.head.head_hash
 
         with unittest.mock.patch.object(client, '_exchange', side_effect=exchange):
             committed = client.commit_delta(self.head, self.records[2:],
                                             authority=self.authority)
         self.assertEqual(committed, (5, self.head.head_hash))
-        self.assertEqual(sent[0], {'kind': 'committed'})
-        request = sent[1]
+        self.assertEqual(len(sent), 1)
+        request = sent[0]
         self.assertEqual(set(request), {'from_count', 'head', 'kind', 'records'})
         self.assertEqual(request['kind'], 'commit2')
         self.assertEqual(request['from_count'], 2)

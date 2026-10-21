@@ -78,11 +78,17 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/portal_passwords.py",
            "geniusnew/audit_store.py", "tools/control_deck/actions.py",
            "tools/ipad_llm.py", "tools/ai_pilot/pilot.py",
-           "ops/server/genius-server", "scripts/demo_restore.py")
+           "ops/server/genius-server", "scripts/demo_restore.py",
+           "tools/worker_acceptance/common.py",
+           "tools/worker_acceptance/core.py",
+           "tools/worker_acceptance/driver.py")
 
 # Guarded shell scripts and the one test module that runs each of them.
 GUARDED_SHELL = {"ops/server/genius-server": "test_server_tool.py"}
 GUARDED_TOOL_TESTS = {"tools/ipad_llm.py": "test_ipad_llm.py",
+                      "tools/worker_acceptance/common.py": "test_worker_acceptance_*.py",
+                      "tools/worker_acceptance/core.py": "test_worker_acceptance_*.py",
+                      "tools/worker_acceptance/driver.py": "test_worker_acceptance_*.py",
                       "tools/ai_pilot/pilot.py": "test_ai_pilot.py"}
 
 # Mutants run the tests that exercise each boundary. The unmutated baseline
