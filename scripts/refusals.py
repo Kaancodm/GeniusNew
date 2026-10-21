@@ -76,19 +76,27 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/anchor_process.py", "geniusnew/config.py",
            "geniusnew/advisory.py",
            "geniusnew/__main__.py", "geniusnew/database.py",
+           "geniusnew/portal_passwords.py",
            "geniusnew/audit_store.py", "tools/control_deck/actions.py",
            "tools/ipad_llm.py", "tools/ai_pilot/pilot.py",
-           "ops/server/genius-server", "scripts/demo_restore.py")
+           "ops/server/genius-server", "scripts/demo_restore.py",
+           "tools/worker_acceptance/common.py",
+           "tools/worker_acceptance/core.py",
+           "tools/worker_acceptance/driver.py")
 
 # Guarded shell scripts and the one test module that runs each of them.
 GUARDED_SHELL = {"ops/server/genius-server": "test_server_tool.py"}
 GUARDED_TOOL_TESTS = {"tools/ipad_llm.py": "test_ipad_llm.py",
+                      "tools/worker_acceptance/common.py": "test_worker_acceptance_*.py",
+                      "tools/worker_acceptance/core.py": "test_worker_acceptance_*.py",
+                      "tools/worker_acceptance/driver.py": "test_worker_acceptance_*.py",
                       "tools/ai_pilot/pilot.py": "test_ai_pilot.py"}
 
 # Mutants run the tests that exercise each boundary. The unmutated baseline
 # still runs all tests; every selected test file must pass for a mutation to
 # survive. A missing refusal test is therefore still a failure of this guard.
 GUARDED_PYTHON = {
+    "geniusnew/portal_passwords.py": ("test_portal_passwords.py",),
     "geniusnew/d1_codec.py": ("test_d1_codec.py",),
     "geniusnew/http_entry.py": (
         "test_http_entry.py", "test_http_limits.py", "test_approver_routes.py",

@@ -4,17 +4,20 @@ import os
 import argparse
 import fcntl
 import subprocess
+import threading
 from pathlib import Path
 
 from .checks import DEFAULT_REPO, _which, agent_socket, agent_session, python_for, tool_status
 
 _MAX_OUTPUT = 24_000
+_ACTION_LOCK = threading.Lock()
 
 _ACTIONS: dict[str, tuple[list[str], float]] = {
     "git_status": (["git", "status", "--short", "--branch"], 5.0),
     "tests": (
         ["python3", "-m", "unittest", "discover", "-s", "tests", "-q"],
-        30.0,
+        # The full suite exceeds two minutes on this host; keep the HTTP action bounded.
+        240.0,
     ),
     "demo": (["./scripts/demo.sh"], 30.0),
     "docker_status": (
@@ -37,6 +40,16 @@ def run_action(name: str, repo: Path = DEFAULT_REPO) -> dict[str, object]:
     """
     if name not in allowed_actions():
         raise ValueError("action is not allowlisted")
+    if not _ACTION_LOCK.acquire(blocking=False):
+        return {"action": name, "ok": False, "exit_code": None,
+                "output": "Eine andere Deck-Prüfung läuft bereits."}
+    try:
+        return _run_action_locked(name, repo)
+    finally:
+        _ACTION_LOCK.release()
+
+
+def _run_action_locked(name: str, repo: Path) -> dict[str, object]:
     if name == "hermes_status":
         installed = tool_status("hermes")
         session = agent_session("hermes")

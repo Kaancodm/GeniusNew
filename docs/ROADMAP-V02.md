@@ -54,7 +54,7 @@ anpassen.
 | # | Gate | Nachweis | Stand |
 | --- | --- | --- | --- |
 | A1 | Prozessstart im Worker kernel-seitig gesperrt (Seccomp), andere Plattformen fail closed | `test_a_spawn_below_the_audit_hook_…` umgekehrt | erledigt: #57 (Codex), gemergt `8a358d1` |
-| A2 | Worker liest keine Host-Dateien: eigener unprivilegierter OS-Nutzer und Landlock-Allowlist (nur Job-Verzeichnis, Python-Laufzeit lesend); ohne Landlock-Unterstützung fail closed. **Mindestziel**, falls Kaan die volle Lösung verschiebt: Root-Secret, DB-Zugangsdaten und Ankerzustand sind für den Worker nicht lesbar | `test_a_read_outside_the_temporary_directory_…` umgekehrt; Mindestziel: Test „Worker liest die Secret-Datei“ wird abgelehnt | Landlock-Allowlist erledigt: #76 gemergt (`3297f93`), Mindestziel erreicht; offen: eigener OS-Nutzer für den Worker (Betriebsmodell, zusammen mit C2/C5) |
+| A2 | Worker liest keine Host-Dateien: eigener unprivilegierter OS-Nutzer und Landlock-Allowlist (nur Job-Verzeichnis, Python-Laufzeit lesend); ohne Landlock-Unterstützung fail closed. **Mindestziel**, falls Kaan die volle Lösung verschiebt: Root-Secret, DB-Zugangsdaten und Ankerzustand sind für den Worker nicht lesbar | `test_a_read_outside_the_temporary_directory_…` umgekehrt; Mindestziel: Test „Worker liest die Secret-Datei“ wird abgelehnt | Landlock-Allowlist erledigt: #76 gemergt (`3297f93`), Mindestziel erreicht. Getrennter, socket-aktivierter Worker-Dienst unter eigener fester UID: #140 gemergt (`9b11f7a`, 17.10.2026), **Betriebsabnahme HOLD**; offen: Abnahme auf dem Zielsystem (zusammen mit C2/C5) |
 
 ### B — Persistenz (nach `docs/DATABASE.md`)
 
@@ -75,9 +75,9 @@ anpassen.
 | --- | --- | --- | --- |
 | C1 | **Server-Einstieg** statt nur Demo: `python -m geniusnew serve` liest Root-Secret, Policy, DB- und Anker-Verbindung ausschließlich aus serverseitiger Konfiguration; das Demo-Secret wird außerhalb der Demo abgelehnt | Refusal-Tests für jede fehlende/ungültige Einstellung | erledigt: #61 gemergt; DB-Verbindung mit B1 (#78) |
 | C2 | Anker als eigener Dienst unter eigenem OS-Nutzer, Lebenszyklus außerhalb des Kerns, signierte Anker-Antworten mit Nonce (Teile aus #32, neu auf `main` gebaut) | Anker-Rückschnitt-Grenztest umgekehrt oder neu begründet | erledigt: #62 gemergt (`24f521b`): Anker-Dienst mit signierten Antworten, `serve` bindet ihn über `anchor_socket`/`anchor_reply_public_key` an; Grenztest neu begründet. Offen im Betriebsmodell (C5): eigener OS-Nutzer auf dem Server |
-| C3 | Rolle „Freigebende“ mit eigener HTTP-Route; keine Selbstfreigabe | Refusal-Tests für fremde Rolle, eigene Aufträge, Doppelentscheidung | gemergt: #111 (Codex), Merge `b047798` (04.10.2026), `docs/APPROVER-C3.md`; Claude DB Review am Head ist hier nicht belegt (UNKNOWN); nicht separat nachzuholen, E2 deckt es ab (`docs/DECISIONS.md` 18.10.2026) |
+| C3 | Rolle „Freigebende“ mit eigener HTTP-Route; keine Selbstfreigabe | Refusal-Tests für fremde Rolle, eigene Aufträge, Doppelentscheidung | gemergt: #111 (Codex), Merge `b047798` (04.10.2026), `docs/APPROVER-C3.md`; `Claude DB Review: APPROVED` am Merge-Head `cc95586ca27e6f9d76fd737967d87cdb2e8a44d5` (#111, Kommentar 5983176072; Belege in `docs/DECISIONS.md` 04.10.2026); kein separates Nachholen nötig, E2 prüft den Gesamtstand (`docs/DECISIONS.md` 18.10.2026) |
 | C4 | HTTP-Härtung: Body-Limit, Timeouts, Rate-Limit pro API-Key; TLS über Reverse-Proxy mit Beispielkonfiguration in `docs/` | Tests für Limits; Doku | Body-Limit und Socket-Timeout auf `main`; Rate-Limit, Job- und Verbindungsgrenze sowie geprüfte nginx-Vorlage: #71 gemergt (`080f1f4`); Limits in `[service.limits]` der TOML einstellbar: dieser PR (Claude) |
-| C5 | Betriebsanleitung: systemd-Units (Kern, Anker, Nutzer getrennt), Backup und Restore von DB und Anker-Zustand, Ablauf der Schlüsselrotation. Ein Backup, das hinter dem Anker liegt, startet nicht (richtig so); der auditierte Weg zurück in den Betrieb ohne stilles Zurücksetzen des Ankers braucht Kaans Entscheidung | Doku + einmal durchgespielter Restore gegen die CI-Datenbank | Restore-Probe gegen den unabhängigen Anker: #119 (Codex), Merge `3497e69` (05.10.2026, `scripts/demo_restore.py`, in der CI). **Offen:** systemd-Units (Kern, Anker, Nutzer getrennt), Schlüsselrotation, Entscheidung zum auditierten Weg nach Restore |
+| C5 | Betriebsanleitung: systemd-Units (Kern, Anker, Nutzer getrennt), Backup und Restore von DB und Anker-Zustand, Ablauf der Schlüsselrotation. Ein Backup, das hinter dem Anker liegt, startet nicht (richtig so); der auditierte Weg zurück in den Betrieb ohne stilles Zurücksetzen des Ankers braucht Kaans Entscheidung | Doku + einmal durchgespielter Restore gegen die CI-Datenbank | Restore-Probe gegen den unabhängigen Anker: #119 (Codex), Merge `3497e69` (05.10.2026, `scripts/demo_restore.py`, in der CI). Worker-Dienst mit Unit-Vorlagen: #140 gemergt (`9b11f7a`), Betriebsabnahme HOLD. **Offen:** systemd-Units für Kern und Anker (Nutzer getrennt), Betriebsabnahme des Worker-Dienstes, Schlüsselrotation, Entscheidung zum auditierten Weg nach Restore |
 
 ### D — Portal (Vercel, nach `docs/MIGRATION-MATRIX.md` neu gebaut)
 
@@ -92,7 +92,7 @@ anpassen.
 | # | Gate | Nachweis | Stand |
 | --- | --- | --- | --- |
 | E1 | Demo erweitert um Persistenz-Angriffe (Replay nach Neustart, SQL-Manipulation, Anker-Vorlauf) | letzte Zeile `PASS` | erledigt: #112 (Codex), Merge `122a690` (05.10.2026), `scripts/demo_persistence.py`, `docs/E1-DEMO.md`, in der CI |
-| E2 | Unabhängiges Security-Review des vollständigen Heads (Claude und Copilot), `SECURITY.md` als „Bekannte Grenzen der Beta“ | Review-Kommentar am Head-SHA | offen |
+| E2 | Unabhängiges Security-Review des vollständigen Heads (Claude und Gemini; seit 20.10.2026 Gemini statt Copilot, `docs/DECISIONS.md`), `SECURITY.md` als „Bekannte Grenzen der Beta“ | Review-Kommentar am Head-SHA | offen; deckt laut Entscheidung vom 18.10.2026 auch das nicht separat nachgeholte `Claude DB Review` für B4 und B5 ab; C3 ist inzwischen am Merge-Head belegt (Zeile C3) |
 | E3 | Frischer Klon auf einem sauberen Linux-Host folgt der Betriebsanleitung wörtlich bis zum laufenden Dienst | Protokoll mit SHA | offen |
 
 ## Reihenfolge
@@ -129,8 +129,10 @@ Implementierer.
    `PENDING_APPROVAL_EXPIRED` in derselben Transaktion, `docs/DATABASE.md` §4.4) noch in
    B6 oder als eigener PR danach? Bis dahin bleiben abgelaufene Zeilen liegen und
    belegen nur keinen Platz mehr (Mindestfix aus #98).
-6. **Entschieden (Kaan, 18.10.2026, `docs/DECISIONS.md`):** B4 (#94), B5 (#95) und C3 (#111) sind ohne
+6. **Entschieden (Kaan, 18.10.2026, `docs/DECISIONS.md`):** B4 (#94), B5 (#95) und C3 (#111) galten als ohne
    `Claude DB Review: APPROVED` am Head gemergt; das Review wird nicht gesondert nachgeholt, E2 deckt es ab.
+   Für C3 ist das APPROVED am Merge-Head inzwischen belegt (`docs/DECISIONS.md`, 04.10.2026, über #145
+   nachgetragen; Zeile C3 oben); offen bleibt es für B4 und B5.
 7. Gespeicherte Annahmen sind an die aktuelle Policy und die aktuellen Schlüssel
    gebunden (`SECURITY.md`, Review auf #93: (a) nur Integrität prüfen, (b)
    Policy-Historie, (c) so lassen). Mit der Principal-Bindung aus Audit v2 (B6) wird (a)
