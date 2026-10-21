@@ -3,5 +3,9 @@ from tools.control_deck.test_decisions import DecisionInboxTest, DecisionHTTPTes
 from tools.control_deck.test_decisions import RefusalTest as DecisionRefusalTest
 from tools.control_deck.test_decisions import SourceBoundTest
 from tools.control_deck.test_command_journal import JournalTest
+from tools.control_deck.test_command_journal import ArchiveTest
 from tools.control_deck.test_command_journal import RefusalTest as JournalRefusalTest
 from tools.control_deck.test_operating_context import ContextTest
+
+__all__ = ["DecisionInboxTest", "DecisionHTTPTest", "DecisionRefusalTest", "SourceBoundTest",
+           "JournalTest", "ArchiveTest", "JournalRefusalTest", "ContextTest"]

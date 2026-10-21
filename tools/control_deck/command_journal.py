@@ -27,6 +27,7 @@ CATALOG = {
 }
 TARGETS = ("server", "termius", "powershell")
 MAX_BYTES = 128 * 1024
+MAX_ARCHIVES = 8
 MAX_TAIL = 4000
 _RAN = re.compile(rb"Ran [0-9]+ tests? in [0-9.]+s")
 
@@ -129,7 +130,7 @@ def _evidence(ran: str, tail: str) -> str:
     return hashlib.sha256((ran + "\n" + tail).encode("utf-8")).hexdigest()
 
 
-def _events(path: Path, now: float) -> list:
+def _read(path: Path) -> bytes:
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, "rb") as stream:
         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
@@ -137,7 +138,10 @@ def _events(path: Path, now: float) -> list:
         data = stream.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
         raise ContractError("journal size")
-    raw = json.loads(data)
+    return data
+
+
+def _validate(raw: dict, now: float) -> list:
     if not isinstance(raw, dict) or raw.get("schema") != 1:
         raise ContractError("journal schema")
     events = raw.get("events")
@@ -168,6 +172,97 @@ def _events(path: Path, now: float) -> list:
         if not isinstance(item.get("repo"), str) or len(item["repo"]) > 240:
             raise ContractError("context")
     return events
+
+
+def _archive_path(path: Path, index: int) -> Path:
+    return path.with_name(path.name + f".archive-{index}.json")
+
+
+def _history(path: Path, now: float) -> tuple[list, list, list]:
+    raw = json.loads(_read(path))
+    archives = []
+    if isinstance(raw, dict) and raw.get("schema") == 2:
+        archives = raw.get("archives")
+        if (not isinstance(archives, list) or not 1 <= len(archives) <= MAX_ARCHIVES
+                or any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value)
+                       for value in archives)):
+            raise ContractError("archive manifest")
+        raw = {**raw, "schema": 1}
+    active = _validate(raw, now)
+    history = []
+    for index, expected in enumerate(archives, 1):
+        data = _read(_archive_path(path, index))
+        if hashlib.sha256(data).hexdigest() != expected:
+            raise ContractError("archive digest")
+        segment = _validate(json.loads(data), now)
+        if not segment:
+            raise ContractError("archive empty")
+        history.extend(segment)
+    # Validate ordering across boundaries as well as inside every segment.
+    times = [datetime.fromisoformat(e["finished_at"].replace("Z", "+00:00")).timestamp()
+             for e in history + active]
+    if times != sorted(times):
+        raise ContractError("archive order")
+    return archives, history, active
+
+
+def _events(path: Path, now: float) -> list:
+    _, history, active = _history(path, now)
+    return history + active
+
+
+def _sync_directory(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _write(path: Path, data: bytes, *, archive: bool = False) -> None:
+    if len(data) > MAX_BYTES:
+        raise ContractError("journal size")
+    fd, name = tempfile.mkstemp(prefix=".commands-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data); stream.flush(); os.fsync(stream.fileno())
+        if archive:
+            # Publish without ever replacing an existing evidence segment.
+            os.link(name, path)
+        else:
+            os.replace(name, path)
+        _sync_directory(path.parent)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+def rotate(path: Path) -> dict:
+    """Explicit, bounded archival; never execute a catalog command or delete evidence."""
+    import fcntl
+    lock = os.open(str(path) + ".lock", os.O_CREAT | os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(lock).st_mode):
+            raise ContractError("lock type")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        archives, _, active = _history(path, time.time())
+        if not active:
+            raise ContractError("nothing to archive")
+        if len(archives) >= MAX_ARCHIVES:
+            raise ContractError("archive capacity")
+        data = json.dumps({"schema": 1, "events": active}).encode()
+        destination = _archive_path(path, len(archives) + 1)
+        if os.path.lexists(destination):
+            # A failed manifest publication is retryable only with identical bytes.
+            if _read(destination) != data:
+                raise ContractError("archive collision")
+            _sync_directory(path.parent)
+        else:
+            _write(destination, data, archive=True)
+        digest = hashlib.sha256(data).hexdigest()
+        _write(path, json.dumps({"schema": 2, "archives": archives + [digest], "events": []}).encode())
+        return {"archive": str(destination), "sha256": digest, "events": len(active)}
+    finally:
+        os.close(lock)
 
 
 def _state(event: dict, digest: str | None, head: str | None) -> str:
@@ -228,9 +323,16 @@ def run(command_id: str, repo: Path, path: Path, target: str) -> dict:
             raise ContractError("lock type")
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         try:
-            events = _events(path, time.time())
+            archives, _, events = _history(path, time.time())
         except FileNotFoundError:
-            events = []
+            # Missing referenced segments or a missing active file beside archives
+            # must never be interpreted as a new, empty history.
+            if os.path.lexists(path) or any(os.path.lexists(_archive_path(path, i))
+                                           for i in range(1, MAX_ARCHIVES + 1)):
+                raise ContractError("journal missing")
+            archives, events = [], []
+        if len(archives) < MAX_ARCHIVES and os.path.lexists(_archive_path(path, len(archives) + 1)):
+            raise ContractError("archive pending")
         if len(events) >= 100:
             raise ContractError("journal full")
         before = source_digest(repo)
@@ -250,16 +352,10 @@ def run(command_id: str, repo: Path, path: Path, target: str) -> dict:
                  "ran_line": ran, "output_tail": tail, "evidence_sha256": _evidence(ran, tail),
                  "repo": str(repo.resolve())}
         # Capacity/serialization failure cannot silently discard the previous log.
-        data = json.dumps({"schema": 1, "events": events + [event]}).encode()
-        if len(data) > MAX_BYTES:
-            raise ContractError("journal size")
-        fd, name = tempfile.mkstemp(prefix=".commands-", dir=path.parent)
-        try:
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(data); stream.flush(); os.fsync(stream.fileno())
-            os.replace(name, path)
-        finally:
-            Path(name).unlink(missing_ok=True)
+        raw = {"schema": 1, "events": events + [event]}
+        if archives:
+            raw.update(schema=2, archives=archives)
+        _write(path, json.dumps(raw).encode())
         return event
     finally:
         os.close(lock)
@@ -267,18 +363,22 @@ def run(command_id: str, repo: Path, path: Path, target: str) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run one fixed test command and record its result")
-    parser.add_argument("--run", choices=CATALOG, required=True)
-    parser.add_argument("--repo", type=Path, required=True)
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--run", choices=CATALOG)
+    action.add_argument("--archive", action="store_true", help="archive the current segment; never run a command")
+    parser.add_argument("--repo", type=Path)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--target", choices=TARGETS, required=True,
+    parser.add_argument("--target", choices=TARGETS,
                         help="where the operator started this run; recorded as given")
     args = parser.parse_args()
+    if not args.archive and (args.repo is None or args.target is None):
+        parser.error("--run requires --repo and --target")
     try:
-        result = run(args.run, args.repo, args.output, args.target)
+        result = rotate(args.output) if args.archive else run(args.run, args.repo, args.output, args.target)
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
         parser.exit(1, "Run not confirmed; inspect the execution environment.\n")
     print(json.dumps(result))
-    if result["exit_code"] != 0 or result["tests"] == 0:
+    if not args.archive and (result["exit_code"] != 0 or result["tests"] == 0):
         parser.exit(1)
 
 

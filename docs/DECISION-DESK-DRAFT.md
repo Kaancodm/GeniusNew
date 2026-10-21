@@ -114,6 +114,52 @@ Die Pfade sind Platzhalter. `GENIUSNEW_COMMAND_JOURNAL` und der Runner müssen a
 dasselbe private Journal zeigen. `--target` ist die vom Operator angegebene
 Zielumgebung; der Lauf prüft sie nicht. Snapshot-Vorschauen synchronisieren sich nicht.
 
+### Begrenzte Archivierung des Befehlsjournals
+
+Der Runner verweigert weiterhin das 101. Ereignis eines aktiven Segments und jeden
+Schreibversuch über 128 KiB. Der Bediener kann das aktive Segment ausdrücklich
+archivieren, auch vor Erreichen dieser Grenzen:
+
+```sh
+python3 -B -m tools.control_deck.command_journal --archive --output /PRIVATE_STAGING/commands.json
+```
+
+Diese Aktion führt keinen Katalogbefehl aus. Sie benutzt denselben exklusiven Lock
+wie der Runner und erstellt `commands.json.archive-1.json` bis höchstens
+`commands.json.archive-8.json`. Jedes Archiv enthält unveränderte Ereignisfelder in
+Schema 1. Bestehende Archive werden weder überschrieben noch gelöscht. Die aktive
+Datei wechselt atomar auf Schema 2: geordnete SHA-256-Digests der Archive und ein
+leeres aktives Ereignisfeld. Schema-1-Journale bleiben lesbar. Leser prüfen alle
+referenzierten Archive einschließlich Dateityp, Größe, Hash, Ereignisbelegen und
+segmentübergreifender Zeitreihenfolge; auch archivierte Ziel-/Aktions-/HEAD-/
+Quellstandbindungen bestimmen weiterhin den letzten Befund je Ziel.
+
+Maximal bestehen neun Evidenzdateien mit je 128 KiB und 100 Ereignissen, also
+1.125 MiB und 900 Ereignisse, plus Lock und kurzlebige Schreibdatei. Volle Archive
+ergeben STOP für weitere Archivierung; die aktive Datei kann bis zu ihrem eigenen
+Limit weiterlaufen. Eine externe Aufbewahrung oder ein neuer Journal-Zyklus braucht
+einen gesonderten Betreibervertrag. Es gibt keine automatische Löschung, keinen
+Hintergrundjob und keinen unbeschränkten Archivzähler.
+
+Schreibfolge: temporäre Archivdatei schreiben und `fsync`, ohne Überschreiben
+verlinken, Verzeichnis synchronisieren, danach das neue aktive Manifest schreiben,
+`fsync`, atomar ersetzen und Verzeichnis erneut synchronisieren. Bei Fehler vor
+der Manifest-Veröffentlichung bleibt das aktive Journal erhalten. Ein bereits
+veröffentlichtes nächstes Archiv sperrt weitere Befehlsläufe; `--archive` darf den
+Schritt nur wiederholen, wenn seine Bytes exakt zum aktiven Segment passen.
+Andernfalls STOP. Ein Fehler nach der atomaren Veröffentlichung wird ebenfalls
+als unbestätigt gemeldet; Leser prüfen den tatsächlich vorhandenen Zustand.
+Fehlende Archive oder ein fehlendes aktives Journal neben Archiven werden nie als
+neue leere Historie behandelt.
+
+Regressionen decken 100/101 Ereignisse, Byte-Limit, acht volle Archivplätze,
+unveränderte Evidenz, Ziel-/stale-/pending-Bindung, Manifest-/Hash-/Zeitfehler,
+fehlende Dateien, Symlinks/FIFOs, Schreib-/Syncfehler, Wiederholung und konkurrierende
+Locks ab. Dies ist keine Crash-Abnahme eines echten Hosts. Die bestehende Grenze
+bleibt: dieselbe OS-Identität kann Dateien einschließlich Hashes bewusst fälschen
+oder zurückrollen; das Journal ist keine authentisierte Ausführungsquittung.
+Produktive Journaldateien und Dienste werden durch diesen Entwurf nicht umgestellt.
+
 ## Ein gemeinsamer Entscheidungsstand
 
 `/api/operating-context` und `python3 -m tools.control_deck.operating_context` lesen
@@ -176,9 +222,9 @@ Live-Dateihashes neu vergleichen, vorhandenes mobiles Deck erhalten und explizit
 Deployment-GO einholen. Die neue Ansicht ersetzt keine produktiven Dateien.
 Erst nach freigegebenem Rollout Snapshot-Pfad und periodischen Collector einrichten.
 Rückweg: vorherige geprüfte Deck-Dateien und unveränderte Dienstkonfiguration.
-Die neuen ablehnenden Module brauchen vor Integration den nach AGENTS.md vorgesehenen
-Refusal-Guard-Eintrag durch den zuständigen Implementierer und dessen vollständige
-Projektprüfung. In diesem vorbereiteten Paket wird scripts/refusals.py nicht geändert.
+Die drei ablehnenden Module sind in `scripts/refusals.py` registriert. Vor Integration
+braucht der endgültige Head die vollständige Projektprüfung einschließlich der
+betroffenen Refusal-Guards sowie das unabhängige Gemini-Review.
 
 ## Grenzen dieses Stands
 
