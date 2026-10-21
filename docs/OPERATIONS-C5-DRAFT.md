@@ -104,10 +104,17 @@ root-kontrollierte Python-Laufzeit, der Boot-Referenz-Erzeuger und die echte
 Systemprobe. Eine vorhandene Datei oder systemd-Unit ist kein Nachweis ihrer
 korrekten Bereitstellung. Die gesonderten Worker-Vorlagen unter `ops/worker/`
 werden nicht durch die Core-/Anker-Beispiele ersetzt.
-Auch die C5-TOML bleibt ein unvollständiger Entwurf: Ihr fehlt noch der nach
-#140 erforderliche `[worker]`-Block mit den festen numerischen Identitäten
-und Pfaden. Syntaktisch gültiges TOML belegt keinen erfolgreichen
-`load_config`- oder Dienststart.
+Die C5-TOML enthält den nach #140 erforderlichen vollständigen
+`[service.worker]`-Beispielblock. Seine UIDs/GIDs `2001`, `2002` und `2003`
+sind ausschließlich feste **DEMO-Platzhalter**, keine erhobenen Hostdaten und
+keine Installationsvorgabe. In der privaten Installationskopie sind sämtliche
+IDs durch die separat eingerichteten festen Identitäten zu ersetzen; die
+Socketgruppe muss zur Core-Unit und zu den Worker-Units, Lease und Bootreferenz
+passen. Der Worker erhält diese Gruppe nicht. Das Beispiel provisioniert
+weder Nutzer noch Pfade. Syntaktisch gültiges TOML und ein gültiges
+`WorkerServiceProfile` belegen keinen erfolgreichen `load_config`- oder
+Dienststart; Listener-, Schlüssel- und Principal-Platzhalter bleiben
+absichtlich nicht startfähig.
 
 **Bis zur Entscheidung und zum unabhängigen Review des Ersatzvertrags sowie
 zum bestandenen Test von

@@ -24,6 +24,20 @@ anchor_reply_public_key = "<64 lowercase hex characters>"
 # See OPERATIONS-C5-DRAFT.md; a service-only DSN fails the current parser.
 database_dsn_file = "/etc/geniusnew/database_dsn"
 
+[service.worker]
+# DEMO placeholders only; these IDs are not observations of any host.
+# Replace all IDs in the private installed copy with the fixed, separately
+# provisioned Core/Worker accounts and Core-only worker IPC group. Their values
+# must match the installed units, socket, lease and trusted boot reference.
+# Core and Worker UIDs differ; the Worker GID is not the IPC group GID.
+# No account or runtime artifact is created by this example.
+core_uid = 2001
+worker_uid = 2002
+worker_gid = 2002
+socket_gid = 2003
+socket_path = "/run/geniusnew-worker/ipc/worker.sock"
+lease_path = "/run/geniusnew-worker/ipc/lease"
+
 [service.limits]
 # Required. Each is an upper bound with a ceiling in geniusnew/http_entry.py; the
 # reverse proxy template (docs/REVERSE-PROXY.md) is sized for these values.
