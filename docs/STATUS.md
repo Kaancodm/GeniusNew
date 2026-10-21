@@ -152,7 +152,7 @@ genannten Head und wurden, außer wo „geprüft“ steht, nicht neu abgerufen:
 | #182 E3-Runner | `a3338ac66aa6cd3b5465c68885bbb37616479c28` | Gemini-Flash A–C PASS, `contracts` grün laut PR; Pro-Modell-Review und Live-E3 offen |
 | #195 Entscheidungsdesk | `2884be59437d173911492c83961643a2c1241132` | geprüft am 21.10.2026: `contracts` und alle 29 Jobs SUCCESS. Gemini-Review am Head ausstehend. Technischer Owner nach Übernahme: Codex |
 | #196 E2-Checkliste | `531b8f0d642b9183c80add3972026170d07affaf` | Claude-Review ohne Critical/High (Kommentar im PR); Gemini und CI offen. Die Checkliste ist kein E2-Abschluss |
-| #197, #198 Portal-Doku | `3e083ee2421b57130b2f310542b00a53e7d017f7`, `fd46b8a703a682d83a90af68124fdd601bb31eb2` | beide ändern die Roadmap-Zeile D2 und kollidieren dort. #198 ist die umfassendere Fassung; sein STATUS-Hunk widerspricht der Dateizuständigkeit (siehe `docs/DECISIONS.md` 21.10.2026) |
+| #197, #198 Portal-Doku | `3e083ee2421b57130b2f310542b00a53e7d017f7`, `fd46b8a703a682d83a90af68124fdd601bb31eb2` | beide ändern die Roadmap-Zeile D2 und kollidieren dort. #198 ist die umfassendere Fassung; sein STATUS-Hunk widerspricht der Dateizuständigkeit, #198 beruft sich dafür auf einen Auftrag Kaans (nicht belegt; siehe `docs/DECISIONS.md` 21.10.2026) |
 
 **Messwerte:** Für `main` `9385f5b` liegt keine neue Testzahl vor: UNKNOWN. Zahlen aus
 den PR-Beschreibungen gelten nur für deren Heads (z. B. #195: 1480 Tests, Demo 15/15 am
