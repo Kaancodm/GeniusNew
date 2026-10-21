@@ -753,7 +753,7 @@ def _submitter(*, orchestrator: Orchestrator,
                     refusal, handoff=handoff, trace_id=trace_id,
                     subject=subject)
             raise
-        except DispatchAttempted as refusal:
+        except DispatchAttempted:
             # Admission and dispatch are already on the chain before the worker
             # boundary is entered. Preserve only the worker-side refusal here.
             _append_event(

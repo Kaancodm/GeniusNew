@@ -1176,7 +1176,7 @@ class DeckTest(ServerToolTestCase):
             with self.subTest(message):
                 result = self.sb.run("deck", "--apply", PATH=path, cwd=cwd)
                 self.assertEqual(result.returncode, 1)
-                self.assertIn(f"python3-Pfad muss absolut sein" if message == "absolut"
+                self.assertIn("python3-Pfad muss absolut sein" if message == "absolut"
                               else "python3-Pfad enthält Zeichen", result.stderr)
         self.assertFalse(self.sb.deck_unit.exists())
 

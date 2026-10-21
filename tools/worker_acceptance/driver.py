@@ -36,8 +36,9 @@ if os.geteuid() == 0:
             _fail("UNTRUSTED_DRIVER")
 sys.path.insert(0, str(HERE))
 from common import (CASES, CORE_UID, PYTHON, SOURCE_COMMIT, WORKER_UID,
-                    Refused, _fail, aggregate, canonical, digest, evaluate,
+                    _fail, aggregate, canonical, digest, evaluate,
                     identity_matches, load_manifest, protected, verify_installed)
+from common import Refused as Refused
 
 
 def read_properties(unit: str) -> dict:

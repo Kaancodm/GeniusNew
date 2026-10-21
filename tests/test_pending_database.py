@@ -9,7 +9,7 @@ from unittest.mock import patch
 import psycopg
 
 from geniusnew import database
-from geniusnew.approvals import ApprovalScope, ApprovalStore, _record_hash
+from geniusnew.approvals import _record_hash
 from geniusnew.audit_chain import AuditAnchor
 from geniusnew.audit_store import PostgresAuditChain
 from geniusnew.contracts import ContractError, canonical, issue, validate_pending

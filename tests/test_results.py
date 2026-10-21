@@ -210,7 +210,7 @@ class ResultContractTest(ResultFixture, unittest.TestCase):
                 self.taken(wire)
 
     def test_a_success_must_carry_output_that_matches_its_digest(self):
-        import hashlib, json
+        import json
         decoded = json.loads(self.wire())
         for output in ({'text': 'swapped'}, None, {'text': ''}, {'text': 1}, 'raw'):
             tampered = {**decoded, 'output': output}

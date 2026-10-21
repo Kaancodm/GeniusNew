@@ -1230,7 +1230,7 @@ class ServiceWorkerRunner(WorkerRunner):
                 confirmed = True
         except ContractError as exc:
             problem = exc
-        except Exception as exc:
+        except Exception:
             problem = ContractError("worker service transport failed")
         finally:
             if confirmed:

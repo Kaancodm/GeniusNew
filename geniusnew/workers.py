@@ -51,7 +51,7 @@ from __future__ import annotations
 import re
 import time
 from collections import Counter
-from typing import Any, Mapping
+from typing import Mapping
 
 from .contracts import ContractError, Handoff, canonical
 from .gateway import DispatchPermit, consume_handoff_from_permit

@@ -215,8 +215,8 @@ def run_e3(*, repo: str, ref: str, target: Path, env_info: Environment,
     if clone.status != PASS:
         install.evidence.append("needs the clone stage")
     else:
-        made = _stage_command(install, Run, [python, "-m", "venv",
-                                             str(target / ".venv")])
+        _stage_command(install, Run, [python, "-m", "venv",
+                                   str(target / ".venv")])
         if install.status == PASS:
             _stage_command(install, Run, [str(venv_python), "-m", "pip", "install",
                                           "--require-hashes", "-r", "requirements.txt"],

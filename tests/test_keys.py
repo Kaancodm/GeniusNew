@@ -1,6 +1,6 @@
 import unittest
 
-from geniusnew.contracts import ContractError, canonical, issue
+from geniusnew.contracts import ContractError
 from geniusnew.keys import ServiceKeys, derive_keys
 from geniusnew.results import WorkerAuthority
 

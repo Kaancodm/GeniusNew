@@ -18,7 +18,8 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import (CORE_GID, CORE_UID, PACKAGE, SOCKET_GID, WORKER_GID,
-                    WORKER_UID, Refused, _fail, load_manifest, verify_installed)
+                    WORKER_UID, _fail, load_manifest, verify_installed)
+from common import Refused as Refused
 
 TEXT = "alpha beta"
 CONNECT_CALLS = 0
