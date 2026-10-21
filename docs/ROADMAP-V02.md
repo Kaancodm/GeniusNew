@@ -84,8 +84,22 @@ anpassen.
 | # | Gate | Nachweis | Stand |
 | --- | --- | --- | --- |
 | D1 | Portal→Kern-Vertrag: Server-zu-Server-Authentisierung (signierte Requests mit Ablauf und Replay-Schutz); Browser-Felder `subject`, `tier`, `user_id`, `tools`, `job_id` werden abgelehnt | Refusal-Tests auf Kernseite | Vertrag als Doku gemergt: #120 (Codex), Merge `fc62f57` (07.10.2026), `docs/PORTAL-CORE-D1-DRAFT.md`. **Code und Refusal-Tests offen** |
-| D2 | Portal-Identität: Argon2id, Sessions nur als Digest, Rotation beim Login, CSRF, `HttpOnly`/`Secure`/`SameSite` | Tests für jede Eigenschaft | offen |
+| D2 | Portal-Identität: Argon2id, Sessions nur als Digest, Rotation beim Login, CSRF, `HttpOnly`/`Secure`/`SameSite` | Tests für jede Eigenschaft | teilweise integriert: #151 (Argon2id-Passwortgrenze) und #152 (Session-/CSRF-Token und Cookie-Helfer) gemergt am 21.10.2026; inaktive Bausteine, keine aktive Login-Route oder Session-DB. Login-Integration und vollständiger Gate-Nachweis offen |
 | D3 | Portal-Ansichten: Auftrag stellen, Verlauf, Freigaben, API-Schlüssel; fremde Aufträge → 404 | End-to-End-Test Portal→Kern | offen |
+
+**D2-Abgleich vom 21.10.2026:** geprüft an `main`
+`9385f5bd9dc43f277af8f3b0265c7b4d45cfbc71`. [#151](https://github.com/Kaancodm/GeniusNew/pull/151)
+ist als `1f1c5d9096ee4a47f3bc7880e8a8e463f67c2250` gemergt,
+[#152](https://github.com/Kaancodm/GeniusNew/pull/152) als
+`9385f5bd9dc43f277af8f3b0265c7b4d45cfbc71`. Der Code liegt in
+[`portal_passwords.py`](../geniusnew/portal_passwords.py) und
+[`portal_session_tokens.py`](../geniusnew/portal_session_tokens.py).
+Digest- und Cookie-Helfer belegen noch keine persistente Session-Verwaltung.
+Vor aktivem Login bleiben Passwort-Mindestlänge, Dummy-Hash, Login-Budgets,
+Session-Ablauf und -Sperrung, Rotation, Origin-Prüfung, eigener CSRF-Key sowie
+das endgültige Cookie-/Loginprofil verbindlich (Auflagen in #151/#152).
+D1-Code und D3-End-to-End-Nachweis bleiben offen; **D1–D3 gehören weiterhin zur
+technischen Beta**. Diese Integration ist kein D2- oder v0.2-Abnahme-PASS.
 
 ### E — Nachweis
 
