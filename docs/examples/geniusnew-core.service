@@ -1,0 +1,36 @@
+# DO NOT INSTALL: HOLD until A2/C5 acceptance, independent review,
+# and Kaan's decision on the replacement contract proposed in #117.
+# Proposal (a): retain the host namespaces required by the worker boot reference.
+# Filesystem access now depends on the reviewed DAC contract, not mount isolation.
+# See docs/OPERATIONS-C5-DRAFT.md; this template is not an activation instruction.
+[Unit]
+Description=GeniusNew core
+After=network.target geniusnew-anchor.service
+Requires=geniusnew-anchor.service
+
+[Service]
+Type=simple
+User=geniusnew
+Group=geniusnew
+SupplementaryGroups=geniusnew-audit geniusnew-db geniusnew-worker-ipc
+WorkingDirectory=/opt/geniusnew
+ExecStart=/opt/geniusnew/.venv/bin/python -I -m geniusnew serve --config /etc/geniusnew/geniusnew.toml
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+LimitCORE=0
+TasksMax=512
+MemoryMax=2G
+RestrictSUIDSGID=yes
+
+[Install]
+WantedBy=multi-user.target

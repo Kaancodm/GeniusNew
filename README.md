@@ -175,6 +175,18 @@ Siehe:
 Neben der Demo startet `python -I -m geniusnew serve` den Kern als Dienst, ausschließlich
 aus einer TOML-Konfiguration (Vorlage: `docs/examples/geniusnew.toml`):
 
+Für C5 mit eigenem Ankernutzer gilt stattdessen die
+[`geniusnew-c5.toml`](docs/examples/geniusnew-c5.toml) und die
+[`Betriebsanleitung`](docs/OPERATIONS-C5-DRAFT.md). Die allgemeine Vorlage
+aktiviert einen Kind-Anker und erfüllt die C5-Nutzertrennung nicht.
+**C5 ist weiterhin HOLD:** Seit PR #140 gibt es einen getrennten Worker-Pfad,
+aber die ältere Core-Unit ist noch nicht mit dessen Host-/Namespace-Nachweis
+vereinbar geprüft. Die älteren C5-Core-/Anker-Unit-Beispiele nicht
+installieren oder aktivieren, bevor der überarbeitete Betriebsvertrag
+sicherheitsgeprüft und die A2/C5-Systemprobe bestanden ist.
+Die folgenden Befehle sind allgemeine Entwicklungsbeispiele und **keine
+Freigabe für einen bestehenden Host**. Nichts am produktiven Betrieb ändern.
+
 ```sh
 head -c 32 /dev/urandom > /etc/geniusnew/root_secret && chmod 600 /etc/geniusnew/root_secret
 python -m geniusnew digest-api-key < api-key-file   # Digest für [principals]
