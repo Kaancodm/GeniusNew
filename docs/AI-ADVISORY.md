@@ -20,8 +20,11 @@ nur die Grenze dazwischen.
   diese Grenze selbst gegen eigene Grenzwerte (Art, Länge, Kodierung, Leere),
   weil die Prüfungen des Piloten dem Piloten gehören und nicht dem Kern — aus
   demselben Grund validiert das Gateway einen Handoff nach, den der Orchestrator
-  signiert hat. Was auch immer die Engine wirft, wird hier **eine** Ablehnung mit
-  fester Meldung; ihre eigene Meldung geht nicht durch.
+  signiert hat. Engine-Fehler werden hier **eine** Ablehnung mit fester Meldung,
+  ohne ihre Ursache oder ihren Exception-Kontext herauszutragen. Nur
+  `KeyboardInterrupt` wird unverändert weitergereicht, damit ein Abbruch durch
+  den Betreiber wirksam bleibt. Auf jedem Fehler- und Abbruchpfad wird der Lock
+  freigegeben.
 - **Aus heißt aus.** Die Brücke ist ohne Konfiguration immer aus. Aktiv wird sie
   nur über `[ai_advisory] enabled = true` **und** eine explizit übergebene
   Engine; `build_advisory` importiert den Piloten erst dann. Es gibt keine
@@ -47,6 +50,12 @@ Voraussetzungen auf dem Server:
   (`qwen3.5:4b-q4_K_M` als Planer, `qwen2.5-coder:1.5b` als Helfer). Endpunkt,
   Modelle, Grenzwerte und der Protokollvertrag stehen in
   `tools/ai_pilot/README.md`; der Pilot ist unverändert übernommen.
+
+`127.0.0.1:11434` hat keine Authentisierung. Ist der Port frei, kann ein anderer
+lokaler Nutzer ihn belegen und Antworten mit einer behaupteten Modell-ID liefern.
+Modellausgabe und Modell-ID bleiben deshalb untrusted; die ID beweist weder die
+Herkunft noch die Integrität einer Antwort. `enabled = true` bleibt im Betrieb
+gesperrt, bis die getrennte Prozessgrenze freigegeben und umgesetzt ist.
 
 Ohne Tabelle startet der Dienst mit einer **ausgeschalteten** Brücke
 (`Service.advisory`); niemand muss auf ihr Fehlen prüfen.

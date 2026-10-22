@@ -9,6 +9,7 @@ why there is one test per refusal rather than one test per method.
 
 import sys
 import threading
+import traceback
 import unittest
 from dataclasses import fields
 from unittest import mock
@@ -28,6 +29,19 @@ from tools.ai_pilot.pilot import Pilot
 ROOT_SECRET = b'NOT-A-SECRET-' + b'0' * 24
 API_KEY = b'API-KEY-CANARY-MUST-NOT-BE-DISCLOSED'
 ANSWER = 'Two harmless sentences about a verified chain.'
+
+
+def assert_private_refusal(test, call, message, canary):
+    # Capture the live traceback: assertRaises clears it when saving the error.
+    try:
+        call()
+    except ContractError as exc:
+        test.assertEqual(str(exc), message)
+        test.assertIsNone(exc.__context__)
+        test.assertIsNone(exc.__cause__)
+        test.assertNotIn(canary, ''.join(traceback.format_exception(exc)))
+    else:
+        test.fail('expected a private ContractError')
 
 
 class Engine:
@@ -138,8 +152,13 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(engine.calls, [])
 
     def test_unencodable_input_is_refused(self):
-        bridge, _ = self.bridge()
-        self.assertIn('encodable as UTF-8', self.refuse(bridge, text='\ud800'))
+        canary = 'INPUT-CANARY-MUST-NOT-BE-DISCLOSED'
+        bridge, engine = self.bridge()
+        assert_private_refusal(
+            self, lambda: bridge.request('summary', canary + '\ud800'),
+            'advisory input for summary must be encodable as UTF-8', canary)
+        self.assertEqual(engine.calls, [])
+        self.assertEqual(bridge.request('summary', 'A harmless note.').text, ANSWER)
 
     def test_a_second_concurrent_request_is_refused(self):
         engine = BlockingEngine()
@@ -154,11 +173,41 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(engine.calls, 1)
 
     def test_an_engine_exception_becomes_one_refusal_without_its_message(self):
-        secret_answer = 'ENGINE-INTERNAL-CANARY-MUST-NOT-BE-DISCLOSED'
-        bridge, _ = self.bridge(raises=RuntimeError(secret_answer))
-        message = self.refuse(bridge)
-        self.assertIn('engine failed', message)
-        self.assertNotIn('CANARY', message)
+        canary = 'ENGINE-INTERNAL-CANARY-MUST-NOT-BE-DISCLOSED'
+        for error_type in (RuntimeError, ValueError, ContractError):
+            with self.subTest(error=error_type.__name__):
+                bridge, engine = self.bridge(raises=error_type(canary))
+                assert_private_refusal(
+                    self, lambda: bridge.request('summary', 'A harmless note.'),
+                    'the advisory engine failed', canary)
+                engine.raises = None
+                self.assertEqual(bridge.request('summary', 'After failure.').text,
+                                 ANSWER)
+
+    def test_engine_base_exceptions_are_private_refusals_and_release_the_lock(self):
+        class EngineFailure(BaseException):
+            pass
+
+        canary = 'ENGINE-BASE-CANARY-MUST-NOT-BE-DISCLOSED'
+        for error_type in (SystemExit, GeneratorExit, EngineFailure):
+            with self.subTest(error=error_type.__name__):
+                bridge, engine = self.bridge(raises=error_type(canary))
+                assert_private_refusal(
+                    self, lambda: bridge.request('summary', 'A harmless note.'),
+                    'the advisory engine failed', canary)
+                engine.raises = None
+                self.assertEqual(bridge.request('summary', 'After failure.').text,
+                                 ANSWER)
+
+    def test_keyboard_interrupt_propagates_and_releases_the_lock(self):
+        interruption = KeyboardInterrupt()
+        bridge, engine = self.bridge(raises=interruption)
+        with self.assertRaises(KeyboardInterrupt) as raised:
+            bridge.request('summary', 'A harmless note.')
+        self.assertIs(raised.exception, interruption)
+        engine.raises = None
+        self.assertEqual(bridge.request('summary', 'After interruption.').text,
+                         ANSWER)
 
     def test_a_non_string_answer_is_refused(self):
         bridge, _ = self.bridge(answer={'text': ANSWER})
@@ -177,8 +226,13 @@ class BridgeTest(unittest.TestCase):
         self.assertIn('at most', self.refuse(bridge))
 
     def test_unencodable_answer_is_refused(self):
-        bridge, _ = self.bridge(answer='\udfff')
-        self.assertIn('encodable as UTF-8', self.refuse(bridge))
+        canary = 'OUTPUT-CANARY-MUST-NOT-BE-DISCLOSED'
+        bridge, engine = self.bridge(answer=canary + '\udfff')
+        assert_private_refusal(
+            self, lambda: bridge.request('summary', 'A harmless note.'),
+            'advisory output must be encodable as UTF-8', canary)
+        engine.answer = ANSWER
+        self.assertEqual(bridge.request('summary', 'After failure.').text, ANSWER)
 
 
 class SettingsTest(unittest.TestCase):
@@ -222,6 +276,20 @@ class SettingsTest(unittest.TestCase):
             with self.assertRaises(ContractError) as raised:
                 default_engine()
         self.assertIn('not importable', str(raised.exception))
+
+    def test_an_import_error_does_not_disclose_its_context_or_cause(self):
+        canary = 'IMPORT-CANARY-MUST-NOT-BE-DISCLOSED'
+        original_import = __import__
+
+        def import_pilot(name, *args, **kwargs):
+            if name == 'tools.ai_pilot.pilot':
+                raise ImportError(canary)
+            return original_import(name, *args, **kwargs)
+
+        with mock.patch('builtins.__import__', side_effect=import_pilot):
+            assert_private_refusal(
+                self, default_engine,
+                'the advisory engine tools/ai_pilot is not importable', canary)
 
 
 class WiringTest(unittest.TestCase):
