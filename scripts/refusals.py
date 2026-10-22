@@ -73,6 +73,7 @@ GUARDED = ("geniusnew/contracts.py", "geniusnew/approvals.py",
            "geniusnew/isolation_child.py", "geniusnew/gateway.py",
            "geniusnew/orchestrator.py", "geniusnew/verifier.py",
            "geniusnew/http_entry.py", "geniusnew/wiring.py",
+           "geniusnew/d1_codec.py",
            "geniusnew/anchor_process.py", "geniusnew/config.py",
            "geniusnew/advisory.py",
            "geniusnew/__main__.py", "geniusnew/database.py",
@@ -97,6 +98,7 @@ GUARDED_TOOL_TESTS = {"tools/ipad_llm.py": "test_ipad_llm.py",
 # survive. A missing refusal test is therefore still a failure of this guard.
 GUARDED_PYTHON = {
     "geniusnew/portal_passwords.py": ("test_portal_passwords.py",),
+    "geniusnew/d1_codec.py": ("test_d1_codec.py",),
     "geniusnew/http_entry.py": (
         "test_http_entry.py", "test_http_limits.py", "test_approver_routes.py",
     ),
