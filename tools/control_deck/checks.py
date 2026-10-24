@@ -153,11 +153,11 @@ def tool_status(name: str) -> dict[str, str]:
         agy = _which("agy")
         if agy:
             code, out = _run([agy, "models"], cwd=Path.home(), timeout=8.0)
-            logged_in = code == 0 and "gemini-" in out
+            models_listed = code == 0 and "gemini-" in out
             return _simple(
-                "green" if logged_in else "yellow",
-                "Antigravity model list available; Gemini quota unverified"
-                if logged_in else "Antigravity login required",
+                "yellow",
+                "Antigravity model list available; account eligibility and quota unverified"
+                if models_listed else "Antigravity access unverified; check login and connectivity",
             )
 
     exe = _which(name)
@@ -408,7 +408,8 @@ def agent_hub(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
     """Inspect supported access points without model calls or credential reads."""
     launch = repo
     agy = _which("agy")
-    antigravity_ready = bool(agy and tool_status("gemini")["status"] == "green")
+    antigravity_detail = (tool_status("gemini")["detail"] if agy else
+                         "Antigravity ist nicht installiert.")
     cards = [
         {"id": "codex", "name": "Codex (ChatGPT Pro)", "status": "yellow",
          "status_label": "100 % GEMELDET · 20.10.2026",
@@ -421,14 +422,11 @@ def agent_hub(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
          "status_label": "EIN PRO-KONTO GEMELDET",
          "detail": "Kaan meldet ein Pro-Konto; Restkontingent vor einem Modellauftrag prüfen."},
         {"id": "antigravity", "name": "Google Antigravity (`agy`)",
-         "status": "green" if antigravity_ready else "yellow",
-         "status_label": "CLI ERREICHBAR" if antigravity_ready else "ZUGANG PRÜFEN",
-         "detail": ("Google-Agentenclient listet Modelle; Argon-Low-Auftrag am 20.10.2026 "
-                    "beantwortet. Restkontingent ungeprüft."
-                    if antigravity_ready else
-                    "Antigravity-Modellliste nicht bestätigt; vor der Nutzung prüfen."),
-         "command": (f"cd {shlex.quote(str(launch))} && {shlex.quote(agy)}"
-                     if antigravity_ready else None)},
+         "status": "yellow",
+         "status_label": "CLI INSTALLIERT · ZUGANG PRÜFEN" if agy else "NICHT INSTALLIERT",
+         "detail": antigravity_detail,
+         "command": (f"cd {shlex.quote(str(launch))} && {shlex.quote(agy)} --mode plan --sandbox"
+                     if agy else None)},
         {"id": "copilot", "name": "GitHub Copilot", "status": "red",
          "status_label": "ZWEI WOCHEN PAUSE",
          "detail": "Laut Kaan seit 20.10.2026 nicht verwendbar; Wiedervorlage am 03.11.2026.",
@@ -444,12 +442,6 @@ def agent_hub(repo: Path = DEFAULT_REPO) -> dict[str, Any]:
          "detail": "Externer Bot · hier kein unterstützter Steuerungsadapter",
          "note": "Vorhandenen Bot auf deinem Gerät öffnen. SSH-Einrichtung allein ist kein Live-Nachweis.",
          "disabled_label": "Direktstart nicht verfügbar"},
-        {"id": "abacus", "name": "Abacus.AI", "status": "red",
-         "status_label": "ZWEI WOCHEN PAUSE",
-         "detail": "Laut Kaan seit 20.10.2026 nicht verwendbar; Wiedervorlage am 03.11.2026.",
-         "note": "Die Textreviews vom 05.10.2026 belegen keine aktuelle Nutzbarkeit. "
-                 "Nach der Pause ist eine neue Prüfung nötig.",
-         "disabled_label": "Derzeit nicht verwendbar"},
     ]
     installed = tool_status("hermes")
     running = agent_session("hermes")
