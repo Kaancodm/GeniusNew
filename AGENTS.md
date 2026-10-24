@@ -1,7 +1,7 @@
 # AGENTS.md — Arbeitsanweisungen für KI-Assistenten
 
 Gilt für jeden Assistenten, der in diesem Repository arbeitet: Claude Code, ChatGPT /
-Codex, GitHub Copilot, Gemini, Kiro. **Wer was macht, steht in `docs/COLLABORATION.md`:**
+Codex, GitHub Copilot, Gemini, Kiro, Cursor. **Wer was macht, steht in `docs/COLLABORATION.md`:**
 Codex setzt Kerncode um und mergt, Gemini Pro prüft jeden PR (seit 20.10.2026 statt
 Copilot; Antigravity-CLI, Abacus-CLI oder Gemini CLI),
 Kiro prüft Claudes eigenen Code, NotebookLM gibt Auskunft, Kaan entscheidet Ziele und
