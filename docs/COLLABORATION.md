@@ -52,10 +52,34 @@ fehlendes Review ist ab jetzt ein Gemini-Review und bleibt offen, bis es vorlieg
 | **Codex** (ChatGPT Pro) | setzt **Kerncode** um, implementiert den von Kaan freigegebenen DB-Code, und **mergt selbst**: ein Thema pro PR, Branch `codex/<thema>`, mit einem **Wissensblock** in der PR-Beschreibung (siehe unten) | `docs/STATUS.md`, `docs/COLLABORATION.md`, `docs/DECISIONS.md` und `docs/DATABASE.md` ändern, einen DB-Code-PR ohne `Claude DB Review: APPROVED` mergen, Ausnahmen ohne Kaans OK mergen, Tags anlegen |
 | **ChatGPT** (Chat) | **neue Werkzeuge, laufende Server-Pflege, Dashboards, Monitoring, externe Integrationen** (eigener Abschnitt unten), **inklusive technischer Architekturentwürfe im Infra-/DB-Bereich und der Erstellung/Pflege von `docs/DATABASE.md` im Auftrag von Kaan**; plant, formuliert Prompts, erklärt | Kerncode (`geniusnew/`, `tests/`, `scripts/refusals.py`, `scripts/demo.*`, `schemas/`), Core-Tests, `SECURITY.md` eigenständig ändern, `requirements.txt`, Governance-/Wissensdateien (siehe unten) ändern; Änderungen ohne Kaans Auftrag; den eigenen DB-Entwurf sicherheitstechnisch freigeben; selbst mergen |
 | **GitHub Copilot Pro** | Vervollständigung im Editor; ein freiwilliges Review ist erlaubt, ersetzt aber seit 20.10.2026 kein Gemini-Review | eigene PRs ohne Auftrag; als Pflicht-Reviewer gelten |
-| **Cursor** (seit 24.10.2026) | **Zusatzkraft auf Zuweisung:** Cloud Agents setzen Aufgaben um, die Kaan ausdrücklich zuweist (Tests, Doku-Konsistenz, Portal-Oberfläche nach freigegebenem Entwurf, kleine Fixes; Codex-Aufgaben nur, wenn Kaan sie übergibt), auf Branch `cursor/<thema>` als Draft-PR mit Wissensblock; Bugbot als **freiwillige** Zusatzprüfung (`.cursor/BUGBOT.md`); Editor-Hilfe. Regeln: `.cursor/rules/geniusnew.mdc` | selbst mergen (Kaan mergt nach Gemini-Review und grüner CI); auf fremden Branches committen; Governance-/Wissensdateien, `docs/DATABASE.md`, `requirements*.txt`, Workflows oder `SECURITY.md`-Grenzen ändern; ein Gemini-, Kiro- oder `Claude DB Review` ersetzen |
+| **Cursor** (seit 24.10.2026) | **Entlastet Codex und Claude bei kleinen Aufträgen** (siehe „Kontingent-Schutz“): Cloud Agents setzen kleine, begrenzte Aufgaben um (Tests ergänzen, kleine Fixes, Doku-Konsistenz, Portal-Oberfläche nach freigegebenem Entwurf), auf Branch `cursor/<thema>` als Draft-PR mit Wissensblock; Bugbot als **freiwillige** Zusatzprüfung (`.cursor/BUGBOT.md`); Editor-Hilfe. Regeln: `.cursor/rules/geniusnew.mdc` | selbst mergen (Kaan mergt nach Gemini-Review und grüner CI); auf fremden Branches committen; Sicherheitspfade im Kerncode (Signaturen, Gateway, Verifier, Audit, Isolation, DB-Code); Governance-/Wissensdateien, `docs/DATABASE.md`, `requirements*.txt`, Workflows oder `SECURITY.md`-Grenzen ändern; ein Gemini-, Kiro- oder `Claude DB Review` ersetzen |
+| **SuperGrok** (seit 24.10.2026) | **Recherche und Zweitmeinung:** aktuelle Web-/X-Recherche (CVEs zu gepinnten Abhängigkeiten, Änderungen bei Ollama, Tailscale, Cursor), Zweitmeinung zu Architekturfragen vor Kaans Entscheidung, Entwürfe für Prompts und Issue-Texte | Dateien im Repository ändern; Pflicht-Reviews oder Freigaben ersetzen; Entscheidungen treffen |
+| **Grok Bot** (seit 24.10.2026, auf dem Server) | **Meldungen, nur lesend:** meldet PRs ohne Gemini-Review, rote CI, PRs älter als zwei Tage; morgens eine Übersicht (Erledigt, Blocker, Nächstes) als Vorlage für Kaans Statusupdate. GitHub-Zugang nur lesend, Token nur auf dem Server | schreiben, kommentieren, mergen; Zugangsdaten im Repository |
 | **Microsoft 365 Copilot** | Berichte, E-Mails, Folien aus dem OneDrive-Ordner `GeniusNew` | Inhalte erfinden, die dort nicht stehen |
 | **Kiro-CLI** | **unabhängige Zweitprüfung für Claudes eigenen Code**: prüft Claude-PRs, die Code oder Skripte ändern, nur lesend im Projektverzeichnis, auf Anforderung von Kaan; Ergebnis als PR-Kommentar im Format „Review GeniusNew“ (unten) | Dateien ändern, Befehle mit Schreibwirkung ausführen, ein Gemini-Pflichtreview oder `Claude DB Review` ersetzen |
 | **Claude Code** | **Ordnung, Struktur und Konfliktlöser zwischen den Plattformen, mit Überschreibrecht:** besitzt `docs/COLLABORATION.md`, `docs/DECISIONS.md` und `docs/STATUS.md` sowie die übrigen Regeln (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.github/copilot-instructions.md`, `.gemini/*`, `docs/HANDOVER.md`); entscheidet Konflikte zwischen Werkzeugen verbindlich; **unabhängiger Security-Reviewer**: reviewt ChatGPTs `docs/DATABASE.md`-Entwurf und Codex' DB-Code-PRs sicherheitstechnisch, ebenso Server-/Deployment-/Netzwerk-Sicherheitsfragen; darf jede Datei korrigieren, auch die anderer Werkzeuge, wenn sie den Regeln oder dem Code widerspricht; **hilft, wenn Codex feststeckt** | Kaans Entscheidungen oder die Ausnahmen überstimmen; die eigene Arbeit selbst freigeben; `docs/DATABASE.md` selbst entwerfen oder Head der Datenbank sein; regulärer Kerncode-Implementierer sein; eigene PRs selbst mergen |
+
+## Kontingent-Schutz (seit 24.10.2026, Kaan)
+
+**Claude Code und Codex bleiben die Hauptwerkzeuge.** Die übrigen Werkzeuge halten
+ihnen kleine Aufträge vom Leib und schonen ihr Kontingent. Faustregel: Ein Auftrag geht
+nur an Codex oder Claude, wenn er eine Sicherheitsgrenze, Kerncode-Logik, DB-Code oder
+eine Regel-/Konfliktfrage berührt. Alles andere geht zuerst an ein kleineres Werkzeug.
+
+| Auftrag | Zuerst an | Eskaliert an |
+| --- | --- | --- |
+| Kerncode, Sicherheitspfade, DB-Code | Codex | Claude (Hilferuf) |
+| Regeln, Wissensdateien, Konflikte, Security-Review | Claude Code | Kaan |
+| Kleiner Fix, Test ergänzen, Tippfehler, Doku-Konsistenz, Portal-Oberfläche | Cursor | Codex |
+| PR-Review | Gemini | Kaan |
+| Recherche, CVE-Check, Zweitmeinung, Prompt-/Issue-Entwurf | SuperGrok, Perplexity | Claude |
+| Stand, rote CI, wartende Reviews, Morgenübersicht | Grok Bot | Claude (`docs/STATUS.md`) |
+| Fragen zu Stand und Entscheidungen | NotebookLM | Claude |
+
+**Eskalieren** heißt: Das kleinere Werkzeug gibt ab, sobald der Auftrag eine
+Sicherheitsgrenze oder Kerncode-Logik berührt, nach zwei erfolglosen Versuchen, oder wenn
+unklar ist, wem er gehört. Die Rollen und Verbote in der Tabelle oben gelten unverändert;
+ein Branch hat weiterhin genau einen Implementierer.
 
 ## Die Wissensdatenbank
 
