@@ -85,8 +85,12 @@ bestanden melden.
 
 - Klein schneiden: ein Thema pro PR, als Draft. Ein PR, der älter als etwa zwei Tage
   wird, ist zu groß. **Keine Stapel-PRs:** Jeder PR basiert auf `main`.
-- Vor dem Push: Tests, Demo und Refusal-Guard für die geänderten Module lokal grün.
-- Mergen: Codex mergt eigene PRs selbst, sobald `contracts` grün ist und kein
+- Vor dem Push: Tests, Demo und Refusal-Guard für die geänderten Module ausführen. Ein
+  **Draft-PR darf auch mit Teststatus FAIL, INCOMPLETE oder NOT_RUN entstehen**, wenn der
+  tatsächliche Status im PR steht (Abschnitt „Teststatus im PR“). Grün sein müssen die
+  Prüfungen für „Ready for review“, Merge, Release und Deployment.
+- Mergen: Codex mergt eigene PRs selbst, sobald `contracts` grün ist, der Teststatus am
+  exakten Head-SHA **PASS** und die Sicherheitsprüfung bestanden ist und kein
   blockierender Review-Befund offen ist. Ausnahmen mit Kaans ausdrücklichem OK: neue
   Abhängigkeit, eine Grenze aus `SECURITY.md` wird geändert, Tags.
   **DB-Code-PRs** (Codex) brauchen zusätzlich `Claude DB Review: APPROVED` am exakten
@@ -98,6 +102,29 @@ bestanden melden.
   Wissensblock seiner PR-Beschreibung (`docs/COLLABORATION.md`).
 - Kommentare erklären das *Warum* und die Grenze, nicht das *Was*; so wie der
   umgebende Code.
+
+## Teststatus im PR
+
+Gilt für jeden PR, auch für Drafts, und für automatisch erzeugte PRs (Orchestrator).
+
+| Status | Bedeutung |
+| --- | --- |
+| `PASS` | Vollständiges, belastbares Ergebnis; keine neuen Fehler gegenüber der dokumentierten Referenz (bekannte Fehler nach exakter Test-ID, mit Anzahl und Referenz-Commit im PR genannt). |
+| `FAIL` | Vollständiges Ergebnis mit neuen Fehlern. Die neuen Test-IDs stehen im PR. |
+| `INCOMPLETE` | Kein belastbares Ergebnis: Abbruch, Zeitüberschreitung, beschädigte oder zu kurze Ausgabe. |
+| `NOT_RUN` | Es wurde nichts ausgeführt. |
+
+1. Ein Draft-PR darf bei jedem Status entstehen. Der PR nennt Teststatus und Status der
+   Sicherheitsprüfung (`PASS`, `FAIL`, `INCOMPLETE`, `NOT_RUN`) im Text; bei Status ungleich
+   `PASS` zusätzlich im Titel.
+2. Neue Fehler, fehlende Ergebnisse und unbekannte Abweichungen werden ausdrücklich genannt.
+   Nichts wird als bestanden dargestellt, was es nicht ist; Tests werden nicht übersprungen
+   (Harte Regel 4).
+3. **Merge, Release und Deployment bleiben gesperrt**, solange Teststatus oder
+   Sicherheitsprüfung nicht `PASS` sind oder ein Ergebnis fehlt (fail closed).
+4. Unverändert: keine Secrets im PR (ein Pfad wie `.env` oder ein Schlüssel stoppt auch
+   den Draft), Isolation und Berechtigungsgrenzen der ausführenden Werkzeuge, Kaans Freigabe
+   für Merge, Release, Deployment und Rechte.
 
 ## Wo was steht
 
