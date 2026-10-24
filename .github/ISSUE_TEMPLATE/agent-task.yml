@@ -1,5 +1,5 @@
 name: Begrenzte Aufgabe
-description: Eine prüfbare Aufgabe für eine Person oder einen Assistenten (Codex, ChatGPT, Gemini, Copilot, Claude Code).
+description: Eine prüfbare Aufgabe für eine Person oder einen Assistenten (Codex, ChatGPT, Gemini, Copilot, Cursor, Claude Code).
 title: "task: "
 body:
   - type: markdown
@@ -17,6 +17,7 @@ body:
         - ChatGPT (Tools / Server / Infrastruktur / DB-Design im Auftrag von Kaan)
         - Gemini Pro (Review über die Antigravity- oder Abacus-CLI)
         - Copilot (begrenzte Umsetzung auf eigenem Branch)
+        - Cursor (Cloud Agent auf Zuweisung, Branch cursor/<thema>; Kaan mergt)
         - Kiro-CLI (Zweitprüfung von Claudes Code, nur lesend)
         - Claude Code (Ordnung / Konflikt / Regeln / Projektstand docs/STATUS.md)
     validations:
