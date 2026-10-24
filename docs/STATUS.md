@@ -1,6 +1,9 @@
 # GeniusNew — Projektstand
 
-**Stand: 20.10.2026, `main` `0e6e0dbf5aefa4169c47ae73f8b39ff0cd94f235`.** Gesamtpflege
+**Stand: 21.10.2026, `main` `9385f5bd9dc43f277af8f3b0265c7b4d45cfbc71`.** Der Abschnitt
+„Nachtrag 21.10.2026“ unten korrigiert, wo es ausdrücklich genannt ist, die Stände zu
+#150–#152, #177, #183, #184 und #192; alle übrigen Abschnitte tragen weiter den Stand
+vom 20.10.2026 (`main` `0e6e0dbf5aefa4169c47ae73f8b39ff0cd94f235`). Gesamtpflege
 über #145 (Stand `dde20f2`): Gates, Messwerte, Risiken, Aufräumen der offenen PRs.
 Nachgetragen am 20.10.2026 aus den Wissensblöcken bzw. PR-Texten: #174, #154, #179, #180,
 #188, dazu Kaans Entscheidungen vom 20.10.2026 (Pause, D3, #151, CI-Werkzeuge,
@@ -70,6 +73,7 @@ Audit-Kette festgehalten.
 | C5 (Teil) | Restore gegen den unabhängigen Anker durchgespielt | #119 |
 | D1 (nur Doku) | Portal→Kern-Vertrag, Replay- und Identitäts-Gates; Code fehlt. Security-Review am `3d26d74` (H1, M1–M4); Gates 1–5, 7 und 8 sowie der Annahmepfad von Gate 9 von Kaan am 18.10.2026 entschieden (`docs/DECISIONS.md`); Entwurf danach überarbeitet (#163, gemergt 18.10.2026); der erneute Review (Gate 6) ist am 20.10.2026 an `main` `0e6e0db` bestanden (Issue #159); D1 bleibt HOLD | #120, #158, #163 |
 | D1 (Kern) | HTTP-Eingang lehnt doppelte Header vor Body und Mapping ab | #162 |
+| D2 (Bausteine) | Argon2id-Passwortgrenze und Session-/CSRF-/Cookie-Helfer gemergt (21.10.2026); keine Login-Route, keine Session-DB, von keinem Aufrufer benutzt. Gate offen | #151, #152 |
 | D3 (nur Doku) | Entwurf der administrierten Personenbindung mit neuer Envelope-Version; Portal-DB-Wiring D2/D3 mit sicheren Identitätsgrenzen. Beide HOLD, kein Code aktiv | #148, #176 |
 | E1 | Demo mit Persistenz-Angriffen | #112 |
 | Härtung, E3-Werkzeug, Audit-Delta (Arena 19.10.) | `serve()` verweigert Nicht-Loopback und IPv4-mapped IPv6 selbst; `scripts/check_dependencies.py`, Audit-Workflow nur als Beispiel (`docs/examples/audit-workflow.yml`, nicht aktiv); Benchmark `scripts/bench_audit.py` (Decke 62.137 Records); Fresh-Clone-Runner `scripts/e3_fresh_clone.py` (E3 selbst offen); Worker `TextDigest` in `BUILTIN_WORKERS` mit `tools/genius_client.py`; `AuditAnchor.commit_delta`/`commit2` als Protokoll-Schritt 1, **nicht** im Store-/Serve-Pfad verdrahtet. Unabhängiges Security-Review der Kernänderungen: UNKNOWN | #174 |
@@ -82,14 +86,12 @@ Audit-Kette festgehalten.
 **Noch offen:** C5 (Betriebsanleitung mit systemd, Rotation und Betriebsabnahme des
 Worker-Dienstes aus #140), E3 (frischer Klon auf einem echten Server), D1-Code, D2, D3
 und E2 (Security-Review am Head). **D1-Code bleibt auf HOLD** (Entscheidung vom
-18.10.2026); D2 und D3 sind nicht aktiv (#151 und #152 offen, #148 und #176 nur Doku).
-#151 hat seit 20.10.2026 Kaans GO für die neue Abhängigkeit, ist aber mit `main`
-konfliktbehaftet. Die
-`ROADMAP-V02.md`-Spalte „Stand“ wurde mit #130 und #167 angeglichen; zwei Punkte fehlen
-dort noch. Die C3-Zelle nennt `Claude DB Review` UNKNOWN; belegt ist APPROVED am
-Merge-Head `cc95586ca27e6f9d76fd737967d87cdb2e8a44d5` (`docs/DECISIONS.md`, 04.10.2026).
-Die Zellen A2 und C5 nennen #140 noch nicht (getrennter Worker-Dienst mit
-Unit-Vorlagen gemergt, Betriebsabnahme HOLD). Das korrigiert ein eigener Docs-PR.
+18.10.2026); D2 und D3 sind nicht aktiv. #151 und #152 sind seit 21.10.2026 als inaktive
+Bausteine gemergt (Nachtrag 21.10.2026); #148 und #176 sind nur Doku. Die
+`ROADMAP-V02.md`-Spalte „Stand“ wurde mit #130 und #167 angeglichen; die Zellen C3, A2,
+C5 und E2 (C3: `Claude DB Review` APPROVED am Merge-Head
+`cc95586ca27e6f9d76fd737967d87cdb2e8a44d5`, `docs/DECISIONS.md` 04.10.2026; A2/C5:
+getrennter Worker-Dienst aus #140, Betriebsabnahme HOLD) hat #177 am 21.10.2026 korrigiert.
 
 **Messbar laut CI am Head von #180 (`ea5456c`, Python 3.11, PostgreSQL 17):** 1398 Tests
 OK, HTTP-Demo 15/15, Persistenz-Demo 3/3, Restore PASS. Der Refusal-Guard enthält neu
@@ -105,6 +107,64 @@ lokales PostgreSQL 16):**
   `tools/ipad_llm.py` und das Shell-Skript `ops/server/genius-server` (sein Muster
   steht in `GUARDED_SHELL`). Lokal wurde er in dieser Sitzung **nicht** ausgeführt:
   UNKNOWN.
+
+## Nachtrag 21.10.2026
+
+Geprüft gegen `main` `9385f5bd9dc43f277af8f3b0265c7b4d45cfbc71` (`git log`, GitHub-Abfrage
+am 21.10.2026). Unterschieden werden vier Stufen: **gemergt** (Code oder Doku auf
+`main`), **aktiv** (von einem Aufrufer im Dienst benutzt), **deployt** (auf dem Server
+umgestellt) und **betrieblich abgenommen**. Für nichts in dieser Tabelle ist die dritte
+oder vierte Stufe belegt.
+
+| PR | Gemergt am | Inhalt | Stufe |
+| --- | --- | --- | --- |
+| #191 | 20.10.2026 | Regeltexte: Gemini statt Copilot | Regeln gemergt |
+| #185 | 20.10.2026 | Wissenspflege 20.10.2026 | Doku gemergt |
+| #177 | 21.10.2026 | Roadmap-Zellen C3, A2, C5, E2 korrigiert | Doku gemergt |
+| #192 | 21.10.2026 | Control-Deck-Reparatur | gemergt; Dienst laut PR nicht umgestellt |
+| #184 | 21.10.2026 | Audit-Delta: Sender prüft den eigenen Delta-Start | gemergt |
+| #183 | 21.10.2026 | Text-Digest: Fallback begrenzt | gemergt |
+| #150 | 21.10.2026 | Werkzeug für die Worker-Abnahme | gemergt; **Liveabnahme nicht belegt** (braucht Kaans GO) |
+| #151 | 21.10.2026 | D2: Argon2id-Passwortgrenze (`portal_passwords.py`), Merge `1f1c5d9096ee4a47f3bc7880e8a8e463f67c2250` | **inaktiver Baustein** |
+| #152 | 21.10.2026 | D2: Session-/CSRF-Token und Cookie-Helfer (`portal_session_tokens.py`), Merge `9385f5bd9dc43f277af8f3b0265c7b4d45cfbc71` | **inaktiver Baustein** |
+| #197 | 21.10.2026 | Roadmap-Zeile D2 und Abgleichsabsatz, Merge `e37eb22ac643f92c9097e0dc03d20f3dfdf497d8` | Doku gemergt auf Kaans Anweisung; **ohne Gemini-Review am Head** |
+
+**D2 im Einzelnen (Code geprüft an `9385f5b`):** Argon2id mit m=65536, t=3, p=4, Passwort
+1 bis 1024 Byte; Token mit SHA-256-Digest und sessiongebundenem CSRF-Vergleich; Cookie
+`__Host-`, `Secure`, `HttpOnly`, `Path=/`, `SameSite=Lax`, Max-Age 8 h. Beide Module
+stehen in `GUARDED` mit eigenen Testmodulen. **Außer diesen Tests importiert sie kein
+Code** in `geniusnew/`, `tools/` oder `scripts/`; es gibt keine Login-Route und keine
+Session-Datenbank. Die Bausteine
+sind also gemergt, aber nicht aktiv. Vor einem Login bleiben zu schließen: Mindestlänge
+und Dummy-Hash, Login-Budgets, serverseitiger Ablauf, Rotation und Widerruf der Session,
+Origin-/CSRF-Prüfung einschließlich des Bootstraps vor dem Login, ein eigener CSRF-Schlüssel
+und die Entscheidung zum Cookie-Profil (Lax im Code gegenüber Strict im Vorschlag von
+`docs/DATABASE.md`). **D1, D2 und D3 bleiben Pflicht der technischen Beta; #151 und #152 ergeben
+keinen D2-PASS.** Die Roadmap-Zeile D2 ist mit #197 gemergt (21.10.2026, Merge-Commit
+`e37eb22ac643f92c9097e0dc03d20f3dfdf497d8`); #198 (D1/D3-Zeilen, Abgleichsdokument) ist offen.
+
+**Offene PRs mit Bezug zu Gates.** Die Angaben stammen aus den PR-Beschreibungen zum
+genannten Head und wurden, außer wo „geprüft“ steht, nicht neu abgerufen:
+
+| PR | Head | Stand |
+| --- | --- | --- |
+| #187 Advisory-Fehlerketten | `be4611c63894c4b04320e7386c3b9f403f30b6df` | Gemini-Flash-Review ohne Befund, `contracts` SUCCESS laut PR; Draft. Betrieb von `[ai_advisory]` bleibt STOP. Unabhängiges Claude-Review nach Übergabe |
+| #194 B4-Negativtests | `2b5a6e525272cff17cfaa57771add50314a2e18e` | Gemini-Flash-Review am früheren SHA `7acb9e6` ohne Befund, CI am Head laut PR ausstehend; reiner Test-Diff, keine neue DB-Code-Freigabe |
+| #181 Dependency-Checker | `35699c907419960304813097fd01e24b3a201c5c` | Gemini-Review A–E PASS laut PR, CI am Head laut PR zum Zeitpunkt offen |
+| #182 E3-Runner | `a3338ac66aa6cd3b5465c68885bbb37616479c28` | Gemini-Flash A–C PASS, `contracts` grün laut PR; Pro-Modell-Review und Live-E3 offen |
+| #195 Entscheidungsdesk | `dbe4c3c29af0eee58deec88d6c0ea74d16831093` | Codex-Folgecommit (Archivierung des Journals, Befund 7). Laut PR und Check-Runs: `contracts` und Refusal-Guard SUCCESS. Claude-Review am vollen Head ohne Critical/High/Medium (PR-Kommentar). Gemini-Review am Head ausstehend. Technischer Owner nach Übernahme: Codex |
+| #196 E2-Checkliste | `531b8f0d642b9183c80add3972026170d07affaf` | Claude-Review ohne Critical/High (Kommentar im PR); Gemini und CI offen. Die Checkliste ist kein E2-Abschluss |
+| #197 Roadmap D2 | `3e083ee2421b57130b2f310542b00a53e7d017f7` | **gemergt am 21.10.2026** auf Kaans Anweisung (Merge-Commit `e37eb22ac643f92c9097e0dc03d20f3dfdf497d8`); CI SUCCESS, **kein Gemini-Review am Head** (nachzuholen) |
+| #198 Portal-Doku | `b066b5509b0c93f89202b58494ba6cbb16f5ade4` | offen, Draft. Roadmap-Konflikt mit dem gemergten #197 vom Branch-Owner (Codex) gelöst; der STATUS-Hunk ist entfernt, der Diff umfasst laut PR nur `docs/PORTAL-GATE-STATUS-20261021.md` und `docs/ROADMAP-V02.md`. CI und Gemini-Review am Head ausstehend |
+| #200 CI-Matrix, Ruff, Audit | `ac709dde7fab708f6f4a3832d3fc8f61fcfbaeac` | offen, Draft. Neue Dev-Abhängigkeit Ruff (`requirements-dev.txt`): Gemini-Pro-Sicherheitsreview und Kaans OK fehlen. Laut PR GitHub-CI bestanden |
+| #201 Gemini über Antigravity | `8a75a7387ab96944a025ed1ad4ea732e3a85ecfd` | offen, Draft. Ändert auch die Wissensdateien; Reihenfolge laut Koordination: #199 vor #201, danach bereinigt der Branch-Owner die abgedeckten Hunks. Gemini-Review am Head ausstehend |
+| #161 D1-Datenbankentwurf | `06394d2e94cd1f0ca3cbcbe5fe96766a7e3a2025` | HOLD-Entwurf von ChatGPT. Claude-Security-Review der Nachbesserung ohne Critical/High; N-A (Core-Tagesgrenze für Ablehnungen) bleibt als Gate offen. Freigabe nur durch Kaan |
+
+**Messwerte:** Für `main` `9385f5b` liegt keine neue Testzahl vor: UNKNOWN. Zahlen aus
+den PR-Beschreibungen gelten nur für deren Heads (z. B. #195: 1480 Tests, Demo 15/15 am
+Head `2884be5`, gemessen auf dem Stand der Basis `f297bc3`; für den Folgecommit `dbe4c3c` nennt der PR 1611 Tests laut GitHub-CI).
+
+**Offene PRs:** am 21.10.2026 sind 32 offen (GitHub-Abfrage).
 
 ## Bekannte Grenzen
 
@@ -197,7 +257,7 @@ Jobs, Annahmen und Policy).
 3. CI nach der Entscheidung vom 20.10.2026: Matrix 3.11/3.13 und `ruff`-Job mit
    `requirements-dev.txt` (Codex, ein PR); `pip-audit`-Vorlage nach
    `.github/workflows/audit.yml` verschieben (Kaan, braucht Workflow-Rechte).
-   #151: Konflikt auflösen, CI am neuen Head, dann Merge (Codex).
+   #151 ist seit 21.10.2026 gemergt.
 4. Server einrichten (`ops/server/genius-server`, Kaan) und Landlock dort prüfen.
 5. C5: Betriebsanleitung mit systemd-Units, eigenen OS-Nutzern (Worker, Anker),
    Schlüsselrotation (Entwurf von ChatGPT in #117, Draft).
@@ -214,8 +274,8 @@ Jobs, Annahmen und Policy).
    eigener `SECURITY.md`-PR, Zahlen fürs Lastbudget zur Freigabe, Gate 10. **Gate 6 am
    20.10.2026 bestanden** (Claude, an `main` `0e6e0db`, Kommentar in Issue #159: kein
    Critical/High, 1 Medium zur Audit-Kapazität, 2 Low). Erst danach D1-Code (Codex),
-   dann D3. D2-Bausteine (#151, #152) sind unabhängig davon mergefähig nach
-   Konfliktauflösung.
+   dann D3. D2-Bausteine (#151, #152) sind seit 21.10.2026 als inaktive Bausteine
+   gemergt; Login-Integration und Auflagen bleiben offen (Nachtrag 21.10.2026).
 10. E2: Security-Review des vollständigen Heads (Claude und Gemini; seit 20.10.2026
     Gemini statt Copilot).
 11. KI-Pilot: P1 ist mit #179 auf `main` (identisch mit #172, das damit überholt ist).
@@ -229,7 +289,7 @@ Jobs, Annahmen und Policy).
     mit Claudes Review). Vor dem Code-PR: Kaans OK zur ersetzten `SECURITY.md`-Zeile und
     zur Frage, ob Gemini 4 Argon (High) als Pro-Modell gilt. `enabled = true` bleibt im
     Betrieb STOP.
-13. Roadmap: C3, A2, C5 und E2 korrigiert in #177 (Draft, Kaan mergt).
+13. Roadmap: C3, A2, C5 und E2 korrigiert in #177 (gemergt 21.10.2026).
 
 ## Reviews und Gate-Stand vom 20.10.2026 (Sammelauftrag)
 
@@ -254,8 +314,8 @@ Weitere Ergebnisse: #117 (C5) — die Core-Unit erzeugt mit `ProtectSystem`/`Pro
 `PrivateTmp` eine eigene Mount-Namespace, die der Worker-Hostnachweis aus #140
 (`_HOST_NAMESPACES`) ablehnt; Lösung braucht Kaans Entscheidung (Empfehlung im PR:
 Unit ohne Mount-Namespace-Optionen, Ausgleich über seccomp-basierte Optionen und
-Dateirechte). #151 und #152: einziger Konflikt ist `scripts/refusals.py`; begrenzter
-Auftrag an Codex steht in beiden PRs. #147: Copilot-Review am älteren Head gilt weiter
+Dateirechte). #151 und #152: einziger Konflikt war `scripts/refusals.py`; beide sind am
+21.10.2026 gemergt, der Auftrag ist erledigt. #147: Copilot-Review am älteren Head gilt weiter
 (Codec und Tests seitdem byte-gleich), Merge aber HOLD wie D1-Code.
 
 **Gates bis v0.2 (Stand 20.10.2026):**
@@ -271,7 +331,7 @@ Auftrag an Codex steht in beiden PRs. #147: Copilot-Review am älteren Head gilt
 | C3 | PASS | #111 |
 | C5 | BLOCKED: Core-Unit gegen Worker-Hostnachweis (Kaans Entscheidung), Schlüsselrotation, Weg nach Restore | #117 |
 | D1 | HOLD (Entwurf Gate 6 PASS; Gates 2, 4, 5, 10 und DB-Vertrag #161 offen) | Issue #159 |
-| D2 | offen (#151 GO, #152 reviewt; beide Konflikt) | #151, #152 |
+| D2 | offen; #151 und #152 sind seit 21.10.2026 inaktive Bausteine auf `main`, keine Login-Route, keine Session-DB (Nachtrag 21.10.2026) | #151, #152 |
 | D3 | HOLD (Entwürfe #148, #176) | `docs/DECISIONS.md` 20.10.2026 |
 | E1 | PASS | #112 |
 | E2 | offen | — |
@@ -311,7 +371,7 @@ Offene Fragen:
 
 - **Erledigt am 20.10.2026** (`docs/DECISIONS.md`): Die Pause entfällt; die
   D3-Entscheidung aus #148 ist bestätigt und eingetragen; #151 hat Kaans GO für die neue
-  Abhängigkeit (Merge nach Konfliktauflösung und grüner CI).
+  Abhängigkeit (Merge nach Konfliktauflösung und grüner CI; #151 am 21.10.2026 gemergt).
 - **Erledigt am 20.10.2026** (`docs/DECISIONS.md`): Gemini übernimmt projektweit die
   Copilot-Reviewrolle, auch für offene PRs; Regeltexte in #191. Frühere Einzelausnahmen
   (#145 laut #153, Kommentar 6244844507; #188) sind damit allgemein abgelöst.
@@ -327,7 +387,7 @@ Offene Fragen:
 
 Ab 27.09.2026 gilt `docs/COLLABORATION.md` in aktualisierter Fassung. **Codex setzt
 Kerncode um und mergt.** **Seit 04.10.2026 pflegt Claude Code `docs/STATUS.md`**
-(dieses Dokument); Gemini prüft seit Kaans Auftrag vom 21.10.2026 über die Antigravity-CLI (`docs/COLLABORATION.md`). **Kaan entscheidet
+(dieses Dokument); Gemini prüft über die Antigravity- oder Abacus-CLI (`docs/COLLABORATION.md`). **Kaan entscheidet
 Ziele und offene Fragen zur Datenbank; ChatGPT erstellt `docs/DATABASE.md` in seinem
 Auftrag.** **ChatGPT** übernimmt außerdem neue Werkzeuge, Server-Pflege und
 Infrastruktur. **Seit 20.10.2026 reviewt Gemini jeden PR** (statt Copilot). Microsoft 365
@@ -337,12 +397,12 @@ Plattformen mit Überschreibrecht und hilft, wenn Codex feststeckt.
 
 | Werkzeug | Rolle | Liest |
 | --- | --- | --- |
-| Gemini Pro | Review jedes PRs (seit 20.10.2026, statt Copilot) über die Antigravity-CLI; Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung | `GEMINI.md`, `.gemini/styleguide.md` |
+| Gemini Pro | Review jedes PRs (seit 20.10.2026, statt Copilot) über Antigravity-, Abacus- oder Gemini-CLI; Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung | `GEMINI.md`, `.gemini/styleguide.md` |
 | NotebookLM | **Wissensdatenbank**: Auskunft für alle, mit Quelle | dieses Dokument, `docs/DECISIONS.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`, `AGENTS.md` |
 | ChatGPT Pro / Codex | **Kerncode-Umsetzung**, ein Thema pro PR (`codex/<thema>`), mit Wissensblock | `AGENTS.md`, `docs/COLLABORATION.md` |
 | ChatGPT (Chat) | **Neue Werkzeuge, Server-Pflege, Infrastruktur, Integrationen** (`chatgpt/<thema>`), NotebookLM + eigenes Notebook; Kaan mergt | `AGENTS.md`, `docs/COLLABORATION.md` |
 | GitHub Copilot Pro | Editor; seit 20.10.2026 kein Pflicht-Reviewer mehr (laut Kaan bis 03.11.2026 nicht nutzbar) | `.github/copilot-instructions.md` |
-| Kiro-CLI | Unabhängige Zweitprüfung für Claudes eigenen Code, nur lesend; laut Kaan bis 03.11.2026 pausiert | `docs/COLLABORATION.md` |
+| Kiro-CLI | Unabhängige Zweitprüfung für Claudes eigenen Code, nur lesend; laut Kaan bis 03.11.2026 pausiert (Abacus ebenso) | `docs/COLLABORATION.md` |
 | Microsoft 365 Copilot | Berichte, E-Mails, Folien | OneDrive-Ordner `GeniusNew` |
 | Claude Code | **Besitzt `docs/COLLABORATION.md`/`docs/DECISIONS.md`, Ordnung, Konfliktlöser mit Überschreibrecht**, Sicherheits-Review von Kaans DB-Entwurf und Codex' DB-Code, Hilfe bei Hilferuf | `AGENTS.md`, `docs/COLLABORATION.md` |
 
