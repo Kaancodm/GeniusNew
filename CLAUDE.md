@@ -22,10 +22,11 @@ Für Übergaben:
 Damit nichts auf einer falschen Grundlage weitergebaut wird:
 
 - Zu Beginn jedes Auftrags `hostname`, `pwd`, Remote, Branch und vollen SHA ausgeben.
-- Ist `CLAUDE_CODE_REMOTE` gesetzt, läuft die Sitzung in einem flüchtigen
-  Cloud-Container, nicht auf dem Server. Server-Aufgaben (Dienste, systemd, Tailscale,
-  lokale KI, Control Deck, Live-Abnahmen wie C5/E3) dann nicht ausführen und nicht
-  simulieren: stoppen, melden, auf eine Sitzung auf dem Server verweisen
+- **Claude arbeitet nur auf dem Hauptserver des Projekts (Kaan, 24.10.2026).** Ist
+  `CLAUDE_CODE_REMOTE` gesetzt oder ist `hostname` nicht der Hauptserver, läuft die
+  Sitzung woanders (z. B. in einem flüchtigen Cloud-Container). Dann keinen Auftrag
+  ausführen, auch keine Statusabfrage, keine Doku- und keine Repo-Änderung und nichts
+  simulieren: sofort stoppen, melden und auf eine Sitzung auf dem Server verweisen
   (`claude remote-control` im Checkout dort).
 - Dateien außerhalb des Repositorys gehen in der Cloud mit der Sitzung verloren.
   Ergebnisse, die bleiben sollen, gehören in einen PR oder werden Kaan übergeben.
