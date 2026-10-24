@@ -81,6 +81,12 @@ Sicherheitsgrenze oder Kerncode-Logik berührt, nach zwei erfolglosen Versuchen,
 unklar ist, wem er gehört. Die Rollen und Verbote in der Tabelle oben gelten unverändert;
 ein Branch hat weiterhin genau einen Implementierer.
 
+**Gemini-Reviews:** Dafür stehen **drei Google-AI-Konten** bereit (Kaan, 24.10.2026). Ist
+das Kontingent eines Kontos erschöpft, läuft das Review über das nächste; ein Review ist
+deshalb erst BLOCKED, wenn alle drei erschöpft sind. Im Review stehen wie bisher Werkzeug
+und tatsächliches Modell, nie Konto-Zugangsdaten. Die Pro-Regel für Pflicht-Sicherheitsreviews
+gilt unverändert.
+
 ## Die Wissensdatenbank
 
 **`docs/STATUS.md`** (Stand, Grenzen, nächste Schritte), **`docs/COLLABORATION.md`** und
