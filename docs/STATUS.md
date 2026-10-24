@@ -1,7 +1,8 @@
 # GeniusNew — Projektstand
 
-**Stand: 21.10.2026, `main` `9385f5bd9dc43f277af8f3b0265c7b4d45cfbc71`.** Der Abschnitt
-„Nachtrag 21.10.2026“ unten korrigiert, wo es ausdrücklich genannt ist, die Stände zu
+**Stand: 24.10.2026, `main` `0a9ccb8752b136efa3900a3c18b096288e5b06ae`.** Der Abschnitt
+„Nachtrag 24.10.2026“ unten ergänzt das Gate-Audit, die Werkzeuglage und Kaans Entscheidungen
+vom 24.10.2026; der Abschnitt „Nachtrag 21.10.2026“ korrigiert, wo es ausdrücklich genannt ist, die Stände zu
 #150–#152, #177, #183, #184 und #192; alle übrigen Abschnitte tragen weiter den Stand
 vom 20.10.2026 (`main` `0e6e0dbf5aefa4169c47ae73f8b39ff0cd94f235`). Gesamtpflege
 über #145 (Stand `dde20f2`): Gates, Messwerte, Risiken, Aufräumen der offenen PRs.
@@ -165,6 +166,50 @@ den PR-Beschreibungen gelten nur für deren Heads (z. B. #195: 1480 Tests, Demo 
 Head `2884be5`, gemessen auf dem Stand der Basis `f297bc3`; für den Folgecommit `dbe4c3c` nennt der PR 1611 Tests laut GitHub-CI).
 
 **Offene PRs:** am 21.10.2026 sind 32 offen (GitHub-Abfrage).
+
+## Nachtrag 24.10.2026
+
+Stand `main` `0a9ccb8752b136efa3900a3c18b096288e5b06ae` (seit dem Merge von #199 unverändert).
+Quelle: Kaans Entscheidungen vom 24.10.2026 (`docs/DECISIONS.md`) und die Prüfungen von
+Claude Code am selben Tag; Zahlen sind Befehlsausgaben.
+
+- **Entwicklungsstopp aufgehoben:** Issue #203 (22.10.2026) ist laut Kaan aufgehoben;
+  Claude Code hat das als gekennzeichnetes Protokoll in #203 kommentiert. Die Reihenfolge
+  bis v0.2 bleibt C5 → E3 → D1 → D2 → D3 → E2.
+- **Gate-Audit:** Die Merge-Commits der Gates A1, B0–B7, C1–C4 und E1 liegen auf `main`
+  (geprüft mit `git merge-base --is-ancestor`); sie werden nicht wiederholt. Offen: C5
+  (Betriebsanleitung und Unit-Vorlagen nur in #117; Claude-Security-Review mit einem
+  High-Befund zur Betriebsfähigkeit: `ProtectSystem`, `ProtectHome` und `PrivateTmp` in der
+  Core-Unit brechen den A2-Worker-Vertrag aus #140, Empfehlung: Variante ohne
+  Mount-Namespace-Optionen), die Betriebsabnahme A2/C2/C5, E3, der D1-Code (Spec: Gate 10
+  und #161 offen), die D2-Login-Integration, D3 und E2.
+- **Zielsystem:** Die Worker-Units und die getrennten Nutzer aus #140 sind auf dem Server
+  installiert; Kern- und Anker-Dienst laufen dort noch nicht (Betriebsabnahme offen).
+  Landlock ist auf dem Zielsystem aktiv: Die Demo lief am 24.10.2026 dort mit
+  `PASS … 15/15 attacks refused`, und der Worker startet nur mit Landlock ABI ≥ 4. Damit ist
+  Roadmap-Entscheidung 3 beantwortet. `libpq5` und ein lokaler PostgreSQL-Testcluster sind
+  vorhanden; E3 wartet nur auf die gemergte C5-Anleitung und die Wahl eines sauberen Hosts.
+- **Messwerte (lokal am `0a9ccb8`):** 1512 Tests OK mit gesetztem
+  `GENIUSNEW_TEST_ADMIN_DSN` (ohne die Variable 203 Fehler, kein Codefehler); Demo PASS
+  15/15; Refusal-Guard `geniusnew/keys.py` PASS. CI je PR 22–30 min, fast vollständig die
+  Refusal-Matrix; `main` hat am 24.10.2026 keinen Branch-Schutz.
+- **Werkzeuge:** Die Gemini CLI ist für Einzelkonten nicht mehr nutzbar
+  (`IneligibleTierError`); Gemini-Reviews laufen ausschließlich über die Antigravity-CLI
+  (Gemini 4 Argon als Pro-Kontingent, Gemini 3.8 Flash für Standard-Reviews). Abacus ist
+  seit 21.10.2026 entfernt (#201). Kiro: Monatskontingent erschöpft. Codex, Cursor und Grok
+  antworten.
+- **PRs:** #204 Gemini-Review (Antigravity, Gemini 3.8 Flash) A/B PASS, keine Befunde;
+  Merge durch Kaan ausstehend. #201: Konflikt gelöst (Codex-Merge
+  `a69941e13e04f3079e07d9f944f039d9a19bea83`, Wissensdateien gegenüber `main`
+  unverändert), Gemini-Review PASS, CI ausstehend. #155: Gemini Argon A–D PASS. Mit Kaans
+  OK ohne Merge geschlossen: #172, #175, #190 (überholt, siehe „Aufräumen“) und #195.
+  Neu: #209 (GitHub Sponsors), der CI-Stufen-PR und dieser Wissens-PR.
+- **Ein Bedien-Dashboard (Kaan):** Das Control Deck in `tools/control_deck` wird nicht
+  weiterentwickelt; der Code bleibt unverändert auf `main`, #195 ist geschlossen. Die
+  Bedienung läuft über ein privates Dashboard außerhalb dieses Repositorys.
+- **Trust Center (Kaan):** Signaturrollen, Gates, Audit-Kette und Anker bleiben erhalten;
+  nach innen werden keine zusätzlichen Zero-Trust-Schichten gebaut, Zero Trust gilt nach
+  außen (`docs/DECISIONS.md`).
 
 ## Bekannte Grenzen
 
@@ -387,7 +432,7 @@ Offene Fragen:
 
 Ab 27.09.2026 gilt `docs/COLLABORATION.md` in aktualisierter Fassung. **Codex setzt
 Kerncode um und mergt.** **Seit 04.10.2026 pflegt Claude Code `docs/STATUS.md`**
-(dieses Dokument); Gemini prüft über die Antigravity- oder Abacus-CLI (`docs/COLLABORATION.md`). **Kaan entscheidet
+(dieses Dokument); Gemini prüft über die Antigravity-CLI (`docs/COLLABORATION.md`). **Kaan entscheidet
 Ziele und offene Fragen zur Datenbank; ChatGPT erstellt `docs/DATABASE.md` in seinem
 Auftrag.** **ChatGPT** übernimmt außerdem neue Werkzeuge, Server-Pflege und
 Infrastruktur. **Seit 20.10.2026 reviewt Gemini jeden PR** (statt Copilot). Microsoft 365
@@ -397,12 +442,12 @@ Plattformen mit Überschreibrecht und hilft, wenn Codex feststeckt.
 
 | Werkzeug | Rolle | Liest |
 | --- | --- | --- |
-| Gemini Pro | Review jedes PRs (seit 20.10.2026, statt Copilot) über Antigravity-, Abacus- oder Gemini-CLI; Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung | `GEMINI.md`, `.gemini/styleguide.md` |
+| Gemini Pro | Review jedes PRs (seit 20.10.2026, statt Copilot) über die Antigravity-CLI (Gemini CLI seit 24.10.2026 für Einzelkonten gesperrt); Pflicht-Zweitmeinung bei Ausnahmen, Design-Vorprüfung | `GEMINI.md`, `.gemini/styleguide.md` |
 | NotebookLM | **Wissensdatenbank**: Auskunft für alle, mit Quelle | dieses Dokument, `docs/DECISIONS.md`, `SECURITY.md`, `docs/ROADMAP-V01.md`, `docs/COLLABORATION.md`, `AGENTS.md` |
 | ChatGPT Pro / Codex | **Kerncode-Umsetzung**, ein Thema pro PR (`codex/<thema>`), mit Wissensblock | `AGENTS.md`, `docs/COLLABORATION.md` |
 | ChatGPT (Chat) | **Neue Werkzeuge, Server-Pflege, Infrastruktur, Integrationen** (`chatgpt/<thema>`), NotebookLM + eigenes Notebook; Kaan mergt | `AGENTS.md`, `docs/COLLABORATION.md` |
 | GitHub Copilot Pro | Editor; seit 20.10.2026 kein Pflicht-Reviewer mehr (laut Kaan bis 03.11.2026 nicht nutzbar) | `.github/copilot-instructions.md` |
-| Kiro-CLI | Unabhängige Zweitprüfung für Claudes eigenen Code, nur lesend; laut Kaan bis 03.11.2026 pausiert (Abacus ebenso) | `docs/COLLABORATION.md` |
+| Kiro-CLI | Unabhängige Zweitprüfung für Claudes eigenen Code, nur lesend; laut Kaan bis 03.11.2026 pausiert, Monatskontingent am 24.10.2026 erschöpft; Abacus seit 21.10.2026 entfernt (#201) | `docs/COLLABORATION.md` |
 | Microsoft 365 Copilot | Berichte, E-Mails, Folien | OneDrive-Ordner `GeniusNew` |
 | Claude Code | **Besitzt `docs/COLLABORATION.md`/`docs/DECISIONS.md`, Ordnung, Konfliktlöser mit Überschreibrecht**, Sicherheits-Review von Kaans DB-Entwurf und Codex' DB-Code, Hilfe bei Hilferuf | `AGENTS.md`, `docs/COLLABORATION.md` |
 
